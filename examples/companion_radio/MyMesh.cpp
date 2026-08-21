@@ -47,7 +47,8 @@
 #define CMD_SET_CUSTOM_VAR            41
 #define CMD_GET_ADVERT_PATH           42
 #define CMD_GET_TUNING_PARAMS         43
-// NOTE: CMD range 44..49 parked, potentially for WiFi operations
+#define CMD_SET_PHONE_GPS             44   // reserved compatibility command; disabled in public SmartUI builds
+// NOTE: CMD range 45..49 parked, potentially for WiFi operations
 #define CMD_SEND_BINARY_REQ           50
 #define CMD_FACTORY_RESET             51
 #define CMD_SEND_PATH_DISCOVERY_REQ   52
@@ -1985,6 +1986,24 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid geo coordinate
     }
+  } else if (cmd_frame[0] == CMD_SET_PHONE_GPS) {
+#if UI_PHONE_GPS == 1
+    if (len < 9) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else {
+      int32_t lat, lon, alt = 0;
+      memcpy(&lat, &cmd_frame[1], 4);
+      memcpy(&lon, &cmd_frame[5], 4);
+      if (len >= 13) memcpy(&alt, &cmd_frame[9], 4);
+      if (setPhoneGpsFix(lat, lon, alt)) {
+        writeOKFrame();
+      } else {
+        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      }
+    }
+#else
+    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+#endif
   } else if (cmd_frame[0] == CMD_GET_DEVICE_TIME) {
     uint8_t reply[5];
     reply[0] = RESP_CODE_CURR_TIME;
@@ -2564,8 +2583,18 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
     char *dp = (char *)&out_frame[1];
+#if UI_PHONE_GPS == 1
+    if (dp != (char *)&out_frame[1]) *dp++ = ',';
+    strcpy(dp, isPhoneGpsEnabled() ? "gps_source:PHONE,phone_gps:" : "gps_source:HW,phone_gps:OFF");
+    dp = strchr(dp, 0);
+    if (isPhoneGpsEnabled()) {
+      strcpy(dp, isPhoneGpsFresh() ? "FRESH" :
+             (phone_gps_last_update_ms == 0 ? "WAIT" : "STALE"));
+      dp = strchr(dp, 0);
+    }
+#endif
     for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
-      if (i > 0) {
+      if (dp != (char *)&out_frame[1]) {
         *dp++ = ',';
       }
       strcpy(dp, sensors.getSettingName(i));
@@ -2581,11 +2610,31 @@ void MyMesh::handleCmdFrame(size_t len) {
     char *np = strchr(sp, ':'); // look for separator char
     if (np) {
       *np++ = 0; // modify 'cmd_frame', replace ':' with null
-      bool success = sensors.setSettingValue(sp, np);
+      bool success = false;
+      if (strcmp(sp, "gps_source") == 0) {
+#if UI_PHONE_GPS == 1
+        if (strcmp(np, "PHONE") == 0 || strcmp(np, "phone") == 0 || strcmp(np, "1") == 0) {
+          setGpsSource(GPS_SOURCE_PHONE);
+          success = true;
+        } else if (strcmp(np, "HW") == 0 || strcmp(np, "hw") == 0 || strcmp(np, "0") == 0) {
+          setGpsSource(GPS_SOURCE_HW);
+          success = true;
+        }
+#else
+        // Keep compatibility with an explicit HW reset, but reject PHONE.
+        if (strcmp(np, "HW") == 0 || strcmp(np, "hw") == 0 || strcmp(np, "0") == 0) {
+          setGpsSource(GPS_SOURCE_HW);
+          success = true;
+        }
+#endif
+      } else {
+        success = sensors.setSettingValue(sp, np);
+      }
       if (success) {
         #if ENV_INCLUDE_GPS == 1
         // Update node preferences for GPS settings
         if (strcmp(sp, "gps") == 0) {
+          if (np[0] == '1') setGpsSource(GPS_SOURCE_HW, false);
           _prefs.gps_enabled = (np[0] == '1') ? 1 : 0;
           savePrefs();
         } else if (strcmp(sp, "gps_interval") == 0) {
