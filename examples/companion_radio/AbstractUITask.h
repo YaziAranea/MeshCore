@@ -22,6 +22,11 @@ enum class UIEventType {
     ack
 };
 
+#define UI_MSG_FLAG_NONE       0x00
+#define UI_MSG_FLAG_DIRECT     0x01
+#define UI_MSG_FLAG_MENTION    0x02
+#define UI_MSG_FLAG_IMPORTANT  0x04
+
 class AbstractUITask {
 protected:
   mesh::MainBoard* _board;
@@ -35,12 +40,33 @@ protected:
 public:
   void setHasConnection(bool connected) { _connected = connected; }
   bool hasConnection() const { return _connected; }
-  uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
+  virtual uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
   bool isBluetoothEnabled() const { return _interfaceManager->isBluetoothEnabled(); }
   void enableBluetooth() { _interfaceManager->enableBluetooth(); }
   void disableBluetooth() { _interfaceManager->disableBluetooth(); }
   virtual void msgRead(int msgcount) = 0;
-  virtual void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount) = 0;
+  virtual void msgRead(int msgcount, bool dismiss_notification) {
+    (void)dismiss_notification;
+    msgRead(msgcount);
+  }
+  virtual void directMsgRead(bool dismiss_notification) {
+    (void)dismiss_notification;
+  }
+  // Keep the four-argument hook for stock PS17 UIs.  SmartUI overrides the
+  // flagged form; the default bridge lets either implementation coexist.
+  virtual void newMsg(uint8_t path_len, const char* from_name, const char* text,
+                      int msgcount) {
+    (void)path_len;
+    (void)from_name;
+    (void)text;
+    (void)msgcount;
+  }
+  virtual void newMsg(uint8_t path_len, const char* from_name, const char* text,
+                      int msgcount, uint8_t flags) {
+    (void)flags;
+    newMsg(path_len, from_name, text, msgcount);
+  }
   virtual void notify(UIEventType t = UIEventType::none) = 0;
+  virtual void applyImportedPrefs() {}
   virtual void loop() = 0;
 };

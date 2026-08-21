@@ -15,6 +15,10 @@
 #define FIRMWARE_VERSION "v1.17.1"
 #endif
 
+#ifndef UI_PHONE_GPS
+#define UI_PHONE_GPS 0
+#endif
+
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
 #include <InternalFileSystem.h>
 #elif defined(RP2040_PLATFORM)
@@ -29,6 +33,14 @@
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/BaseSerialInterface.h>
+#if __has_include(<helpers/BoardLedControl.h>)
+  #include <helpers/BoardLedControl.h>
+#else
+  // Allows this data-layer commit to compile before the display/runtime helper
+  // commit is applied.  The real helper replaces these no-op fallbacks.
+  inline bool meshcoreBoardLedsEnabled() { return true; }
+  inline void meshcoreSetBoardLedsEnabled(bool) { }
+#endif
 #include <helpers/IdentityStore.h>
 #include <helpers/SimpleMeshTables.h>
 #include <helpers/StaticPoolPacketManager.h>
@@ -53,6 +65,10 @@
 #endif
 #ifndef MAX_LORA_TX_POWER
 #define MAX_LORA_TX_POWER LORA_TX_POWER
+#endif
+
+#ifndef PHONE_GPS_STALE_MS
+#define PHONE_GPS_STALE_MS 300000UL
 #endif
 
 #ifndef MAX_CONTACTS
@@ -84,6 +100,68 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
+#ifndef NETWORK_STATUS_TABLE_SIZE
+#define NETWORK_STATUS_TABLE_SIZE 16
+#endif
+
+#ifndef NETWORK_STATUS_MAX_AGE_SECS
+#define NETWORK_STATUS_MAX_AGE_SECS (15 * 60)
+#endif
+
+#define NETWORK_STATUS_REPEATER              0x01
+#define NETWORK_STATUS_CLIENT_REPEAT_UNKNOWN 0x02
+#define NETWORK_STATUS_CHANNEL_TRAFFIC       0x04
+#define NETWORK_STATUS_VIA_RELAY             0x08
+#define NETWORK_STATUS_DIRECT                0x10
+
+struct NetworkStatusEntry {
+  uint8_t pubkey_prefix[7];
+  char name[32];
+  uint32_t recv_timestamp;
+  int8_t snr_q4;
+  int8_t rssi;
+  uint8_t type;
+  uint8_t flags;
+  uint8_t path_len;
+};
+
+#ifndef RECENT_CHAT_TABLE_SIZE
+  #if (defined(HELTEC_T114_WITH_DISPLAY) && defined(ST7789)) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_LORA_V4_3_OLED)
+    #define RECENT_CHAT_TABLE_SIZE 20
+  #else
+    #define RECENT_CHAT_TABLE_SIZE 12
+  #endif
+#endif
+
+struct RecentChatEntry {
+  uint32_t recv_timestamp;
+  uint8_t path_len;
+  uint8_t flags;
+  int8_t snr_q4;
+  int8_t rssi;
+  char origin[32];
+  char text[160];
+};
+
+struct LinkTestStatus {
+  bool active;
+  bool done;
+  bool has_target;
+  char target[32];
+  uint8_t sent;
+  uint8_t ok;
+  uint8_t failed;
+  uint8_t total;
+  uint16_t last_rtt_ms;
+  uint16_t avg_rtt_ms;
+  uint16_t timeout_ms;
+  int8_t last_snr_q4;
+  int8_t best_snr_q4;
+  int8_t worst_snr_q4;
+  int8_t last_rssi;
+  uint8_t sent_direct;
+};
+
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
@@ -98,9 +176,38 @@ public:
   void loop();
   void handleCmdFrame(size_t len);
   bool advert();
+  uint16_t getAutoAdvertIntervalMins() const;
+  void cycleAutoAdvertInterval();
+  void applyUiPrefsRuntime();
+  bool isPhoneGpsEnabled() const {
+#if UI_PHONE_GPS == 1
+    return _prefs.gps_source == GPS_SOURCE_PHONE;
+#else
+    return false;
+#endif
+  }
+  bool isPhoneGpsFresh() const;
+  uint32_t getPhoneGpsAgeSeconds() const;
+  const char* getGpsSourceName() const;
+  void setGpsSource(uint8_t source, bool save = true);
+  bool setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt = 0);
+  bool getShareableLocation(double& lat, double& lon, double& alt) const;
+  bool sendQuickReply(const char* text);
+  int getQuickReplyChannelCount();
+  int getQuickReplyContactCount();
+  bool getQuickReplyChannel(uint16_t list_idx, uint8_t& channel_idx, ChannelDetails& channel);
+  bool getQuickReplyContact(uint16_t list_idx, ContactInfo& contact);
+  bool sendQuickReplyToChannel(uint16_t list_idx, const char* text);
+  bool sendQuickReplyToContact(uint16_t list_idx, const char* text);
   void enterCLIRescue();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
+  int  getRecentNetworkStatus(NetworkStatusEntry dest[], int max_num,
+                              uint32_t max_age_secs = NETWORK_STATUS_MAX_AGE_SECS);
+  int  getRecentChannelMessages(RecentChatEntry dest[], int max_num);
+  bool startLinkTest();
+  void getLinkTestStatus(LinkTestStatus& dest) const;
+  unsigned long getChannelBusyTime() const { return channel_busy_ms; }
 
 protected:
   float getAirtimeBudgetFactor() const override;
@@ -166,14 +273,44 @@ protected:
 
 public:
   void savePrefs() {
-    _prefs.node_lat = sensors.node_lat;
-    _prefs.node_lon = sensors.node_lon;
+    _prefs.node_lat = isPhoneGpsEnabled() ? 0.0 : sensors.node_lat;
+    _prefs.node_lon = isPhoneGpsEnabled() ? 0.0 : sensors.node_lon;
     _store->savePrefs(_prefs);
   }
 
+  bool areBoardLedsEnabled() const { return _prefs.board_leds_enabled != 0; }
+  void setBoardLedsEnabled(bool enabled) {
+    _prefs.board_leds_enabled = enabled ? 1 : 0;
+    meshcoreSetBoardLedsEnabled(enabled);
+    savePrefs();
+  }
+  void toggleBoardLeds() { setBoardLedsEnabled(!areBoardLedsEnabled()); }
+
+  bool isClientRepeatEnabled() const { return _prefs.isRepeatEn(); }
+  void setClientRepeatEnabled(bool enabled) {
+    _prefs.setRepeatEn(enabled);
+    savePrefs();
+  }
+  void toggleClientRepeat() { setClientRepeatEnabled(!isClientRepeatEnabled()); }
+
+  bool isUnreadLedEnabled() const { return _prefs.unread_led_enabled != 0; }
+  void setUnreadLedEnabled(bool enabled) {
+    _prefs.unread_led_enabled = enabled ? 1 : 0;
+    savePrefs();
+  }
+  void toggleUnreadLed() { setUnreadLedEnabled(!isUnreadLedEnabled()); }
+
+  bool areMsgPopupsEnabled() const { return _prefs.msg_popup_enabled != 0; }
+  void setMsgPopupsEnabled(bool enabled) {
+    _prefs.msg_popup_enabled = enabled ? 1 : 0;
+    savePrefs();
+  }
+  void toggleMsgPopups() { setMsgPopupsEnabled(!areMsgPopupsEnabled()); }
+
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
-    sensors.setSettingValue("gps", _prefs.gps_enabled ? "1" : "0");
+    sensors.setSettingValue("gps",
+      (_prefs.gps_source == GPS_SOURCE_HW && _prefs.gps_enabled) ? "1" : "0");
     if (_prefs.gps_interval > 0) {
       char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
       sprintf(interval_str, "%u", _prefs.gps_interval);
@@ -203,6 +340,12 @@ private:
   void checkCLIRescueCmd();
   void checkSerialInterface();
   bool isValidClientRepeatFreq(uint32_t f) const;
+  uint8_t getRouteStatusFlags(uint8_t path_len) const;
+  void noteNetworkStatus(const ContactInfo& contact, uint8_t path_len);
+  void noteTrafficStatus(const char* name, uint8_t slot, uint8_t path_len, uint8_t flags);
+  void noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text);
+  void sampleChannelBusy();
+  void updateAutoAdvertTimer();
 
   // helpers, short-cuts
   void saveChannels() { _store->saveChannels(this); }
@@ -241,6 +384,7 @@ private:
     uint8_t buf[MAX_FRAME_SIZE];
 
     bool isChannelMsg() const;
+    bool isDisplayableDirectMsg() const;
   };
   int offline_queue_len;
   Frame offline_queue[OFFLINE_QUEUE_SIZE];
@@ -256,6 +400,17 @@ private:
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
+  NetworkStatusEntry network_status[NETWORK_STATUS_TABLE_SIZE];
+  RecentChatEntry recent_chat[RECENT_CHAT_TABLE_SIZE];
+  LinkTestStatus link_test;
+  int8_t last_rx_snr_q4;
+  int8_t last_rx_rssi;
+  unsigned long last_rx_millis;
+  int recent_chat_head;
+  unsigned long channel_busy_ms;
+  unsigned long channel_busy_sample_ms;
+  unsigned long next_auto_advert;
+  unsigned long phone_gps_last_update_ms;
 };
 
 extern MyMesh the_mesh;

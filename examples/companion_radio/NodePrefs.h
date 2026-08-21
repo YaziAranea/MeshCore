@@ -9,6 +9,44 @@
 #define ADVERT_LOC_NONE       0
 #define ADVERT_LOC_SHARE      1
 
+#define GPS_SOURCE_HW         0
+#define GPS_SOURCE_PHONE      1
+
+#define NOTIFY_MODE_SILENT    0x00
+#define NOTIFY_MODE_GPIO      0x01
+#define NOTIFY_MODE_TONE      0x02
+#define NOTIFY_MODE_VIBE      0x04
+#define NOTIFY_MODE_ALL       (NOTIFY_MODE_GPIO | NOTIFY_MODE_TONE | NOTIFY_MODE_VIBE)
+
+#define NOTIFY_TONE_COUNT     31
+#define DEFAULT_NOTIFY_TONE_RESONANCE_HZ 3000
+
+#define SMART_PROFILE_CUSTOM   0
+#define SMART_PROFILE_QUIET    1
+#define SMART_PROFILE_OUTDOOR  2
+#define SMART_PROFILE_NIGHT    3
+
+#define SMART_FAVORITE_NOTIFY_MODE       1
+#define SMART_FAVORITE_IMPORTANT_NOTIFY  2
+#define SMART_FAVORITE_SYSTEM_TONE       3
+#define SMART_FAVORITE_DM_TONE           4
+#define SMART_FAVORITE_MENTION_TONE      5
+#define SMART_FAVORITE_UI_FONT           6
+#define SMART_FAVORITE_UI_THEME          7
+#define SMART_FAVORITE_BLUETOOTH         8
+#define SMART_FAVORITE_AUTO_ADVERT       9
+#define SMART_FAVORITE_GPS              10
+#define SMART_FAVORITE_BOARD_LEDS       11
+#define SMART_FAVORITE_LOW_BATTERY      12
+#define SMART_FAVORITE_ADC              13
+#define SMART_FAVORITE_PROFILE          14
+#define SMART_FAVORITE_MAX              SMART_FAVORITE_PROFILE
+
+#define CH2_MODE_OFF          0
+#define CH2_MODE_RELAY        1
+#define CH2_MODE_LISTEN       2
+#define CH2_MODE_BATCH        3
+
 class NodePrefs : public ConfigSerializer {  // persisted to file
 public:
   float airtime_factor = 0;
@@ -40,6 +78,42 @@ public:
   uint8_t autoadd_max_hops = 0;  // 0 = no limit, 1 = direct (0 hops), N = up to N-1 hops (max 64)
   char default_scope_name[31];
   uint8_t default_scope_key[16];
+  float adc_multiplier = 0;      // 0 = use the board ADC multiplier
+  uint8_t notify_mode = 0;       // NOTIFY_MODE_* bitmask
+  int8_t notify_gpio_pin = -1;
+  int8_t notify_tone_pin = -1;
+  uint8_t notify_tone_id = 0;
+  uint8_t notify_tone_volume = 10;
+  uint16_t auto_advert_interval_mins = 0;
+  uint8_t ch2_mode = CH2_MODE_OFF;
+  uint8_t board_leds_enabled = 1;
+  uint8_t ui_font = 0;
+  uint8_t ui_theme = 0;
+  uint8_t unread_led_enabled = 1;
+  uint8_t msg_popup_enabled = 1;
+  uint8_t important_notify_mode = 0;
+  uint8_t notifications_muted = 0;
+  uint8_t ui_top_color = 1;
+  uint8_t ui_bottom_color = 0;
+  uint8_t backlight_timeout_idx = 0;
+  int8_t notify_vibe_pin = -1;
+  uint8_t offline_dm_led_enabled = 1;
+  uint8_t ble_dm_led_enabled = 1;
+  uint8_t low_battery_shutdown_enabled = 1;
+  uint8_t notify_tone_bridge_enabled = 0;
+  uint8_t notify_tone_8bit_enabled = 0;
+  uint8_t notify_tone_high_drive_enabled = 0;
+  uint16_t notify_tone_resonance_hz = DEFAULT_NOTIFY_TONE_RESONANCE_HZ;
+  uint8_t notify_tone_dm_id = 0;
+  uint8_t notify_tone_mention_id = 0;
+  uint8_t notify_tone_system_id = 0;
+  uint8_t smart_profile_id = SMART_PROFILE_CUSTOM;
+  uint8_t favorite_setting_1 = SMART_FAVORITE_NOTIFY_MODE;
+  uint8_t favorite_setting_2 = SMART_FAVORITE_SYSTEM_TONE;
+  uint8_t favorite_setting_3 = SMART_FAVORITE_BLUETOOTH;
+  uint32_t night_prompt_day = 0;
+  uint8_t night_quiet_active = 0;
+  uint8_t gps_source = GPS_SOURCE_HW;
 
 private:
   class RadioPrefs : public ConfigSerializer {  // COPIED from CommonCLI (for now)
@@ -121,6 +195,124 @@ private:
   };
   CompanionPrefs companion;
 
+  class SmartUIPrefs : public ConfigSerializer {
+    NodePrefs* _parent;
+  protected:
+    void structure() override {
+      // Keep keys below CONFIG_MAX_KEYLEN and stable: they are part of the
+      // on-device prefs.json format.
+      def("adc", _parent->adc_multiplier);
+      def("notify", _parent->notify_mode);
+      def("gpio", _parent->notify_gpio_pin);
+      def("tone_pin", _parent->notify_tone_pin);
+      def("tone", _parent->notify_tone_id);
+      def("volume", _parent->notify_tone_volume);
+      def("advert_min", _parent->auto_advert_interval_mins);
+      def("ch2", _parent->ch2_mode);
+      def("leds", _parent->board_leds_enabled);
+      def("font", _parent->ui_font);
+      def("theme", _parent->ui_theme);
+      def("unread_led", _parent->unread_led_enabled);
+      def("popup", _parent->msg_popup_enabled);
+      def("important", _parent->important_notify_mode);
+      def("muted", _parent->notifications_muted);
+      def("top", _parent->ui_top_color);
+      def("bottom", _parent->ui_bottom_color);
+      def("bl_timeout", _parent->backlight_timeout_idx);
+      def("vibe_pin", _parent->notify_vibe_pin);
+      def("offline_led", _parent->offline_dm_led_enabled);
+      def("ble_led", _parent->ble_dm_led_enabled);
+      def("low_batt", _parent->low_battery_shutdown_enabled);
+      def("bridge", _parent->notify_tone_bridge_enabled);
+      def("tone_8bit", _parent->notify_tone_8bit_enabled);
+      def("high_drive", _parent->notify_tone_high_drive_enabled);
+      def("res_hz", _parent->notify_tone_resonance_hz);
+      def("tone_dm", _parent->notify_tone_dm_id);
+      def("tone_mention", _parent->notify_tone_mention_id);
+      def("tone_system", _parent->notify_tone_system_id);
+      def("profile", _parent->smart_profile_id);
+      def("favorite_1", _parent->favorite_setting_1);
+      def("favorite_2", _parent->favorite_setting_2);
+      def("favorite_3", _parent->favorite_setting_3);
+      def("night_day", _parent->night_prompt_day);
+      def("night_quiet", _parent->night_quiet_active);
+      def("gps_source", _parent->gps_source);
+    }
+  public:
+    SmartUIPrefs(NodePrefs* parent) : _parent(parent) { }
+  };
+  SmartUIPrefs smart_ui;
+
+  void copyValuesFrom(const NodePrefs& other) {
+    airtime_factor = other.airtime_factor;
+    memcpy(node_name, other.node_name, sizeof(node_name));
+    node_lat = other.node_lat;
+    node_lon = other.node_lon;
+    freq = other.freq;
+    sf = other.sf;
+    cr = other.cr;
+    multi_acks = other.multi_acks;
+    manual_add_contacts = other.manual_add_contacts;
+    bw = other.bw;
+    tx_power_dbm = other.tx_power_dbm;
+    telemetry_mode_base = other.telemetry_mode_base;
+    telemetry_mode_loc = other.telemetry_mode_loc;
+    telemetry_mode_env = other.telemetry_mode_env;
+    rx_delay_base = other.rx_delay_base;
+    ble_pin = other.ble_pin;
+    advert_loc_policy = other.advert_loc_policy;
+    buzzer_quiet = other.buzzer_quiet;
+    vibe_quiet = other.vibe_quiet;
+    gps_enabled = other.gps_enabled;
+    gps_interval = other.gps_interval;
+    autoadd_config = other.autoadd_config;
+    rx_boosted_gain = other.rx_boosted_gain;
+    radio_fem_rxgain = other.radio_fem_rxgain;
+    radio_fem_txgain = other.radio_fem_txgain;
+    _client_repeat = other._client_repeat;
+    path_hash_mode = other.path_hash_mode;
+    autoadd_max_hops = other.autoadd_max_hops;
+    memcpy(default_scope_name, other.default_scope_name, sizeof(default_scope_name));
+    memcpy(default_scope_key, other.default_scope_key, sizeof(default_scope_key));
+    adc_multiplier = other.adc_multiplier;
+    notify_mode = other.notify_mode;
+    notify_gpio_pin = other.notify_gpio_pin;
+    notify_tone_pin = other.notify_tone_pin;
+    notify_tone_id = other.notify_tone_id;
+    notify_tone_volume = other.notify_tone_volume;
+    auto_advert_interval_mins = other.auto_advert_interval_mins;
+    ch2_mode = other.ch2_mode;
+    board_leds_enabled = other.board_leds_enabled;
+    ui_font = other.ui_font;
+    ui_theme = other.ui_theme;
+    unread_led_enabled = other.unread_led_enabled;
+    msg_popup_enabled = other.msg_popup_enabled;
+    important_notify_mode = other.important_notify_mode;
+    notifications_muted = other.notifications_muted;
+    ui_top_color = other.ui_top_color;
+    ui_bottom_color = other.ui_bottom_color;
+    backlight_timeout_idx = other.backlight_timeout_idx;
+    notify_vibe_pin = other.notify_vibe_pin;
+    offline_dm_led_enabled = other.offline_dm_led_enabled;
+    ble_dm_led_enabled = other.ble_dm_led_enabled;
+    low_battery_shutdown_enabled = other.low_battery_shutdown_enabled;
+    notify_tone_bridge_enabled = other.notify_tone_bridge_enabled;
+    notify_tone_8bit_enabled = other.notify_tone_8bit_enabled;
+    notify_tone_high_drive_enabled = other.notify_tone_high_drive_enabled;
+    notify_tone_resonance_hz = other.notify_tone_resonance_hz;
+    notify_tone_dm_id = other.notify_tone_dm_id;
+    notify_tone_mention_id = other.notify_tone_mention_id;
+    notify_tone_system_id = other.notify_tone_system_id;
+    smart_profile_id = other.smart_profile_id;
+    favorite_setting_1 = other.favorite_setting_1;
+    favorite_setting_2 = other.favorite_setting_2;
+    favorite_setting_3 = other.favorite_setting_3;
+    night_prompt_day = other.night_prompt_day;
+    night_quiet_active = other.night_quiet_active;
+    gps_source = other.gps_source;
+    repeat.disable_fwd = other.repeat.disable_fwd;
+  }
+
 protected:
   void structure() override {
     def("name", node_name, sizeof(node_name));
@@ -132,12 +324,20 @@ protected:
     def("gps", gps);
     def("repeat", repeat);
     def("comp", companion);
+    def("smart_ui", smart_ui);
   }
 public:
-  NodePrefs() : radio(this), gps(this), companion(this) {
+  NodePrefs() : radio(this), gps(this), companion(this), smart_ui(this) {
     node_name[0] = 0;
     default_scope_name[0] = 0;
     memset(default_scope_key, 0, sizeof(default_scope_key));
+  }
+  NodePrefs(const NodePrefs& other) : radio(this), gps(this), companion(this), smart_ui(this) {
+    copyValuesFrom(other);
+  }
+  NodePrefs& operator=(const NodePrefs& other) {
+    if (this != &other) copyValuesFrom(other);
+    return *this;
   }
   // new accessor methods
   bool isRepeatEn() const { return repeat.disable_fwd == 0; }

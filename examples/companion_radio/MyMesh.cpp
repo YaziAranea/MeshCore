@@ -69,6 +69,319 @@
 #define STATS_TYPE_RADIO              1
 #define STATS_TYPE_PACKETS             2
 
+#ifndef BOARD_LEDS_DEFAULT
+#define BOARD_LEDS_DEFAULT 1
+#endif
+
+#ifndef DISABLE_LOW_BATTERY_SHUTDOWN
+#define DISABLE_LOW_BATTERY_SHUTDOWN 0
+#endif
+
+#ifndef LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED
+#define LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED (!DISABLE_LOW_BATTERY_SHUTDOWN)
+#endif
+
+#ifndef DEFAULT_NOTIFY_MODE
+  #ifdef PIN_MSG_ALERT
+    #define DEFAULT_NOTIFY_MODE NOTIFY_MODE_GPIO
+  #else
+    #define DEFAULT_NOTIFY_MODE NOTIFY_MODE_SILENT
+  #endif
+#endif
+
+#ifndef DEFAULT_NOTIFY_GPIO_PIN
+  #ifdef PIN_MSG_ALERT
+    #define DEFAULT_NOTIFY_GPIO_PIN PIN_MSG_ALERT
+  #else
+    #define DEFAULT_NOTIFY_GPIO_PIN (-1)
+  #endif
+#endif
+
+#ifndef UI_TONE_FALLBACK_TO_ALERT
+#define UI_TONE_FALLBACK_TO_ALERT 1
+#endif
+
+#ifndef DEFAULT_NOTIFY_TONE_PIN
+  #ifdef PIN_BUZZER
+    #define DEFAULT_NOTIFY_TONE_PIN PIN_BUZZER
+  #elif defined(PIN_MSG_TONE)
+    #define DEFAULT_NOTIFY_TONE_PIN PIN_MSG_TONE
+  #elif defined(PIN_MSG_ALERT) && UI_TONE_FALLBACK_TO_ALERT
+    #define DEFAULT_NOTIFY_TONE_PIN PIN_MSG_ALERT
+  #else
+    #define DEFAULT_NOTIFY_TONE_PIN (-1)
+  #endif
+#endif
+
+#ifndef DEFAULT_NOTIFY_VIBE_PIN
+  #ifdef PIN_VIBRATION
+    #define DEFAULT_NOTIFY_VIBE_PIN PIN_VIBRATION
+  #else
+    #define DEFAULT_NOTIFY_VIBE_PIN (-1)
+  #endif
+#endif
+
+#ifndef DEFAULT_NOTIFY_TONE_ID
+#define DEFAULT_NOTIFY_TONE_ID 0
+#endif
+
+#ifndef DEFAULT_NOTIFY_TONE_VOLUME
+#define DEFAULT_NOTIFY_TONE_VOLUME 10
+#endif
+
+#ifndef DEFAULT_IMPORTANT_NOTIFY_MODE
+  #ifdef PIN_MSG_ALERT
+    #define DEFAULT_IMPORTANT_NOTIFY_MODE NOTIFY_MODE_ALL
+  #elif defined(PIN_BUZZER) || defined(PIN_MSG_TONE)
+    #define DEFAULT_IMPORTANT_NOTIFY_MODE NOTIFY_MODE_TONE
+  #else
+    #define DEFAULT_IMPORTANT_NOTIFY_MODE NOTIFY_MODE_SILENT
+  #endif
+#endif
+
+#ifndef UI_MENTION_SHORT_NAME_AT_ONLY_CHARS
+#define UI_MENTION_SHORT_NAME_AT_ONLY_CHARS 3
+#endif
+
+#ifndef UI_MENTION_REQUIRE_AT
+#define UI_MENTION_REQUIRE_AT 0
+#endif
+
+#ifndef UI_MENTION_ALLOW_PLAIN_NODE_NAME
+#define UI_MENTION_ALLOW_PLAIN_NODE_NAME 0
+#endif
+
+#ifndef UI_MENTION_ALLOW_PLAIN_FIRST_TOKEN
+#define UI_MENTION_ALLOW_PLAIN_FIRST_TOKEN 1
+#endif
+
+#ifndef UI_MENTION_PLAIN_FIRST_TOKEN_MIN_CHARS
+#define UI_MENTION_PLAIN_FIRST_TOKEN_MIN_CHARS 3
+#endif
+
+#ifndef UI_NOTIFY_ONLY_IMPORTANT_MESSAGES
+#define UI_NOTIFY_ONLY_IMPORTANT_MESSAGES 0
+#endif
+
+static bool isValidAutoAdvertIntervalMins(uint16_t mins) {
+  switch (mins) {
+    case 0:
+    case 15:
+    case 30:
+    case 60:
+    case 120:
+    case 180:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static uint16_t nextAutoAdvertIntervalMins(uint16_t mins) {
+  switch (mins) {
+    case 0: return 15;
+    case 15: return 30;
+    case 30: return 60;
+    case 60: return 120;
+    case 120: return 180;
+    default: return 0;
+  }
+}
+
+static bool isUtf8Continuation(uint8_t c) {
+  return (c & 0xC0) == 0x80;
+}
+
+static const char* readUtf8Codepoint(const char* p, uint32_t& cp) {
+  const uint8_t* s = (const uint8_t*)p;
+  uint8_t b0 = s[0];
+  if (b0 == 0 || b0 < 0x80) {
+    cp = b0;
+    return p + (b0 ? 1 : 0);
+  }
+  if ((b0 & 0xE0) == 0xC0 && isUtf8Continuation(s[1])) {
+    cp = ((uint32_t)(b0 & 0x1F) << 6) | (s[1] & 0x3F);
+    return p + 2;
+  }
+  if ((b0 & 0xF0) == 0xE0 && isUtf8Continuation(s[1]) && isUtf8Continuation(s[2])) {
+    cp = ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3F) << 6) | (s[2] & 0x3F);
+    return p + 3;
+  }
+  if ((b0 & 0xF8) == 0xF0 && isUtf8Continuation(s[1]) &&
+      isUtf8Continuation(s[2]) && isUtf8Continuation(s[3])) {
+    cp = ((uint32_t)(b0 & 0x07) << 18) | ((uint32_t)(s[1] & 0x3F) << 12) |
+         ((uint32_t)(s[2] & 0x3F) << 6) | (s[3] & 0x3F);
+    return p + 4;
+  }
+  cp = b0;
+  return p + 1;
+}
+
+static uint32_t mentionLowerCodepoint(uint32_t cp) {
+  if (cp >= 'A' && cp <= 'Z') return cp + ('a' - 'A');
+  if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x20;
+  if (cp == 0x0401) return 0x0451;
+  if (cp == 0x0404) return 0x0454;
+  if (cp == 0x0406) return 0x0456;
+  if (cp == 0x0407) return 0x0457;
+  if (cp == 0x0490) return 0x0491;
+  return cp;
+}
+
+static bool mentionWordCodepoint(uint32_t cp) {
+  if (cp >= '0' && cp <= '9') return true;
+  if (cp >= 'A' && cp <= 'Z') return true;
+  if (cp >= 'a' && cp <= 'z') return true;
+  if (cp == '_' || cp == '-') return true;
+  if (cp >= 0x0410 && cp <= 0x044F) return true;
+  return cp == 0x0401 || cp == 0x0451 || cp == 0x0404 || cp == 0x0454 ||
+         cp == 0x0406 || cp == 0x0456 || cp == 0x0407 || cp == 0x0457 ||
+         cp == 0x0490 || cp == 0x0491;
+}
+
+static bool mentionNameTokenCodepoint(uint32_t cp) {
+  return mentionWordCodepoint(cp) && cp != '_' && cp != '-';
+}
+
+static size_t utf8CodepointCount(const char* s) {
+  size_t count = 0;
+  while (s && *s) {
+    uint32_t cp;
+    s = readUtf8Codepoint(s, cp);
+    count++;
+  }
+  return count;
+}
+
+static size_t utf8NameFirstTokenCodepointCount(const char* node_name) {
+  size_t count = 0;
+  for (const char* n = node_name; n && *n;) {
+    uint32_t cp;
+    const char* next = readUtf8Codepoint(n, cp);
+    if (!mentionNameTokenCodepoint(cp)) break;
+    count++;
+    n = next;
+  }
+  return count;
+}
+
+static bool utf8NameMatchesAt(const char* text, const char* node_name, const char** after_text) {
+  const char* t = text;
+  const char* n = node_name;
+  while (*n) {
+    if (!*t) return false;
+    uint32_t tc, nc;
+    t = readUtf8Codepoint(t, tc);
+    n = readUtf8Codepoint(n, nc);
+    if (mentionLowerCodepoint(tc) != mentionLowerCodepoint(nc)) return false;
+  }
+  if (after_text) *after_text = t;
+  return true;
+}
+
+static bool utf8NameFirstTokenMatchesAt(const char* text, const char* node_name,
+                                        const char** after_text) {
+  const char* t = text;
+  const char* n = node_name;
+  size_t matched = 0;
+  while (*n) {
+    uint32_t nc;
+    const char* next_n = readUtf8Codepoint(n, nc);
+    if (!mentionNameTokenCodepoint(nc)) break;
+    if (!*t) return false;
+    uint32_t tc;
+    t = readUtf8Codepoint(t, tc);
+    if (mentionLowerCodepoint(tc) != mentionLowerCodepoint(nc)) return false;
+    n = next_n;
+    matched++;
+  }
+  if (matched < 2) return false;
+  if (after_text) *after_text = t;
+  return true;
+}
+
+static const char* channelMentionBodyText(const char* text) {
+  const char* sep = text ? strstr(text, ": ") : NULL;
+  return (sep && sep > text) ? sep + 2 : text;
+}
+
+static bool mentionMatchEndsAtBoundary(const char* after) {
+  uint32_t after_cp = 0;
+  if (after && *after) readUtf8Codepoint(after, after_cp);
+  return !mentionWordCodepoint(after_cp);
+}
+
+static uint16_t mentionMatchRankAt(const char* text, const char* node_name, bool allow_first_token) {
+  if (!text || !node_name || !*node_name) return 0;
+  uint16_t best_rank = 0;
+  const char* after = NULL;
+  size_t name_chars = utf8CodepointCount(node_name);
+  if (name_chars >= 2 && utf8NameMatchesAt(text, node_name, &after) &&
+      mentionMatchEndsAtBoundary(after)) {
+    best_rank = (uint16_t)(name_chars * 2 + 1);
+  }
+  size_t first_token_chars = utf8NameFirstTokenCodepointCount(node_name);
+  if (allow_first_token && first_token_chars >= 2 &&
+      utf8NameFirstTokenMatchesAt(text, node_name, &after) && mentionMatchEndsAtBoundary(after)) {
+    uint16_t rank = (uint16_t)(first_token_chars * 2);
+    if (rank > best_rank) best_rank = rank;
+  }
+  return best_rank;
+}
+
+static bool mentionCandidateBelongsToNode(MyMesh* mesh, const char* text, const char* node_name,
+                                          bool allow_first_token) {
+  uint16_t own_rank = mentionMatchRankAt(text, node_name, allow_first_token);
+  if (own_rank == 0) return false;
+  ContactsIterator contacts = mesh->startContactsIterator();
+  ContactInfo contact;
+  while (contacts.hasNext(mesh, contact)) {
+    if (!contact.name[0]) continue;
+    if (mentionMatchRankAt(text, contact.name, allow_first_token) > own_rank) return false;
+  }
+  NetworkStatusEntry recent[NETWORK_STATUS_TABLE_SIZE];
+  int recent_count = mesh->getRecentNetworkStatus(recent, NETWORK_STATUS_TABLE_SIZE, 0xFFFFFFFFUL);
+  for (int i = 0; i < recent_count; i++) {
+    if (recent[i].type != ADV_TYPE_REPEATER && recent[i].type != ADV_TYPE_CHAT) continue;
+    if (mentionMatchRankAt(text, recent[i].name, allow_first_token) > own_rank) return false;
+  }
+  return true;
+}
+
+static bool textMentionsNodeName(MyMesh* mesh, const char* text, const char* node_name) {
+  if (!text || !node_name || !*node_name) return false;
+  size_t name_chars = utf8CodepointCount(node_name);
+  if (name_chars < 2) return false;
+  size_t first_token_chars = utf8NameFirstTokenCodepointCount(node_name);
+  bool at_only = UI_MENTION_REQUIRE_AT || name_chars <= UI_MENTION_SHORT_NAME_AT_ONLY_CHARS;
+  bool plain_full_allowed = !at_only || UI_MENTION_ALLOW_PLAIN_NODE_NAME;
+  bool plain_first_allowed = UI_MENTION_ALLOW_PLAIN_FIRST_TOKEN &&
+                             first_token_chars >= UI_MENTION_PLAIN_FIRST_TOKEN_MIN_CHARS;
+  bool prev_boundary = true;
+  for (const char* p = text; *p;) {
+    uint32_t cp;
+    const char* next = readUtf8Codepoint(p, cp);
+    if (cp == '@' && mentionCandidateBelongsToNode(mesh, next, node_name, true)) return true;
+    if (prev_boundary) {
+      if (plain_full_allowed && mentionCandidateBelongsToNode(mesh, p, node_name, false)) return true;
+      if (plain_first_allowed && mentionCandidateBelongsToNode(mesh, p, node_name, true)) return true;
+    }
+    prev_boundary = !mentionWordCodepoint(cp);
+    p = next;
+  }
+  return false;
+}
+
+#ifndef UI_FONT_PREF_MAX
+  #if defined(UI_T096_PREMIUM_TFT)
+    #define UI_FONT_PREF_MAX 19
+  #elif (defined(HELTEC_T114_WITH_DISPLAY) && defined(ST7789)) || defined(HELTEC_LORA_V4_TFT)
+    #define UI_FONT_PREF_MAX 14
+  #else
+    #define UI_FONT_PREF_MAX 5
+  #endif
+#endif
+
 #define RESP_CODE_OK                  0
 #define RESP_CODE_ERR                 1
 #define RESP_CODE_CONTACTS_START      2  // first reply to CMD_GET_CONTACTS
@@ -217,6 +530,20 @@ bool MyMesh::Frame::isChannelMsg() const {
          buf[0] == RESP_CODE_CHANNEL_DATA_RECV;
 }
 
+bool MyMesh::Frame::isDisplayableDirectMsg() const {
+  int txt_type_index;
+  if (buf[0] == RESP_CODE_CONTACT_MSG_RECV_V3) {
+    txt_type_index = 11;
+  } else if (buf[0] == RESP_CODE_CONTACT_MSG_RECV) {
+    txt_type_index = 8;
+  } else {
+    return false;
+  }
+  if (len <= txt_type_index) return false;
+  return buf[txt_type_index] == TXT_TYPE_PLAIN ||
+         buf[txt_type_index] == TXT_TYPE_SIGNED_PLAIN;
+}
+
 void MyMesh::addToOfflineQueue(const uint8_t frame[], int len) {
   if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {
     MESH_DEBUG_PRINTLN("WARN: offline_queue is full!");
@@ -312,11 +639,21 @@ uint8_t MyMesh::getExtraAckTransmitCount() const {
 }
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
+  int snr_q4 = (int)(snr * 4.0f);
+  if (snr_q4 < -128) snr_q4 = -128;
+  if (snr_q4 > 127) snr_q4 = 127;
+  int rssi_i = (int)rssi;
+  if (rssi_i < -128) rssi_i = -128;
+  if (rssi_i > 127) rssi_i = 127;
+  last_rx_snr_q4 = (int8_t)snr_q4;
+  last_rx_rssi = (int8_t)rssi_i;
+  last_rx_millis = millis();
+
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
     int i = 0;
     out_frame[i++] = PUSH_CODE_LOG_RX_DATA;
-    out_frame[i++] = (int8_t)(snr * 4);
-    out_frame[i++] = (int8_t)(rssi);
+    out_frame[i++] = last_rx_snr_q4;
+    out_frame[i++] = last_rx_rssi;
     memcpy(&out_frame[i], raw, len);
     i += len;
 
@@ -379,6 +716,8 @@ void MyMesh::onContactsFull() {
 }
 
 void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path_len, const uint8_t* path) {
+  noteNetworkStatus(contact, path_len);
+
   if (_serial->isConnected()) {
     if (is_new) {
       writeContactRespFrame(PUSH_CODE_NEW_ADVERT, contact);
@@ -429,6 +768,151 @@ int MyMesh::getRecentlyHeard(AdvertPath dest[], int max_num) {
     dest[i] = advert_paths[i];
   }
   return max_num;
+}
+
+static int sortNetworkStatusByRecent(const void* a, const void* b) {
+  uint32_t ta = ((const NetworkStatusEntry*)a)->recv_timestamp;
+  uint32_t tb = ((const NetworkStatusEntry*)b)->recv_timestamp;
+  if (tb > ta) return 1;
+  if (tb < ta) return -1;
+  return 0;
+}
+
+uint8_t MyMesh::getRouteStatusFlags(uint8_t path_len) const {
+  if (path_len == OUT_PATH_UNKNOWN) return NETWORK_STATUS_DIRECT;
+  if (!mesh::Packet::isValidPathLen(path_len)) return 0;
+  return (path_len & 63) == 0 ? NETWORK_STATUS_DIRECT : NETWORK_STATUS_VIA_RELAY;
+}
+
+void MyMesh::noteNetworkStatus(const ContactInfo& contact, uint8_t path_len) {
+  if (contact.type != ADV_TYPE_REPEATER && contact.type != ADV_TYPE_CHAT) return;
+  if (last_rx_millis == 0) return;
+  NetworkStatusEntry* entry = network_status;
+  uint32_t oldest = 0xFFFFFFFF;
+  for (int i = 0; i < NETWORK_STATUS_TABLE_SIZE; i++) {
+    if (memcmp(network_status[i].pubkey_prefix, contact.id.pub_key,
+               sizeof(network_status[i].pubkey_prefix)) == 0) {
+      entry = &network_status[i];
+      break;
+    }
+    if (network_status[i].recv_timestamp < oldest) {
+      oldest = network_status[i].recv_timestamp;
+      entry = &network_status[i];
+    }
+  }
+  memcpy(entry->pubkey_prefix, contact.id.pub_key, sizeof(entry->pubkey_prefix));
+  StrHelper::strzcpy(entry->name, contact.name, sizeof(entry->name));
+  entry->recv_timestamp = getRTCClock()->getCurrentTime();
+  entry->snr_q4 = last_rx_snr_q4;
+  entry->rssi = last_rx_rssi;
+  entry->type = contact.type;
+  entry->path_len = path_len;
+  entry->flags = (contact.type == ADV_TYPE_REPEATER ? NETWORK_STATUS_REPEATER
+                                                    : NETWORK_STATUS_CLIENT_REPEAT_UNKNOWN) |
+                 getRouteStatusFlags(path_len);
+}
+
+static uint32_t hashTrafficName(const char* name) {
+  uint32_t h = 2166136261UL;
+  while (name && *name) {
+    h ^= (uint8_t)*name++;
+    h *= 16777619UL;
+  }
+  return h;
+}
+
+static void splitChannelText(const char* fallback_name, const char* text,
+                             char* origin, size_t origin_len, char* body, size_t body_len) {
+  const char* sep = text ? strstr(text, ": ") : NULL;
+  if (sep && sep > text) {
+    size_t origin_copy = (size_t)(sep - text);
+    if (origin_copy >= origin_len) origin_copy = origin_len - 1;
+    memcpy(origin, text, origin_copy);
+    origin[origin_copy] = 0;
+    StrHelper::strzcpy(body, sep + 2, body_len);
+  } else {
+    StrHelper::strzcpy(origin, fallback_name, origin_len);
+    StrHelper::strzcpy(body, text ? text : "", body_len);
+  }
+}
+
+void MyMesh::noteTrafficStatus(const char* name, uint8_t slot, uint8_t path_len, uint8_t flags) {
+  if (last_rx_millis == 0) return;
+  uint32_t name_hash = hashTrafficName(name);
+  uint8_t key[7] = {'T', slot, (uint8_t)name_hash, (uint8_t)(name_hash >> 8),
+                    (uint8_t)(name_hash >> 16), (uint8_t)(name_hash >> 24), path_len};
+  NetworkStatusEntry* entry = network_status;
+  uint32_t oldest = 0xFFFFFFFF;
+  for (int i = 0; i < NETWORK_STATUS_TABLE_SIZE; i++) {
+    if (memcmp(network_status[i].pubkey_prefix, key, sizeof(key)) == 0) {
+      entry = &network_status[i];
+      break;
+    }
+    if (network_status[i].recv_timestamp < oldest) {
+      oldest = network_status[i].recv_timestamp;
+      entry = &network_status[i];
+    }
+  }
+  memcpy(entry->pubkey_prefix, key, sizeof(entry->pubkey_prefix));
+  StrHelper::strzcpy(entry->name, name, sizeof(entry->name));
+  entry->recv_timestamp = getRTCClock()->getCurrentTime();
+  entry->snr_q4 = last_rx_snr_q4;
+  entry->rssi = last_rx_rssi;
+  entry->type = ADV_TYPE_NONE;
+  entry->path_len = path_len;
+  entry->flags = flags | getRouteStatusFlags(path_len);
+}
+
+int MyMesh::getRecentNetworkStatus(NetworkStatusEntry dest[], int max_num,
+                                   uint32_t max_age_secs) {
+  if (max_num > NETWORK_STATUS_TABLE_SIZE) max_num = NETWORK_STATUS_TABLE_SIZE;
+  qsort(network_status, NETWORK_STATUS_TABLE_SIZE, sizeof(network_status[0]),
+        sortNetworkStatusByRecent);
+  uint32_t now = getRTCClock()->getCurrentTime();
+  int count = 0;
+  for (int i = 0; i < NETWORK_STATUS_TABLE_SIZE && count < max_num; i++) {
+    if (network_status[i].name[0] == 0 || network_status[i].recv_timestamp == 0) continue;
+    uint32_t age = network_status[i].recv_timestamp > now ? 0 : now - network_status[i].recv_timestamp;
+    if (age > max_age_secs) continue;
+    dest[count++] = network_status[i];
+  }
+  return count;
+}
+
+void MyMesh::noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text) {
+  recent_chat_head = (recent_chat_head + 1) % RECENT_CHAT_TABLE_SIZE;
+  RecentChatEntry* entry = &recent_chat[recent_chat_head];
+  entry->recv_timestamp = getRTCClock()->getCurrentTime();
+  entry->path_len = pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN;
+  entry->flags = getRouteStatusFlags(entry->path_len);
+  entry->snr_q4 = pkt ? (int8_t)(pkt->getSNR() * 4) : 0;
+  entry->rssi = pkt ? last_rx_rssi : 0;
+  splitChannelText(channel_name, text, entry->origin, sizeof(entry->origin),
+                   entry->text, sizeof(entry->text));
+}
+
+int MyMesh::getRecentChannelMessages(RecentChatEntry dest[], int max_num) {
+  if (max_num > RECENT_CHAT_TABLE_SIZE) max_num = RECENT_CHAT_TABLE_SIZE;
+  int count = 0;
+  for (int offset = 0; offset < RECENT_CHAT_TABLE_SIZE && count < max_num; offset++) {
+    int i = recent_chat_head - offset;
+    if (i < 0) i += RECENT_CHAT_TABLE_SIZE;
+    if (recent_chat[i].recv_timestamp == 0 || recent_chat[i].text[0] == 0) continue;
+    dest[count++] = recent_chat[i];
+  }
+  return count;
+}
+
+bool MyMesh::startLinkTest() {
+  memset(&link_test, 0, sizeof(link_test));
+  link_test.done = true;
+  link_test.best_snr_q4 = -128;
+  link_test.worst_snr_q4 = 127;
+  return false;
+}
+
+void MyMesh::getLinkTestStatus(LinkTestStatus& dest) const {
+  dest = link_test;
 }
 
 void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
@@ -486,6 +970,18 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   i += tlen;
   addToOfflineQueue(out_frame, i);
 
+#ifdef DISPLAY_CLASS
+  const char* channel_name = "Unknown";
+  ChannelDetails channel_details;
+  if (getChannel(channel_idx, channel_details)) channel_name = channel_details.name;
+  noteTrafficStatus(channel_name, channel_idx, path_len, NETWORK_STATUS_CHANNEL_TRAFFIC);
+  noteChannelChat(channel_name, pkt, text);
+  const char* mention_text = channelMentionBodyText(text);
+  uint8_t ui_flags = textMentionsNodeName(this, mention_text, _prefs.node_name)
+                         ? UI_MSG_FLAG_MENTION
+                         : UI_MSG_FLAG_NONE;
+#endif
+
   if (_serial->isConnected()) {
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
@@ -496,7 +992,7 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   // we only want to show text messages on display, not cli data
   bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display && _ui) {
-    _ui->newMsg(path_len, from.name, text, offline_queue_len);
+    _ui->newMsg(path_len, from.name, text, offline_queue_len, UI_MSG_FLAG_DIRECT);
     if (!_serial->isConnected()) {
       _ui->notify(UIEventType::contactMessage);
     }
@@ -553,18 +1049,21 @@ void MyMesh::sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pk
 void MyMesh::onMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+  noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
   queueMessage(from, TXT_TYPE_PLAIN, pkt, sender_timestamp, NULL, 0, text);
 }
 
 void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                const char *text) {
   markConnectionActive(from); // in case this is from a server, and we have a connection
+  noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
 
 void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                  const uint8_t *sender_prefix, const char *text) {
   markConnectionActive(from);
+  noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
   // from.sync_since change needs to be persisted
   dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
   queueMessage(from, TXT_TYPE_SIGNED_PLAIN, pkt, sender_timestamp, sender_prefix, 4, text);
@@ -603,17 +1102,13 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     _serial->writeFrame(frame, 1);
   } else {
 #ifdef DISPLAY_CLASS
+#if !UI_NOTIFY_ONLY_IMPORTANT_MESSAGES
     if (_ui) _ui->notify(UIEventType::channelMessage);
+#endif
 #endif
   }
 #ifdef DISPLAY_CLASS
-  // Get the channel name from the channel index
-  const char *channel_name = "Unknown";
-  ChannelDetails channel_details;
-  if (getChannel(channel_idx, channel_details)) {
-    channel_name = channel_details.name;
-  }
-  if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len);
+  if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len, ui_flags);
 #endif
 }
 
@@ -900,6 +1395,19 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   sign_data = NULL;
   dirty_contacts_expiry = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
+  memset(network_status, 0, sizeof(network_status));
+  memset(recent_chat, 0, sizeof(recent_chat));
+  memset(&link_test, 0, sizeof(link_test));
+  link_test.best_snr_q4 = -128;
+  link_test.worst_snr_q4 = 127;
+  last_rx_snr_q4 = 0;
+  last_rx_rssi = 0;
+  last_rx_millis = 0;
+  recent_chat_head = 0;
+  channel_busy_ms = 0;
+  channel_busy_sample_ms = millis();
+  next_auto_advert = 0;
+  phone_gps_last_update_ms = 0;
   memset(send_scope.key, 0, sizeof(send_scope.key));
   send_unscoped = false;
 
@@ -913,6 +1421,51 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.tx_power_dbm = LORA_TX_POWER;
   _prefs.gps_enabled = 0;       // GPS disabled by default
   _prefs.gps_interval = 0;      // No automatic GPS updates by default
+  _prefs.adc_multiplier = 0.0f;
+  _prefs.notify_mode = DEFAULT_NOTIFY_MODE & NOTIFY_MODE_ALL;
+  _prefs.notify_gpio_pin = DEFAULT_NOTIFY_GPIO_PIN;
+  _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+  _prefs.notify_vibe_pin = DEFAULT_NOTIFY_VIBE_PIN;
+  _prefs.notify_tone_id = DEFAULT_NOTIFY_TONE_ID;
+  _prefs.notify_tone_volume = DEFAULT_NOTIFY_TONE_VOLUME;
+  _prefs.auto_advert_interval_mins = 0;
+  _prefs.ch2_mode = CH2_MODE_OFF;
+  _prefs.board_leds_enabled = BOARD_LEDS_DEFAULT ? 1 : 0;
+#if defined(UI_T096_PREMIUM_TFT)
+  _prefs.ui_font = 10;
+#else
+  _prefs.ui_font = 5;
+#endif
+  _prefs.ui_theme = 0;
+  _prefs.unread_led_enabled = 1;
+  _prefs.msg_popup_enabled = 1;
+  _prefs.important_notify_mode = DEFAULT_IMPORTANT_NOTIFY_MODE & NOTIFY_MODE_ALL;
+#ifdef UI_FORCE_IMPORTANT_NOTIFY_MODE
+  _prefs.important_notify_mode = UI_FORCE_IMPORTANT_NOTIFY_MODE & NOTIFY_MODE_ALL;
+#endif
+  _prefs.notifications_muted = 0;
+  _prefs.ui_top_color = 1;
+  _prefs.ui_bottom_color = 0;
+  _prefs.backlight_timeout_idx = 0;
+  _prefs.offline_dm_led_enabled = 1;
+  _prefs.ble_dm_led_enabled = 1;
+  _prefs.low_battery_shutdown_enabled = LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED ? 1 : 0;
+  _prefs.notify_tone_bridge_enabled = 0;
+  _prefs.notify_tone_8bit_enabled = 0;
+#ifdef DEFAULT_NOTIFY_TONE_HIGH_DRIVE
+  _prefs.notify_tone_high_drive_enabled = DEFAULT_NOTIFY_TONE_HIGH_DRIVE ? 1 : 0;
+#else
+  _prefs.notify_tone_high_drive_enabled = 0;
+#endif
+  _prefs.notify_tone_resonance_hz = DEFAULT_NOTIFY_TONE_RESONANCE_HZ;
+  _prefs.notify_tone_dm_id = _prefs.notify_tone_id;
+  _prefs.notify_tone_mention_id = _prefs.notify_tone_id;
+  _prefs.notify_tone_system_id = _prefs.notify_tone_id;
+  _prefs.smart_profile_id = SMART_PROFILE_CUSTOM;
+  _prefs.favorite_setting_1 = SMART_FAVORITE_NOTIFY_MODE;
+  _prefs.favorite_setting_2 = SMART_FAVORITE_SYSTEM_TONE;
+  _prefs.favorite_setting_3 = SMART_FAVORITE_BLUETOOTH;
+  _prefs.gps_source = GPS_SOURCE_HW;
   _prefs.radio_fem_rxgain = 1;
   _prefs.radio_fem_txgain = 0;
   //_prefs.rx_delay_base = 10.0f;  enable once new algo fixed
@@ -976,6 +1529,89 @@ void MyMesh::begin(bool has_display) {
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
 
+#if UI_PHONE_GPS == 1
+  if (_prefs.gps_source != GPS_SOURCE_PHONE) _prefs.gps_source = GPS_SOURCE_HW;
+#else
+  _prefs.gps_source = GPS_SOURCE_HW;
+  phone_gps_last_update_ms = 0;
+#endif
+  if (!isValidAutoAdvertIntervalMins(_prefs.auto_advert_interval_mins)) {
+    _prefs.auto_advert_interval_mins = 0;
+  }
+  _prefs.ch2_mode = CH2_MODE_OFF; // CH2 transport is not implemented in this release
+  _prefs.board_leds_enabled = constrain(_prefs.board_leds_enabled, 0, 1);
+  meshcoreSetBoardLedsEnabled(_prefs.board_leds_enabled != 0);
+  _prefs.adc_multiplier = constrain(_prefs.adc_multiplier, 0.0f, 20000.0f);
+  _prefs.low_battery_shutdown_enabled = constrain(_prefs.low_battery_shutdown_enabled, 0, 1);
+  _prefs.notify_mode &= NOTIFY_MODE_ALL;
+#ifdef PIN_MSG_ALERT
+  if (_prefs.notify_gpio_pin < 0) _prefs.notify_gpio_pin = DEFAULT_NOTIFY_GPIO_PIN;
+#else
+  _prefs.notify_gpio_pin = -1;
+#endif
+#if defined(PIN_BUZZER) || defined(PIN_MSG_TONE) || defined(PIN_MSG_ALERT)
+  if (_prefs.notify_tone_pin < 0) _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+#else
+  _prefs.notify_tone_pin = -1;
+#endif
+  if (_prefs.notify_vibe_pin < -1) _prefs.notify_vibe_pin = DEFAULT_NOTIFY_VIBE_PIN;
+  if (_prefs.notify_tone_id >= NOTIFY_TONE_COUNT) _prefs.notify_tone_id = DEFAULT_NOTIFY_TONE_ID;
+  if (_prefs.notify_tone_volume == 0 || _prefs.notify_tone_volume > 10) {
+    _prefs.notify_tone_volume = DEFAULT_NOTIFY_TONE_VOLUME;
+  }
+#if defined(UI_T096_PREMIUM_TFT)
+  if (_prefs.ui_font < 5 || _prefs.ui_font > UI_FONT_PREF_MAX) _prefs.ui_font = 10;
+#else
+  _prefs.ui_font = constrain(_prefs.ui_font, 0, UI_FONT_PREF_MAX);
+#endif
+  _prefs.ui_theme = constrain(_prefs.ui_theme, 0, 6);
+  _prefs.unread_led_enabled = constrain(_prefs.unread_led_enabled, 0, 1);
+  _prefs.msg_popup_enabled = constrain(_prefs.msg_popup_enabled, 0, 1);
+  _prefs.notifications_muted = constrain(_prefs.notifications_muted, 0, 1);
+  _prefs.night_quiet_active = constrain(_prefs.night_quiet_active, 0, 1);
+  if (_prefs.night_prompt_day > 100000UL) _prefs.night_prompt_day = 0;
+  _prefs.ui_top_color = constrain(_prefs.ui_top_color, 0, 5);
+  _prefs.ui_bottom_color = constrain(_prefs.ui_bottom_color, 0, 5);
+  _prefs.backlight_timeout_idx = constrain(_prefs.backlight_timeout_idx, 0, 2);
+  _prefs.offline_dm_led_enabled = constrain(_prefs.offline_dm_led_enabled, 0, 1);
+  _prefs.ble_dm_led_enabled = constrain(_prefs.ble_dm_led_enabled, 0, 1);
+  _prefs.notify_tone_bridge_enabled = constrain(_prefs.notify_tone_bridge_enabled, 0, 1);
+  _prefs.notify_tone_8bit_enabled = constrain(_prefs.notify_tone_8bit_enabled, 0, 1);
+  _prefs.notify_tone_high_drive_enabled = constrain(_prefs.notify_tone_high_drive_enabled, 0, 1);
+  if (_prefs.notify_tone_resonance_hz < 1800 || _prefs.notify_tone_resonance_hz > 4200) {
+    _prefs.notify_tone_resonance_hz = DEFAULT_NOTIFY_TONE_RESONANCE_HZ;
+  }
+  if (_prefs.notify_tone_dm_id >= NOTIFY_TONE_COUNT) _prefs.notify_tone_dm_id = _prefs.notify_tone_id;
+  if (_prefs.notify_tone_mention_id >= NOTIFY_TONE_COUNT) _prefs.notify_tone_mention_id = _prefs.notify_tone_id;
+  if (_prefs.notify_tone_system_id >= NOTIFY_TONE_COUNT) _prefs.notify_tone_system_id = _prefs.notify_tone_id;
+#if defined(UI_SMART_B12_TONE_LIST) && UI_SMART_B12_TONE_LIST == 1
+  _prefs.notify_tone_id = _prefs.notify_tone_system_id;
+  _prefs.notify_tone_dm_id = _prefs.notify_tone_system_id;
+  _prefs.notify_tone_mention_id = _prefs.notify_tone_system_id;
+#endif
+  if (_prefs.smart_profile_id > SMART_PROFILE_NIGHT) _prefs.smart_profile_id = SMART_PROFILE_CUSTOM;
+  if (_prefs.favorite_setting_1 == 0 || _prefs.favorite_setting_1 > SMART_FAVORITE_MAX) {
+    _prefs.favorite_setting_1 = SMART_FAVORITE_NOTIFY_MODE;
+  }
+  if (_prefs.favorite_setting_2 == 0 || _prefs.favorite_setting_2 > SMART_FAVORITE_MAX) {
+    _prefs.favorite_setting_2 = SMART_FAVORITE_SYSTEM_TONE;
+  }
+  if (_prefs.favorite_setting_3 == 0 || _prefs.favorite_setting_3 > SMART_FAVORITE_MAX) {
+    _prefs.favorite_setting_3 = SMART_FAVORITE_BLUETOOTH;
+  }
+#if !defined(UI_TONE_8BIT_PAGE) || UI_TONE_8BIT_PAGE != 1
+  _prefs.notify_tone_8bit_enabled = 0;
+#endif
+#if !defined(UI_TONE_BRIDGE_PAGE) || UI_TONE_BRIDGE_PAGE != 1
+  _prefs.notify_tone_bridge_enabled = 0;
+#elif defined(DEFAULT_NOTIFY_TONE_PIN)
+  if (_prefs.notify_tone_bridge_enabled) _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+#endif
+#if !defined(UI_TONE_HIGH_DRIVE_PAGE) || UI_TONE_HIGH_DRIVE_PAGE != 1
+  _prefs.notify_tone_high_drive_enabled = 0;
+#endif
+  _prefs.important_notify_mode &= NOTIFY_MODE_ALL;
+
 #ifdef BLE_PIN_CODE // 123456 by default
   if (_prefs.ble_pin == 0) {
 #ifdef DISPLAY_CLASS
@@ -1001,6 +1637,7 @@ void MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
+  board.setAdcMultiplier(_prefs.adc_multiplier);
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
@@ -1009,6 +1646,7 @@ void MyMesh::begin(bool has_display) {
   MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
                      radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
   applyCompanionRxPowerSaving(_prefs.sf, _prefs.bw);
+  updateAutoAdvertTimer();
 }
 
 const char *MyMesh::getNodeName() {
@@ -1019,6 +1657,93 @@ NodePrefs *MyMesh::getNodePrefs() {
 }
 uint32_t MyMesh::getBLEPin() {
   return _active_ble_pin;
+}
+
+uint16_t MyMesh::getAutoAdvertIntervalMins() const {
+  return _prefs.auto_advert_interval_mins;
+}
+
+void MyMesh::updateAutoAdvertTimer() {
+  if (_prefs.auto_advert_interval_mins > 0) {
+    next_auto_advert = futureMillis((uint32_t)_prefs.auto_advert_interval_mins * 60UL * 1000UL);
+  } else {
+    next_auto_advert = 0;
+  }
+}
+
+void MyMesh::cycleAutoAdvertInterval() {
+  _prefs.auto_advert_interval_mins = nextAutoAdvertIntervalMins(_prefs.auto_advert_interval_mins);
+  updateAutoAdvertTimer();
+  savePrefs();
+}
+
+void MyMesh::applyUiPrefsRuntime() {
+  board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain != 0);
+  board.setLoRaFemPaGainEnabled(_prefs.radio_fem_txgain != 0);
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain != 0);
+  meshcoreSetBoardLedsEnabled(_prefs.board_leds_enabled != 0);
+  board.setAdcMultiplier(_prefs.adc_multiplier);
+  updateAutoAdvertTimer();
+}
+
+bool MyMesh::isPhoneGpsFresh() const {
+  return isPhoneGpsEnabled() && phone_gps_last_update_ms != 0 &&
+         (unsigned long)(millis() - phone_gps_last_update_ms) <= PHONE_GPS_STALE_MS;
+}
+
+uint32_t MyMesh::getPhoneGpsAgeSeconds() const {
+  if (phone_gps_last_update_ms == 0) return 0xFFFFFFFFUL;
+  return (uint32_t)((unsigned long)(millis() - phone_gps_last_update_ms) / 1000UL);
+}
+
+const char* MyMesh::getGpsSourceName() const {
+  return isPhoneGpsEnabled() ? "PHONE" : "HW";
+}
+
+void MyMesh::setGpsSource(uint8_t source, bool save) {
+#if UI_PHONE_GPS == 1
+  source = source == GPS_SOURCE_PHONE ? GPS_SOURCE_PHONE : GPS_SOURCE_HW;
+#else
+  source = GPS_SOURCE_HW;
+#endif
+  if (_prefs.gps_source == source) return;
+  _prefs.gps_source = source;
+  phone_gps_last_update_ms = 0;
+#if ENV_INCLUDE_GPS == 1
+  if (source == GPS_SOURCE_PHONE) {
+    sensors.setSettingValue("gps", "0");
+    _prefs.gps_enabled = 0;
+  }
+#endif
+  if (save) savePrefs();
+}
+
+bool MyMesh::setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt) {
+#if UI_PHONE_GPS != 1
+  (void)lat;
+  (void)lon;
+  (void)alt;
+  return false;
+#else
+  if (lat < -90000000L || lat > 90000000L || lon < -180000000L || lon > 180000000L) {
+    return false;
+  }
+  if (!isPhoneGpsEnabled()) setGpsSource(GPS_SOURCE_PHONE, true);
+  sensors.node_lat = ((double)lat) / 1000000.0;
+  sensors.node_lon = ((double)lon) / 1000000.0;
+  sensors.node_altitude = ((double)alt) / 1000.0;
+  phone_gps_last_update_ms = millis();
+  if (phone_gps_last_update_ms == 0) phone_gps_last_update_ms = 1;
+  return true;
+#endif
+}
+
+bool MyMesh::getShareableLocation(double& lat, double& lon, double& alt) const {
+  if (isPhoneGpsEnabled() && !isPhoneGpsFresh()) return false;
+  lat = sensors.node_lat;
+  lon = sensors.node_lon;
+  alt = sensors.node_altitude;
+  return lat >= -90.0 && lat <= 90.0 && lon >= -180.0 && lon <= 180.0;
 }
 
 struct FreqRange {
@@ -1396,10 +2121,15 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
     int out_len;
+    bool direct_text_read = offline_queue_len > 0 && offline_queue[0].isDisplayableDirectMsg();
     if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
       _serial->writeFrame(out_frame, out_len);
 #ifdef DISPLAY_CLASS
-      if (_ui) _ui->msgRead(offline_queue_len);
+      if (_ui) {
+        // A BLE dequeue is not the same as dismissing the local notification.
+        _ui->msgRead(offline_queue_len, false);
+        if (direct_text_read) _ui->directMsgRead(false);
+      }
 #endif
     } else {
       out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
@@ -2258,6 +2988,7 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+  sampleChannelBusy();
 
   if (_cli_rescue) {
     checkCLIRescueCmd();
@@ -2271,17 +3002,31 @@ void MyMesh::loop() {
     dirty_contacts_expiry = 0;
   }
 
+  if (next_auto_advert && millisHasNowPassed(next_auto_advert)) {
+    if (!advert()) MESH_DEBUG_PRINTLN("ERROR: auto advert failed");
+    updateAutoAdvertTimer();
+  }
+
 #ifdef DISPLAY_CLASS
   if (_ui) _ui->setHasConnection(_serial->isConnected());
 #endif
 }
 
+void MyMesh::sampleChannelBusy() {
+  unsigned long now = millis();
+  if (channel_busy_sample_ms != 0 && _radio->isReceiving()) {
+    channel_busy_ms += now - channel_busy_sample_ms;
+  }
+  channel_busy_sample_ms = now;
+}
+
 bool MyMesh::advert() {
   mesh::Packet* pkt;
-  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+  double lat, lon, alt;
+  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE || !getShareableLocation(lat, lon, alt)) {
     pkt = createSelfAdvert(_prefs.node_name);
   } else {
-    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+    pkt = createSelfAdvert(_prefs.node_name, lat, lon);
   }
   if (pkt) {
     sendZeroHop(pkt);
@@ -2289,6 +3034,108 @@ bool MyMesh::advert() {
   } else {
     return false;
   }
+}
+
+bool MyMesh::sendQuickReply(const char* text) {
+  if (text == NULL || text[0] == 0) return false;
+  ChannelDetails channel;
+  if (!getChannel(0, channel)) return false;
+  bool sent = sendGroupMessage(getRTCClock()->getCurrentTime(), channel.channel,
+                               _prefs.node_name, text, strlen(text));
+  if (sent) {
+    char local_text[160];
+    snprintf(local_text, sizeof(local_text), "%s: %s", _prefs.node_name, text);
+    noteChannelChat(channel.name, NULL, local_text);
+  }
+  return sent;
+}
+
+int MyMesh::getQuickReplyChannelCount() {
+#ifdef MAX_GROUP_CHANNELS
+  int count = 0;
+  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    ChannelDetails channel;
+    if (getChannel(i, channel) && channel.name[0] != 0) count++;
+  }
+  return count;
+#else
+  return 0;
+#endif
+}
+
+bool MyMesh::getQuickReplyChannel(uint16_t list_idx, uint8_t& channel_idx,
+                                  ChannelDetails& channel) {
+#ifdef MAX_GROUP_CHANNELS
+  uint16_t seen = 0;
+  for (uint8_t i = 0; i < MAX_GROUP_CHANNELS; i++) {
+    ChannelDetails candidate;
+    if (!getChannel(i, candidate) || candidate.name[0] == 0) continue;
+    if (seen++ == list_idx) {
+      channel_idx = i;
+      channel = candidate;
+      return true;
+    }
+  }
+#endif
+  return false;
+}
+
+int MyMesh::getQuickReplyContactCount() {
+  int count = 0;
+  ContactInfo contact;
+  for (uint32_t i = 0; getContactByIdx(i, contact); i++) {
+    // Target list intentionally excludes repeaters, rooms and sensors.
+    if (contact.type == ADV_TYPE_CHAT && contact.name[0] != 0) count++;
+  }
+  return count;
+}
+
+bool MyMesh::getQuickReplyContact(uint16_t list_idx, ContactInfo& contact) {
+  uint16_t seen = 0;
+  ContactInfo candidate;
+  for (uint32_t i = 0; getContactByIdx(i, candidate); i++) {
+    if (candidate.type != ADV_TYPE_CHAT || candidate.name[0] == 0) continue;
+    if (seen++ == list_idx) {
+      contact = candidate;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool MyMesh::sendQuickReplyToChannel(uint16_t list_idx, const char* text) {
+  if (text == NULL || text[0] == 0) return false;
+  uint8_t channel_idx = 0;
+  ChannelDetails channel;
+  if (!getQuickReplyChannel(list_idx, channel_idx, channel)) return false;
+  bool sent = sendGroupMessage(getRTCClock()->getCurrentTime(), channel.channel,
+                               _prefs.node_name, text, strlen(text));
+  if (sent) {
+    char local_text[160];
+    snprintf(local_text, sizeof(local_text), "%s: %s", _prefs.node_name, text);
+    noteChannelChat(channel.name, NULL, local_text);
+  }
+  return sent;
+}
+
+bool MyMesh::sendQuickReplyToContact(uint16_t list_idx, const char* text) {
+  if (text == NULL || text[0] == 0) return false;
+  ContactInfo contact_copy;
+  if (!getQuickReplyContact(list_idx, contact_copy)) return false;
+  ContactInfo* recipient = lookupContactByPubKey(contact_copy.id.pub_key, PUB_KEY_SIZE);
+  if (recipient == NULL || recipient->type != ADV_TYPE_CHAT) return false;
+  uint32_t expected_ack = 0;
+  uint32_t est_timeout = 0;
+  int result = sendMessage(*recipient, getRTCClock()->getCurrentTimeUnique(), 0,
+                           text, expected_ack, est_timeout);
+  if (result == MSG_SEND_FAILED) return false;
+  if (expected_ack) {
+    expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis();
+    expected_ack_table[next_ack_idx].ack = expected_ack;
+    expected_ack_table[next_ack_idx].contact = recipient;
+    next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
+  }
+  return true;
 }
 
 // To check if there is pending work

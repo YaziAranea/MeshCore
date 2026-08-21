@@ -239,6 +239,54 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
     file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
     file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
 
+    // SmartUI on PowerSaving-v16 appended its settings to /new_prefs.  Read
+    // only fields that are actually present so stock legacy files keep the
+    // PS17 constructor defaults.  PS17 saves all migrated values as JSON.
+#define READ_LEGACY_SMART_UI_FIELD(field)                                                \
+    do {                                                                                 \
+      if (file.available() >= (int)sizeof(_prefs.field)) {                               \
+        file.read((uint8_t *)&_prefs.field, sizeof(_prefs.field));                       \
+      }                                                                                  \
+    } while (0)
+    READ_LEGACY_SMART_UI_FIELD(radio_fem_rxgain);
+    READ_LEGACY_SMART_UI_FIELD(adc_multiplier);
+    READ_LEGACY_SMART_UI_FIELD(notify_mode);
+    READ_LEGACY_SMART_UI_FIELD(notify_gpio_pin);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_pin);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_id);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_volume);
+    READ_LEGACY_SMART_UI_FIELD(auto_advert_interval_mins);
+    READ_LEGACY_SMART_UI_FIELD(ch2_mode);
+    READ_LEGACY_SMART_UI_FIELD(board_leds_enabled);
+    READ_LEGACY_SMART_UI_FIELD(ui_font);
+    READ_LEGACY_SMART_UI_FIELD(ui_theme);
+    READ_LEGACY_SMART_UI_FIELD(unread_led_enabled);
+    READ_LEGACY_SMART_UI_FIELD(msg_popup_enabled);
+    READ_LEGACY_SMART_UI_FIELD(important_notify_mode);
+    READ_LEGACY_SMART_UI_FIELD(notifications_muted);
+    READ_LEGACY_SMART_UI_FIELD(ui_top_color);
+    READ_LEGACY_SMART_UI_FIELD(ui_bottom_color);
+    READ_LEGACY_SMART_UI_FIELD(backlight_timeout_idx);
+    READ_LEGACY_SMART_UI_FIELD(notify_vibe_pin);
+    READ_LEGACY_SMART_UI_FIELD(offline_dm_led_enabled);
+    READ_LEGACY_SMART_UI_FIELD(ble_dm_led_enabled);
+    READ_LEGACY_SMART_UI_FIELD(low_battery_shutdown_enabled);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_bridge_enabled);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_8bit_enabled);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_high_drive_enabled);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_resonance_hz);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_dm_id);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_mention_id);
+    READ_LEGACY_SMART_UI_FIELD(notify_tone_system_id);
+    READ_LEGACY_SMART_UI_FIELD(smart_profile_id);
+    READ_LEGACY_SMART_UI_FIELD(favorite_setting_1);
+    READ_LEGACY_SMART_UI_FIELD(favorite_setting_2);
+    READ_LEGACY_SMART_UI_FIELD(favorite_setting_3);
+    READ_LEGACY_SMART_UI_FIELD(night_prompt_day);
+    READ_LEGACY_SMART_UI_FIELD(night_quiet_active);
+    READ_LEGACY_SMART_UI_FIELD(gps_source);
+#undef READ_LEGACY_SMART_UI_FIELD
+
     // migrate old fields
     _prefs.setRepeatEn(_prefs._client_repeat != 0);
 
