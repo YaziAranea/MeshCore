@@ -1,0 +1,59 @@
+name: SmartUI PS17 CI
+
+on:
+  push:
+    branches:
+      - smartui-ps17.1
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smartui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - Heltec_t096_companion_radio_ble_femon
+          - Heltec_t114_companion_radio_ble
+          - ProMicro_ra62_companion_radio_ble
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up pinned build environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build UF2
+        run: pio run -e "${{ matrix.environment }}" -t create_uf2
+
+  ui-qa:
+    name: Static and framebuffer UI QA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install pinned QA dependencies
+        run: python -m pip install -r requirements-qa.txt
+
+      - name: Check SmartUI contract
+        run: python tools/audit_exp45_ui_contract.py
+
+      - name: Run exact display simulation
+        run: python tools/simulate_exp45_ui_qa.py --out-dir qa_outputs/ci

@@ -1,0 +1,3 @@
+# Tested dependencies for the pixel-accurate UI simulator and font tooling.
+Pillow==12.3.0
+fonttools==4.63.0

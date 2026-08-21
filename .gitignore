@@ -17,3 +17,11 @@ compile_commands.json
 .venv/
 venv/
 platformio.local.ini
+
+# Python caches and local SmartUI QA output
+__pycache__/
+*.py[cod]
+qa_outputs/
+
+# Release files are published as GitHub Release assets, not tracked in source.
+/firmware/
