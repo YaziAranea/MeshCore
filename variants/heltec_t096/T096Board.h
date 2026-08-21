@@ -12,6 +12,7 @@ protected:
   void initiateShutdown(uint8_t reason) override;
 #endif
   void variant_shutdown();
+  float adc_mult = ADC_MULTIPLIER;
 
 public:
   RefCountedDigitalPin periph_power;
@@ -23,6 +24,8 @@ public:
   void onBeforeTransmit(void) override;
   void onAfterTransmit(void) override;
   uint16_t getBattMilliVolts() override;
+  bool setAdcMultiplier(float multiplier) override;
+  float getAdcMultiplier() const override;
   const char* getManufacturerName() const override ;
   void powerOff() override;
   bool setLoRaFemLnaEnabled(bool enable) override;

@@ -24,6 +24,12 @@
 
 #define BATTERY_PIN             (3)
 #define ADC_MULTIPLIER          (4.90F)
+#ifndef PIN_VBAT_READ
+#define PIN_VBAT_READ           BATTERY_PIN
+#endif
+#ifndef PIN_BAT_CTL
+#define PIN_BAT_CTL             (47)
+#endif
 
 #define ADC_RESOLUTION          (14)
 #define BATTERY_SENSE_RES       (12)

@@ -50,6 +50,23 @@ void T096Board::begin() {
   digitalWrite(P_LORA_TX_LED, LOW);
 
   periph_power.begin();
+#ifdef T096_TFT_BUS_AS_I2C
+  // Keep the former TFT power rail on for an INA219 connected to that header,
+  // while parking the unused display and GPS control lines safely.
+  pinMode(PIN_TFT_CS, OUTPUT);
+  digitalWrite(PIN_TFT_CS, HIGH);
+  pinMode(PIN_TFT_RST, OUTPUT);
+  digitalWrite(PIN_TFT_RST, LOW);
+  pinMode(PIN_TFT_LEDA_CTL, OUTPUT);
+  digitalWrite(PIN_TFT_LEDA_CTL, !PIN_TFT_LEDA_CTL_ACTIVE);
+
+  pinMode(PIN_GPS_EN, OUTPUT);
+  digitalWrite(PIN_GPS_EN, !PIN_GPS_EN_ACTIVE);
+  pinMode(PIN_GPS_RESET, OUTPUT);
+  digitalWrite(PIN_GPS_RESET, PIN_GPS_RESET_ACTIVE);
+
+  periph_power.claim();
+#endif
   loRaFEMControl.init();
   delay(1);
 }
@@ -76,8 +93,18 @@ uint16_t T096Board::getBattMilliVolts() {
     adcvalue = analogRead(PIN_VBAT_READ);
     digitalWrite(PIN_BAT_CTL, 0);
 
-    return (uint16_t)((float)adcvalue * MV_LSB * 4.9);
+    return (uint16_t)((float)adcvalue * MV_LSB * adc_mult);
 }
+
+bool T096Board::setAdcMultiplier(float multiplier) {
+    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    return true;
+}
+
+float T096Board::getAdcMultiplier() const {
+    return adc_mult == 0.0f ? ADC_MULTIPLIER : adc_mult;
+}
+
 void T096Board::variant_shutdown() {
  nrf_gpio_cfg_default(PIN_VEXT_EN);
     nrf_gpio_cfg_default(PIN_TFT_CS);
