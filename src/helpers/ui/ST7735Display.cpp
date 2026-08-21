@@ -1,4 +1,6 @@
 #include "ST7735Display.h"
+#include "EmbeddedBitmapFonts.h"
+#include "Utf8Cyrillic5x7.h"
 
 //#include <Fonts/GFXFF/FreeSans9pt7b.h>
 
@@ -98,6 +100,38 @@
 #define ST7735_MAGENTA ST77XX_MAGENTA
 #define ST7735_YELLOW ST77XX_YELLOW
 #define ST7735_ORANGE ST77XX_ORANGE
+
+struct ST7735Theme {
+  uint16_t fg;
+  uint16_t bg;
+  uint16_t red;
+  uint16_t green;
+  uint16_t blue;
+  uint16_t yellow;
+  uint16_t orange;
+  const char* name;
+};
+
+static const ST7735Theme ST7735_THEMES[] = {
+  {0xF7DF, 0x0000, 0xFA69, 0x1F8F, 0x365F, 0xFF09, 0xFCC5, "Графит"},
+  {0xEFFF, 0x0008, 0xFB2C, 0x2F50, 0x4DFF, 0xFF6A, 0xFD60, "Полночь"},
+  {0xEFFF, 0x0020, 0xFB4B, 0x27EF, 0x2EB7, 0xFF08, 0xFB82, "Хвоя"},
+  {0x10C4, 0xFFDE, 0xD924, 0x0BC9, 0x0354, 0xB281, 0xC201, "Бумага"},
+  {0xFF9F, 0x0001, 0xFA6F, 0x2F50, 0x653F, 0xFF49, 0xFB90, "Бордо"},
+  {0xEFFF, 0x0022, 0xFB8E, 0x3693, 0x269D, 0xFF08, 0xFC87, "Север"},
+  {0xFFFF, 0x0000, 0xF800, 0x07E0, 0x001F, 0xFFE0, 0xFD20, "Высокий"}
+};
+
+static uint16_t readDisplayCodepoint(const char*& str) {
+  const char* start = str;
+  uint8_t first = (uint8_t)*start;
+  uint16_t cp = meshcoreReadUtf8Codepoint(str);
+  if (cp == '?' && first >= 0x80 && str == start + 1) {
+    uint16_t cp1251;
+    if (meshcoreCp1251Codepoint(first, &cp1251)) return cp1251;
+  }
+  return cp;
+}
 
 static TFT_eSPI lcd = TFT_eSPI(160, 80);
 static uint32_t curr_color;
@@ -553,48 +587,210 @@ void ST7735Display::turnOff() {
 }
 
 void ST7735Display::clear() {
-  sprite->fillScreen(ST77XX_BLACK);
+  if (sprite) sprite->fillScreen(_theme_bg);
 }
 
 void ST7735Display::startFrame(ColorVal bkg) {
-  sprite->fillScreen(bkg);
-  sprite->setTextColor(curr_color = UIColor::primary_txt);
-  sprite->setFreeFont();
-  sprite->setTextSize(1);      // This one affects size of Please wait... message
-  //sprite->cp437(true);         // Use full 256 char 'Code Page 437' font
+  (void)bkg;
+  applyTheme();
+  if (sprite) {
+    sprite->fillScreen(_theme_bg);
+    sprite->setTextColor(curr_color = _theme_fg, _theme_bg);
+    sprite->setFreeFont();
+    sprite->setTextSize(1);
+  }
+  _color = _theme_fg;
+  _text_size = 1;
+  _bold_text = false;
 }
 
 void ST7735Display::setTextSize(int sz) {
-  sprite->setTextSize(sz);
+  if (sz < 1) sz = 1;
+  _text_size = (uint8_t)sz;
+}
+
+void ST7735Display::setBold(bool bold) {
+  _bold_text = bold;
+}
+
+void ST7735Display::applyTheme() {
+  uint8_t count = sizeof(ST7735_THEMES) / sizeof(ST7735_THEMES[0]);
+  if (_ui_theme >= count) _ui_theme = 0;
+  _theme_fg = ST7735_THEMES[_ui_theme].fg;
+  _theme_bg = ST7735_THEMES[_ui_theme].bg;
+}
+
+const MeshcoreBitmapFont* ST7735Display::currentFont() const {
+  return meshcoreGetSmallFont(_ui_font);
+}
+
+const MeshcoreBitmapGlyph* ST7735Display::glyphForCodepoint(uint16_t codepoint) const {
+  const MeshcoreBitmapFont* font = currentFont();
+  const MeshcoreBitmapGlyph* glyph = meshcoreFindGlyph(font, codepoint == '\t' ? ' ' : codepoint);
+  if (glyph) return glyph;
+  return meshcoreFindGlyph(font, '?');
+}
+
+uint8_t ST7735Display::fontLineHeight() const {
+  return currentFont()->height * _text_size;
+}
+
+void ST7735Display::setUiFont(uint8_t font_id) {
+  if (font_id >= getUiFontCount()) font_id = 0;
+  _ui_font = font_id;
+}
+
+const char* ST7735Display::getUiFontName(uint8_t font_id) const {
+  if (font_id >= getUiFontCount()) font_id = 0;
+  return meshcoreGetSmallFont(font_id)->name;
+}
+
+uint8_t ST7735Display::getUiFontCount() const {
+  return MESHCORE_SMALL_FONT_COUNT;
+}
+
+void ST7735Display::setUiTheme(uint8_t theme_id) {
+  if (theme_id >= getUiThemeCount()) theme_id = 0;
+  _ui_theme = theme_id;
+  applyTheme();
+}
+
+const char* ST7735Display::getUiThemeName(uint8_t theme_id) const {
+  if (theme_id >= getUiThemeCount()) theme_id = 0;
+  return ST7735_THEMES[theme_id].name;
 }
 
 void ST7735Display::setColor(ColorVal c) {
-  curr_color = c;
-  sprite->setTextColor(curr_color);
+  const ST7735Theme& theme = ST7735_THEMES[_ui_theme < getUiThemeCount() ? _ui_theme : 0];
+  switch (c) {
+    case DisplayDriver::DARK:   _color = _theme_bg; break;
+    case DisplayDriver::RED:    _color = theme.red; break;
+    case DisplayDriver::GREEN:  _color = theme.green; break;
+    case DisplayDriver::BLUE:   _color = theme.blue; break;
+    case DisplayDriver::YELLOW: _color = theme.yellow; break;
+    case DisplayDriver::ORANGE: _color = theme.orange; break;
+    default:                     _color = _theme_fg; break;
+  }
+  curr_color = _color;
+  if (sprite) sprite->setTextColor(_color, _theme_bg);
 }
 
 void ST7735Display::setCursor(int x, int y) {
-  sprite->setCursor(x*SCALE_X, y*SCALE_Y);
+  _cursor_x = x;
+  _cursor_y = y;
+  if (sprite) sprite->setCursor(x, y);
+}
+
+uint16_t ST7735Display::codepointWidth(uint16_t codepoint) {
+  if (codepoint == '\r' || codepoint == '\n') return 0;
+  const MeshcoreBitmapGlyph* glyph = glyphForCodepoint(codepoint);
+  if (!glyph) return 0;
+  uint16_t extra = (_bold_text && _text_size == 1) ? 1 : 0;
+  return glyph->xAdvance * _text_size + extra;
+}
+
+void ST7735Display::drawCodepoint(uint16_t codepoint) {
+  if (!sprite || codepoint == '\r') return;
+  if (codepoint == '\n') {
+    setCursor(0, _cursor_y + fontLineHeight());
+    return;
+  }
+
+  const MeshcoreBitmapFont* font = currentFont();
+  const MeshcoreBitmapGlyph* glyph = glyphForCodepoint(codepoint);
+  if (!glyph) return;
+
+  int baseline = _cursor_y + font->ascent * _text_size;
+  int top = baseline - (glyph->yOffset + glyph->height) * _text_size;
+  int left = _cursor_x + glyph->xOffset * _text_size;
+  bool bold = _bold_text && _text_size == 1;
+
+  for (int row = 0; row < glyph->height; row++) {
+    int run_start = -1;
+    for (int col = 0; col <= glyph->width; col++) {
+      bool set = false;
+      if (col < glyph->width) {
+        uint8_t bits = font->bitmap[glyph->offset + row * glyph->rowBytes + col / 8];
+        set = (bits & (1 << (col & 7))) != 0;
+      }
+      if (set) {
+        if (run_start < 0) run_start = col;
+      } else if (run_start >= 0) {
+        int px = left + run_start * _text_size;
+        int py = top + row * _text_size;
+        int run_w = (col - run_start) * _text_size + (bold ? 1 : 0);
+        sprite->fillRect(px, py, run_w, _text_size, _color);
+        run_start = -1;
+      }
+    }
+  }
+
+  _cursor_x += codepointWidth(codepoint);
+  sprite->setCursor(_cursor_x, _cursor_y);
 }
 
 void ST7735Display::print(const char* str) {
-  sprite->print(str);
+  if (str == NULL) return;
+  while (*str) drawCodepoint(readDisplayCodepoint(str));
+}
+
+void ST7735Display::printWordWrap(const char* str, int max_width) {
+  if (str == NULL) return;
+  int left = _cursor_x;
+  int right = left + max_width;
+  while (*str) {
+    uint16_t cp = readDisplayCodepoint(str);
+    uint16_t w = codepointWidth(cp);
+    if (cp == '\n') {
+      drawCodepoint(cp);
+      setCursor(left, _cursor_y);
+      continue;
+    }
+    if (w > 0 && _cursor_x + w > right && _cursor_x > left) {
+      setCursor(left, _cursor_y + fontLineHeight());
+      if (cp == ' ') continue;
+    }
+    drawCodepoint(cp);
+  }
+}
+
+void ST7735Display::translateUTF8ToBlocks(char* dest, const char* src, size_t dest_size) {
+  meshcoreCopySupportedUtf8(dest, src, dest_size);
 }
 
 void ST7735Display::fillRect(int x, int y, int w, int h) {
-  sprite->fillRect(x*SCALE_X, y*SCALE_Y, w*SCALE_X, h*SCALE_Y, curr_color);
+  if (sprite && w > 0 && h > 0) sprite->fillRect(x, y, w, h, _color);
 }
 
 void ST7735Display::drawRect(int x, int y, int w, int h) {
-  sprite->drawRect(x*SCALE_X, y*SCALE_Y, w*SCALE_X, h*SCALE_Y, curr_color);
+  if (sprite && w > 0 && h > 0) sprite->drawRect(x, y, w, h, _color);
 }
 
 void ST7735Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
-  sprite->drawBitmap(x*SCALE_X, y*SCALE_Y, bits, w, h, curr_color);
+  if (!sprite || bits == NULL) return;
+  uint8_t byte_width = (w + 7) / 8;
+  for (int row = 0; row < h; row++) {
+    for (int col = 0; col < w; col++) {
+      uint8_t byte = pgm_read_byte(bits + row * byte_width + col / 8);
+      if (byte & (0x80 >> (col & 7))) sprite->drawPixel(x + col, y + row, _color);
+    }
+  }
 }
 
 uint16_t ST7735Display::getTextWidth(const char* str) {
-  return sprite->textWidth(str) / SCALE_X;
+  if (str == NULL) return 0;
+  uint16_t width = 0;
+  uint16_t max_width = 0;
+  while (*str) {
+    uint16_t cp = readDisplayCodepoint(str);
+    if (cp == '\n') {
+      if (width > max_width) max_width = width;
+      width = 0;
+    } else {
+      width += codepointWidth(cp);
+    }
+  }
+  return width > max_width ? width : max_width;
 }
 
 void ST7735Display::endFrame() {

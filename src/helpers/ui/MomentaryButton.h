@@ -19,6 +19,7 @@ class MomentaryButton {
   unsigned long _last_click_time;
   int _multi_click_window;
   bool _pending_click;
+  unsigned long _immediate_click_until;
 
   bool isPressed(int level) const;
 
@@ -26,8 +27,18 @@ public:
   MomentaryButton(int8_t pin, int long_press_mills=0, bool reverse=false, bool pulldownup=false, bool multiclick=true);
   MomentaryButton(int8_t pin, int long_press_mills, int analog_threshold);
   void begin();
+  void reconfigure();
+  void resetState(bool suppress_current_press = false);
+  void preferImmediateClickUntil(unsigned long until);
   int check(bool repeat_click=false);  // returns one of BUTTON_EVENT_*
   void cancelClick();  // suppress next BUTTON_EVENT_CLICK (if already in DOWN state)
   uint8_t getPin() { return _pin; }
+  int rawLevel() const;
+  int debugPrev() const { return prev; }
+  int debugCancel() const { return cancel; }
+  unsigned long debugDownAt() const { return down_at; }
+  uint8_t debugClickCount() const { return _click_count; }
+  bool debugPendingClick() const { return _pending_click; }
+  unsigned long debugImmediateClickUntil() const { return _immediate_click_until; }
   bool isPressed() const;
 };

@@ -21,5 +21,5 @@ public:
   virtual int render(DisplayDriver& display) =0;   // return value is number of millis until next render
   virtual bool handleInput(char c) { return false; }
   virtual void poll() { }
+  virtual bool keepDisplayOn() const { return false; }
 };
-

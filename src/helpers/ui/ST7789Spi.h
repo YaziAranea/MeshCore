@@ -105,6 +105,7 @@ class ST7789Spi : public OLEDDisplay {
       SPIClass * _spi;
       SPISettings 		    _spiSettings;
       uint16_t            _RGB=0xFFFF;
+      uint16_t            _backgroundRGB=0x0000;
       uint8_t             _buffheight;
   public:
     /* pass _cs as -1 to indicate "do not use CS pin", for cases where it is hard wired low */
@@ -197,7 +198,7 @@ class ST7789Spi : public OLEDDisplay {
               uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = minBoundX; x <= maxBoundX; x++)
               {
-                pixbuf[x-minBoundX] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                pixbuf[x-minBoundX] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
               }
 #ifdef ESP_PLATFORM
               _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);
@@ -225,7 +226,7 @@ class ST7789Spi : public OLEDDisplay {
               uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = 0; x < displayWidth; x++)
               {
-                pixbuf[x] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:0;
+                pixbuf[x] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
               }
 #ifdef ESP_PLATFORM
               _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);
@@ -277,6 +278,20 @@ class ST7789Spi : public OLEDDisplay {
   {
 
     this->_RGB=0x00|c>>8|c<<8&0xFF00;
+  }
+
+  void setBackgroundRGB(uint16_t c)
+  {
+    this->_backgroundRGB=0x00|c>>8|c<<8&0xFF00;
+  }
+
+  void forceFullRefresh()
+  {
+#ifdef OLEDDISPLAY_DOUBLE_BUFFER
+    if (buffer_back != NULL) {
+      memset(buffer_back, 0xFF, displayBufferSize);
+    }
+#endif
   }
   
   void displayOn(void) {
