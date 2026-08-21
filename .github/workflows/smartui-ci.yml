@@ -53,7 +53,7 @@ jobs:
         run: python -m pip install -r requirements-qa.txt
 
       - name: Check SmartUI contract
-        run: python tools/audit_exp45_ui_contract.py
+        run: python tools/audit_smartui_ps17_contract.py
 
       - name: Run exact display simulation
-        run: python tools/simulate_exp45_ui_qa.py --out-dir qa_outputs/ci
+        run: python tools/simulate_smartui_ps17_qa.py --out-dir qa_outputs/ci

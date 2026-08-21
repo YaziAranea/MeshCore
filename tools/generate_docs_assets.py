@@ -25,7 +25,7 @@ TOOLS = ROOT / "tools"
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(TOOLS))
 
-from simulate_exp45_ui_qa import (  # noqa: E402
+from simulate_smartui_ps17_qa import (  # noqa: E402
     BoardProfile,
     Frame,
     OledExactFont,

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Exact framebuffer-oriented QA for the EXP45 dense UI screens.
+"""Exact framebuffer-oriented QA for the SmartUI PS17 dense UI screens.
 
 The script intentionally reuses the same glyph generator/metrics as the
 firmware simulators:
@@ -9,7 +9,7 @@ firmware simulators:
   240x135 with SCALE_X=1.875, SCALE_Y=2.109375 and Y_OFFSET=1.
 * OLED: the actual Utf8Cyrillic5x7 tables and the five SSD1306 spacing styles.
 
-It renders the pre-EXP45 and proposed EXP45 versions of the keyboard, target
+It renders the reference and current SmartUI PS17 versions of the keyboard, target
 picker, compact list and unread-DM screen.  The canonical matrices are meant
 for human review; the profile sweep and assertions are the release gate.
 """
@@ -972,17 +972,17 @@ def render_unread_senders(profile: BoardProfile, *, count: int, cursor: int | No
 def canonical_scenes(profile: BoardProfile) -> list[tuple[str, Frame]]:
     return [
         ("CURRENT keyboard: начало", render_keyboard(profile, desired=False, cursor=20)),
-        ("EXP45 keyboard: хвост+каретка", render_keyboard(profile, desired=True, cursor=20)),
+        ("SmartUI PS17 keyboard: хвост+каретка", render_keyboard(profile, desired=True, cursor=20)),
         ("CURRENT target 350: без scrollbar", render_target(profile, desired=False, count=350, cursor=349)),
-        ("EXP45 target: 0 контактов", render_target(profile, desired=True, count=0, cursor=0)),
-        ("EXP45 target: 1 контакт", render_target(profile, desired=True, count=1, cursor=0)),
-        ("EXP45 target: 350 контактов", render_target(profile, desired=True, count=350, cursor=349)),
+        ("SmartUI PS17 target: 0 контактов", render_target(profile, desired=True, count=0, cursor=0)),
+        ("SmartUI PS17 target: 1 контакт", render_target(profile, desired=True, count=1, cursor=0)),
+        ("SmartUI PS17 target: 350 контактов", render_target(profile, desired=True, count=350, cursor=349)),
         ("CURRENT compact list", render_compact(profile, desired=False, count=350, cursor=349)),
-        ("EXP45 compact list", render_compact(profile, desired=True, count=350, cursor=349)),
+        ("SmartUI PS17 compact list", render_compact(profile, desired=True, count=350, cursor=349)),
         ("CURRENT unread: история", render_unread_current(profile)),
-        ("EXP45 unread: пусто", render_unread_senders(profile, count=0)),
-        ("EXP45 unread: 1 отправитель", render_unread_senders(profile, count=1)),
-        ("EXP45 unread: отправители", render_unread_senders(profile, count=12, cursor=11)),
+        ("SmartUI PS17 unread: пусто", render_unread_senders(profile, count=0)),
+        ("SmartUI PS17 unread: 1 отправитель", render_unread_senders(profile, count=1)),
+        ("SmartUI PS17 unread: отправители", render_unread_senders(profile, count=12, cursor=11)),
     ]
 
 
@@ -1105,7 +1105,7 @@ def save_native_frames(scenes: Sequence[tuple[str, Frame]], directory: Path) -> 
 
 def write_reports(out: Path, records: list[dict], failures: list[str], canonical: dict[str, list[tuple[str, Frame]]]) -> None:
     summary = {
-        "contract": "EXP45 exact dense UI",
+        "contract": "SmartUI PS17 exact dense UI",
         "desired_cases": len(records),
         "passed": sum(1 for item in records if item["status"] == "PASS"),
         "failed": len(failures),
@@ -1116,11 +1116,11 @@ def write_reports(out: Path, records: list[dict], failures: list[str], canonical
         "failures": failures,
         "records": records,
     }
-    (out / "EXP45_SIMULATION_REPORT.json").write_text(
+    (out / "SMARTUI_PS17_SIMULATION_REPORT.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     lines = [
-        "EXP45 exact UI simulation report",
+        "SmartUI PS17 exact UI simulation report",
         f"Desired cases: {summary['desired_cases']}",
         f"Passed: {summary['passed']}",
         f"Failed: {summary['failed']}",
@@ -1134,7 +1134,7 @@ def write_reports(out: Path, records: list[dict], failures: list[str], canonical
         "three keyboard pages, service-key selection, long Russian labels and typed-text tail.",
         "T114 extras: all 10 public fonts x 4 GPS states, font/theme pickers and physical 240x135 bounds.",
         "",
-        "Current reference overflows (informational, not the EXP45 gate):",
+        "Reference overflows (informational, not the SmartUI PS17 gate):",
     ]
     lines.extend(f"- {board}: {count}" for board, count in summary["current_reference_overflows"].items())
     if failures:
@@ -1142,7 +1142,7 @@ def write_reports(out: Path, records: list[dict], failures: list[str], canonical
         lines.extend(f"- {failure}" for failure in failures)
     else:
         lines.extend(("", "RESULT: PASS — all desired framebuffer and semantic assertions passed."))
-    (out / "EXP45_SIMULATION_REPORT.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (out / "SMARTUI_PS17_SIMULATION_REPORT.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:
@@ -1163,12 +1163,12 @@ def main() -> int:
         canonical_profile = board_profiles[0]
         scenes = canonical_scenes(canonical_profile)
         canonical[board] = scenes
-        make_matrix(scenes, out / f"{board}_EXP45_EXACT_QA_MATRIX.png")
+        make_matrix(scenes, out / f"{board}_SMARTUI_PS17_EXACT_QA_MATRIX.png")
         save_native_frames(scenes, out / "frames" / board)
         sweep: list[tuple[str, Frame]] = []
         for profile in board_profiles:
             sweep.extend(desired_sweep_scenes(profile))
-        make_matrix(sweep, out / f"{board}_EXP45_DESIRED_FONT_SWEEP.png", columns=4)
+        make_matrix(sweep, out / f"{board}_SMARTUI_PS17_FONT_SWEEP.png", columns=4)
 
     t114_active = make_t114_active_profiles()
     t114_special: list[tuple[str, Frame]] = [
@@ -1188,13 +1188,13 @@ def main() -> int:
         ("Target 350", render_target(t114_active[0], desired=True, count=350, cursor=350)),
         ("Unread senders", render_unread_senders(t114_active[0], count=12, cursor=11)),
     ])
-    make_matrix(t114_special, out / "T114_EXP45_GPS_APPEARANCE_PHYSICAL_QA.png", columns=4)
+    make_matrix(t114_special, out / "T114_SMARTUI_PS17_GPS_APPEARANCE_PHYSICAL_QA.png", columns=4)
     save_native_frames(t114_special, out / "frames" / "T114_special")
 
     records, failures = run_release_assertions(profiles)
     write_reports(out, records, failures, canonical)
-    print(f"EXP45 exact UI QA: {len(records) - len(failures)} passed, {len(failures)} failed")
-    print(out / "EXP45_SIMULATION_REPORT.txt")
+    print(f"SmartUI PS17 exact UI QA: {len(records) - len(failures)} passed, {len(failures)} failed")
+    print(out / "SMARTUI_PS17_SIMULATION_REPORT.txt")
     for failure in failures[:30]:
         print(f"[FAIL] {failure}")
     return 1 if failures else 0

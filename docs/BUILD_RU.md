@@ -134,8 +134,8 @@ SmartUI 2.0.0-rc1 использует особые модели дисплее�
 Базовые инструменты UI QA:
 
 ```powershell
-python tools/audit_exp45_ui_contract.py
-python tools/simulate_exp45_ui_qa.py
+python tools/audit_smartui_ps17_contract.py
+python tools/simulate_smartui_ps17_qa.py
 ```
 
 Для симулятора и шрифтового инструментария установите зафиксированные версии Pillow и fonttools:

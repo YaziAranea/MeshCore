@@ -971,18 +971,6 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   i += tlen;
   addToOfflineQueue(out_frame, i);
 
-#ifdef DISPLAY_CLASS
-  const char* channel_name = "Unknown";
-  ChannelDetails channel_details;
-  if (getChannel(channel_idx, channel_details)) channel_name = channel_details.name;
-  noteTrafficStatus(channel_name, channel_idx, path_len, NETWORK_STATUS_CHANNEL_TRAFFIC);
-  noteChannelChat(channel_name, pkt, text);
-  const char* mention_text = channelMentionBodyText(text);
-  uint8_t ui_flags = textMentionsNodeName(this, mention_text, _prefs.node_name)
-                         ? UI_MSG_FLAG_MENTION
-                         : UI_MSG_FLAG_NONE;
-#endif
-
   if (_serial->isConnected()) {
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
@@ -1096,6 +1084,18 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
   addToOfflineQueue(out_frame, i);
+
+#ifdef DISPLAY_CLASS
+  const char* channel_name = "Unknown";
+  ChannelDetails channel_details;
+  if (getChannel(channel_idx, channel_details)) channel_name = channel_details.name;
+  noteTrafficStatus(channel_name, channel_idx, path_len, NETWORK_STATUS_CHANNEL_TRAFFIC);
+  noteChannelChat(channel_name, pkt, text);
+  const char* mention_text = channelMentionBodyText(text);
+  uint8_t ui_flags = textMentionsNodeName(this, mention_text, _prefs.node_name)
+                         ? UI_MSG_FLAG_MENTION
+                         : UI_MSG_FLAG_NONE;
+#endif
 
   if (_serial->isConnected()) {
     uint8_t frame[1];

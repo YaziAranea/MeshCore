@@ -82,7 +82,7 @@ uitask = read("examples/companion_radio/ui-new/UITask.cpp")
 uitask_live = without_if_zero(uitask)
 mymesh = read("examples/companion_radio/MyMesh.cpp")
 mymesh_h = read("examples/companion_radio/MyMesh.h")
-simulator = read("tools/simulate_exp45_ui_qa.py")
+simulator = read("tools/simulate_smartui_ps17_qa.py")
 
 config_sources = {
     "T096": read("variants/heltec_t096/platformio.ini"),
@@ -103,7 +103,7 @@ effective = {
 
 for name, block in effective.items():
     check(
-        f"{name}: EXP45 keyboard and DM-only profile",
+        f"{name}: SmartUI keyboard and DM-only profile",
         "UI_QUICK_REPLY_KEYBOARD=1" in block
         and "UI_UNREAD_DIRECT_ONLY=1" in block
         and "SmartUI 2.0.0-rc1" in block,
@@ -112,7 +112,7 @@ for name, block in effective.items():
     check(
         f"{name}: experimental Phone GPS is disabled",
         "UI_PHONE_GPS=1" not in block,
-        "EXP45 must not inherit UI_PHONE_GPS=1",
+        "SmartUI PS17 must not inherit UI_PHONE_GPS=1",
     )
 
 check(
@@ -161,7 +161,7 @@ for name in ("T096", "T114", "ProMicro"):
     )
 
 check(
-    "No EXP45 target config retains Phone GPS",
+    "No SmartUI PS17 target config retains Phone GPS",
     all("UI_PHONE_GPS=1" not in text for text in config_sources.values()),
     "remove the old positive Phone GPS build flag instead of hiding the menu only",
 )
@@ -427,7 +427,7 @@ check(
 )
 
 check(
-    "Exact EXP45 simulator covers every display contract and stress case",
+    "Exact SmartUI PS17 simulator covers every display contract and stress case",
     has_all(
         simulator,
         (
@@ -444,7 +444,7 @@ check(
             "make_t114_active_profiles",
             "render_t114_gps",
             "render_appearance_picker",
-            "T114_EXP45_GPS_APPEARANCE_PHYSICAL_QA.png",
+            "T114_SMARTUI_PS17_GPS_APPEARANCE_PHYSICAL_QA.png",
         ),
     ),
     "do not replace exact bitmap/driver QA with a generic TrueType 5x7 mock-up",
