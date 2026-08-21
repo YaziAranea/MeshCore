@@ -4,7 +4,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 с�
 
 ## Где находится эталон
 
-Когда `v2.0.0-rc1` будет опубликован, скачайте из одного и того же GitHub Release:
+Скачивайте из одного и того же [GitHub Release v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1):
 
 - UF2 своей платы;
 - `SHA256SUMS.txt`.

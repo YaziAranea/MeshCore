@@ -4,10 +4,11 @@
 
 ## MeshCore
 
-Проект является неофициальной производной работой MeshCore и ветки `PowerSaving-v16`:
+Проект является неофициальной производной работой MeshCore. Порт SmartUI PS17 закреплён на коммите `a3b9ad91a5bf04e7e00713595469dc868de53628` ветки `PowerSaving-v17` репозитория IoTThinks/MeshCore:
 
 - upstream проекта: <https://github.com/meshcore-dev/MeshCore>
 - использованная база: <https://github.com/IoTThinks/MeshCore>
+- точный базовый коммит: <https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628>
 - лицензия: MIT
 - исходное уведомление: `Copyright (c) 2025 Scott Powell / rippleradios.com`
 
@@ -17,17 +18,19 @@
 
 ## Встроенные bitmap-шрифты
 
-`src/helpers/ui/EmbeddedBitmapFonts.h` содержит растровые данные, сгенерированные из следующих шрифтов. Они используются для T096 и T114 и распространяются на условиях SIL Open Font License 1.1.
+`src/helpers/ui/EmbeddedBitmapFonts.h` содержит растровые данные, сгенерированные из следующих шрифтов. Они используются для T096 и T114. Roboto Condensed предоставлен по Apache License 2.0; остальные четыре семейства — по SIL Open Font License 1.1.
 
-| Семейство-источник | Copyright из OFL-файла | Лицензия в репозитории |
+| Семейство-источник | Copyright / attribution | Лицензия в репозитории |
 |---|---|---|
-| Roboto Condensed | Copyright 2011 The Roboto Project Authors | [`licenses/fonts/OFL-RobotoCondensed.txt`](licenses/fonts/OFL-RobotoCondensed.txt) |
+| Roboto Condensed | Copyright 2011 Google Inc. All Rights Reserved. | [`licenses/fonts/Apache-2.0-RobotoCondensed.txt`](licenses/fonts/Apache-2.0-RobotoCondensed.txt) |
 | Noto Sans Condensed | Copyright 2022 The Noto Project Authors | [`licenses/fonts/OFL-NotoSans.txt`](licenses/fonts/OFL-NotoSans.txt) |
 | Open Sans | Copyright 2020 The Open Sans Project Authors | [`licenses/fonts/OFL-OpenSans.txt`](licenses/fonts/OFL-OpenSans.txt) |
 | PT Sans Narrow | Copyright (c) 2010 ParaType Ltd.; Reserved Font Names “PT Sans” and “ParaType” | [`licenses/fonts/OFL-PTSansNarrow.txt`](licenses/fonts/OFL-PTSansNarrow.txt) |
 | Oswald | Copyright 2016 The Oswald Project Authors | [`licenses/fonts/OFL-Oswald.txt`](licenses/fonts/OFL-Oswald.txt) |
 
-SIL OFL разрешает использование, изучение, модификацию и распространение Font Software при соблюдении условий лицензии, включая сохранение OFL и ограничения Reserved Font Names. Растровые данные не продаются отдельно от программы.
+Встроенные метаданные файла `tools/font_sources/ui_readable_10/RobotoCondensed-wght.ttf` указывают Apache License 2.0. Полный официальный текст этой лицензии сохранён также рядом с исходным TTF в `tools/font_sources/ui_readable_10/Apache-2.0-RobotoCondensed.txt`.
+
+Для Noto Sans Condensed, Open Sans, PT Sans Narrow и Oswald действует SIL OFL 1.1, включая требования о сохранении лицензии и ограничения Reserved Font Names там, где они объявлены. Растровые данные не продаются отдельно от программы. Основная MIT-лицензия MeshCore не отменяет применимые условия Apache-2.0 и OFL для исходных шрифтов и полученных из них растровых данных.
 
 Названия шрифтов в UI используются для идентификации выбранного визуального профиля. Они не означают одобрение проекта авторами шрифтов.
 

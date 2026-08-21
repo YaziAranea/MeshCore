@@ -1,57 +1,36 @@
-# Security Policy
+# Политика безопасности
 
-## Supported Versions
+Этот репозиторий — неофициальный SmartUI-форк прошивки MeshCore на базе
+`IoTThinks/MeshCore:PowerSaving-v17`. Поддерживается только актуальная ветка
+`smartui-ps17.1` и последний опубликованный выпуск. Исправления в старые
+экспериментальные сборки не переносятся.
 
-Security fixes are applied to the latest release only. We do not backport
-fixes to older versions.
+## Куда сообщать
 
-| Version | Supported |
-|---------|-----------|
-| 1.15+ | ✅ |
-| <1.15 | ❌ |
+- Если проблема относится к интерфейсу SmartUI, экранной клавиатуре,
+  настройкам, звуку или профилям T096/T114/ProMicro, сообщите владельцу этого
+  репозитория. Если в разделе **Security** доступна кнопка **Report a
+  vulnerability**, используйте её. Иначе свяжитесь через
+  [профиль YaziAranea](https://github.com/YaziAranea), не публикуя рабочие ключи
+  и детали эксплуатации в открытом Issue.
+- Если проблема воспроизводится в неизменённом PowerSaving-v17 или ядре
+  MeshCore, сообщите её в
+  [IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore).
+- Ошибки сторонней библиотеки следует направлять её разработчикам.
 
-## Reporting a Vulnerability
+В сообщении укажите плату, точный commit/tag, способ сборки, шаги
+воспроизведения, ожидаемое и фактическое поведение. Секретные ключи,
+координаты и персональные данные прикладывать нельзя.
 
-**Please do not report security vulnerabilities through public GitHub issues.**
+## Область действия
 
-Use GitHub's private vulnerability reporting instead:
-1. Go to the **Security** tab of this repository
-2. Click **Report a vulnerability**
-3. Fill in the details and submit
+К уязвимостям относятся, например, удалённое выполнение кода, повреждение
+памяти, обход аутентификации или шифрования, раскрытие ключей и устойчивый
+отказ через специально сформированный радио- или BLE-пакет.
 
-### What to include
+Не относятся: глушение радиоэфира, физический доступ к JTAG/UART, вопросы
+региональных ограничений мощности и частоты, а также общие рекомендации без
+практического сценария атаки.
 
-A useful report tells us:
-- Which component or file is affected
-- What an attacker can do (impact) and under what conditions
-- A minimal reproduction case or proof-of-concept if you have one
-- Whether you believe it is remotely exploitable
-
-You do not need a working exploit to report. An incomplete report is better
-than no report.
-
-## What to expect
-
-This is a volunteer-maintained open-source project. We will do our best to
-respond in a reasonable timeframe, but cannot commit to specific deadlines.
-
-We ask that you give us a fair opportunity to investigate and address the
-issue before any public disclosure. If you have not heard back after
-**90 days**, feel free to follow up or proceed with disclosure at your
-discretion.
-
-## Scope
-
-In scope:
-- Remote code execution, memory corruption, or denial-of-service via crafted
-  radio packets
-- Authentication or encryption bypasses
-- Vulnerabilities in the packet routing or path handling logic
-
-Out of scope:
-- Physical access attacks (e.g., JTAG, UART extraction of keys)
-- Regulatory compliance (duty cycle, frequency restrictions)
-- Jamming or other physical-layer radio interference
-- Issues in third-party libraries (RadioLib, Crypto, etc.) — report those
-  upstream
-- "Best practice" suggestions without a demonstrated attack path
+Проект поддерживается добровольно, без гарантированного срока ответа. Дайте
+владельцу разумное время на проверку и исправление до публичного раскрытия.

@@ -11,7 +11,7 @@ from generate_t096_design_bitmap_fonts import render_glyph
 ROOT = Path(__file__).resolve().parents[1]
 NOTO_SRC = ROOT / "tools" / "font_sources" / "noto_sans_2_015"
 READABLE_SRC = ROOT / "tools" / "font_sources" / "ui_readable_10"
-OUT = ROOT / "qa_outputs" / "t114_fonts" / "T114_SMART_B12_MATRIX.png"
+OUT = ROOT / "qa_outputs" / "t114_fonts" / "T114_SMARTUI_PS17_MATRIX.png"
 
 LOG_W = 128
 LOG_H = 64
@@ -330,7 +330,7 @@ class T114Preview:
             self.icon(right_x_status, side_y, "gps", side_size, "green")
             self.text(right_x_status + side_size + 2, side_y - 1, "7", "green", max_w=8)
         if self.logical_line_h() < 13:
-            self.text(LOG_W // 2, 34, "24.06.2026", "muted", center=True, max_w=LOG_W)
+            self.text(LOG_W // 2, 34, "21.08.2026", "muted", center=True, max_w=LOG_W)
         self.text(0, 45, "Н:3", "red", max_w=22)
         right_x = 127
         self.text(right_x, 45, "29C", "green", right=True, max_w=24)
@@ -386,7 +386,7 @@ class T114Preview:
                 ("Звук и вибро", "МАКС"),
                 ("Экран", "Noto XXL"),
                 ("Радио и GPS", "GPS ВКЛ"),
-                ("Система", "B11"),
+                ("Система", "SmartUI"),
                 ("Закрыть", ""),
             ],
             1,

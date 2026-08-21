@@ -10,8 +10,8 @@ SCALE = 4
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = ROOT / "qa_outputs" / "t096_premium"
-NETWORK_MATRIX = OUT_DIR / "T096_NETWORK_ALL_FONTS_EXP17.png"
-COMPACT_MATRIX = OUT_DIR / "T096_SMART_B12_MATRIX.png"
+NETWORK_MATRIX = OUT_DIR / "T096_NETWORK_ALL_FONTS_SMARTUI_PS17.png"
+COMPACT_MATRIX = OUT_DIR / "T096_SMARTUI_PS17_MATRIX.png"
 FONT_SRC = ROOT / "tools" / "font_sources"
 FALLBACK_FONT = FONT_SRC / "noto_sans_2_015" / "NotoSans-CondensedMedium.ttf"
 
@@ -231,7 +231,7 @@ def draw_splash():
     profile = DEFAULT_PROFILE
     img, draw, t = new_screen(0, False)
     center(draw, 18, "Мешкор Омск", load_font(profile, "L"), t["green"])
-    center(draw, 48, "UI T096 PS16 FEM SDVIG", load_font(profile, "S"), t["green"])
+    center(draw, 48, "T096 SmartUI PS17 FEM", load_font(profile, "S"), t["green"])
     return "01_splash", img
 
 
@@ -244,7 +244,7 @@ def draw_clock():
     battery_icon(draw, W - 20, 2, 92, t["green"])
     right(draw, W - 24, 0, "4.09V", small, t["green"])
     center(draw, 17, "12:48", load_font(profile, "L"), t["green"])
-    center(draw, 43, "22.06.2026", small, t["fg"])
+    center(draw, 43, "21.08.2026", small, t["fg"])
     draw.rectangle((0, 60, 116, 78), outline=t["green"])
     draw.rectangle((0, 60, 2, 78), fill=t["green"])
     left(draw, 5, 62, "CH1.2% AIR0.03%", small, t["fg"], 110)
@@ -306,7 +306,7 @@ def draw_theme_sample(theme_id):
 def draw_radio():
     return "08_radio_fem", menu_screen(
         "Радио",
-        ["869.525 MHz   BW 250", "TX 22 dBm   RX boost", "FEM: RX gain ON"],
+        ["869.618 MHz   BW 62.5", "TX: FEM profile", "FEM: RX gain ON"],
         2,
         3,
         4,
@@ -361,7 +361,7 @@ def draw_compact_hub():
         ("Звук и вибро", "МАКС"),
         ("Экран", "Noto XXL"),
         ("Радио и GPS", "GPS ВКЛ"),
-        ("Система", "B11"),
+        ("Система", "SmartUI"),
         ("Закрыть", ""),
     ]
     return "16_b11_hub", compact_settings_screen("Настройки", rows, selected=1)

@@ -1,15 +1,19 @@
-# Introduction
+# Документация
 
-Welcome to the MeshCore documentation.
+> Это обычный индекс Markdown внутри исходного репозитория, а не сайт GitHub
+> Pages. Автоматическая публикация Pages в SmartUI-форке не настроена.
 
-Below are a few quick start guides.
+Начните с [главного README](../README.md). Документация модификации:
 
-- [Frequently Asked Questions](./faq.md)
-- [CLI Commands](./cli_commands.md)
-- [Companion Protocol](./companion_protocol.md)
-- [Packet Format](./packet_format.md)
-- [QR Codes](./qr_codes.md)
+- [поддерживаемые платы](./SUPPORTED_BOARDS_RU.md);
+- [управление](./CONTROLS_RU.md);
+- [экраны, меню, шрифты и симуляции](./SCREENS_RU.md);
+- [прошивка UF2](./FLASHING_RU.md);
+- [сборка из исходников](./BUILD_RU.md);
+- [проверка SHA-256](./VERIFY_RU.md);
+- [безопасность и радиопараметры](./SECURITY_RADIO_RU.md).
 
-If you find a mistake in any of our documentation, or find something is missing, please feel free to open a pull request for us to review.
-
-- [Documentation Source](https://github.com/meshcore-dev/MeshCore/tree/main/docs)
+В каталоге также сохранена техническая документация MeshCore: FAQ, CLI,
+companion-протокол, формат пакетов и QR-коды. Актуальную upstream-версию этих
+материалов смотрите в
+[IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore/tree/PowerSaving-v17/docs).
