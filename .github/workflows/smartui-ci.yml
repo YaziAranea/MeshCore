@@ -3,7 +3,7 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-ps17.1
+      - smartui-ps17.2-dev
   pull_request:
   workflow_dispatch:
 
@@ -29,15 +29,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_v2.0.0-rc1.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-dev.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_v2.0.0-rc1.uf2
+            uf2_name: T114_SmartUI_2.1.0-dev.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_v2.0.0-rc1.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.uf2
 
     steps:
       - name: Check out source
@@ -85,7 +85,7 @@ jobs:
           retention-days: 14
 
   validate-uf2:
-    name: Validate and package the three UF2 files
+    name: Validate and package the three nRF52 UF2 files
     needs: build-uf2
     runs-on: ubuntu-latest
 
@@ -121,6 +121,113 @@ jobs:
           path: |
             firmware/*.uf2
             firmware/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  build-esp32:
+    name: Build ESP32-S3 BIN — ${{ matrix.board }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - board: Heltec V4.3 OLED FEM ON
+            artifact_id: heltec-v4-3-oled-fem
+            environment: heltec_v4_3_companion_radio_ble_femon_smartui
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev
+          - board: Heltec Wireless Paper WOOD
+            artifact_id: wireless-paper-wood
+            environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_wood
+            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev
+          - board: Heltec Wireless Paper FULL
+            artifact_id: wireless-paper-full
+            environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore PlatformIO dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            .pio/libdeps/${{ matrix.environment }}
+          key: ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-${{ matrix.environment }}-
+            ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-
+
+      - name: Install pinned PlatformIO
+        run: python -m pip install --disable-pip-version-check "platformio==${PLATFORMIO_CORE_VERSION}"
+
+      - name: Build fresh-install and update images
+        run: |
+          set -euo pipefail
+          mkdir -p firmware
+          pio run -e "${{ matrix.environment }}" -t mergebin
+          build_dir=".pio/build/${{ matrix.environment }}"
+          test -s "${build_dir}/firmware-merged.bin"
+          test -s "${build_dir}/firmware.bin"
+          cp "${build_dir}/firmware-merged.bin" "firmware/${{ matrix.stem }}-freshInstall-merged.bin"
+          cp "${build_dir}/firmware.bin" "firmware/${{ matrix.stem }}-update.bin"
+
+      - name: Upload board BIN pair
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: bin-${{ matrix.artifact_id }}
+          path: firmware/${{ matrix.stem }}-*.bin
+          if-no-files-found: error
+          retention-days: 14
+
+  validate-esp32:
+    name: Validate and package ESP32-S3 BIN pairs
+    needs: build-esp32
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out validation tools
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download all ESP32 artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: bin-*
+          path: firmware
+          merge-multiple: true
+
+      - name: Validate ESP image headers, app slices and markers
+        run: python tools/validate_release_esp32.py firmware
+
+      - name: Generate SHA256 checksums
+        working-directory: firmware
+        run: sha256sum -- *.bin > SHA256SUMS-ESP32.txt
+
+      - name: Upload validated ESP32 firmware bundle
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: smartui-ps17-validated-esp32-bin
+          path: |
+            firmware/*.bin
+            firmware/SHA256SUMS-ESP32.txt
           if-no-files-found: error
           retention-days: 30
 
@@ -190,10 +297,16 @@ jobs:
       - name: Run exact display simulation
         run: python tools/simulate_smartui_ps17_qa.py --out-dir qa_outputs/ci
 
+      - name: Run Heltec V4.3 OLED chrome simulation
+        run: python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/v4_3_oled
+
+      - name: Run Wireless Paper 250x122 simulation
+        run: python tools/simulate_wireless_paper_ps17_qa.py --out-dir qa_outputs/wireless_paper
+
       - name: Upload framebuffer QA output
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: smartui-framebuffer-qa
-          path: qa_outputs/ci
+          path: qa_outputs
           if-no-files-found: error
           retention-days: 14

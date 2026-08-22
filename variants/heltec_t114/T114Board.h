@@ -11,6 +11,8 @@
 
 class T114Board : public NRF52BoardDCDC {
 protected:
+  float adc_mult = ADC_MULTIPLIER;
+
 #ifdef NRF52_POWER_MANAGEMENT
   void initiateShutdown(uint8_t reason) override;
 #endif
@@ -37,9 +39,18 @@ public:
 
     delay(10);
     adcvalue = analogRead(PIN_VBAT_READ);
-    digitalWrite(6, 0);
+    digitalWrite(PIN_BAT_CTL, LOW);
 
-    return (uint16_t)((float)adcvalue * MV_LSB * 4.9);
+    return (uint16_t)((float)adcvalue * MV_LSB * adc_mult);
+  }
+
+  bool setAdcMultiplier(float multiplier) override {
+    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    return true;
+  }
+
+  float getAdcMultiplier() const override {
+    return adc_mult;
   }
 
   const char* getManufacturerName() const override {

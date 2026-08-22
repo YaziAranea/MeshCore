@@ -46,9 +46,56 @@ public:
   size_t print(unsigned long value, int = DEC) override { return emit(value); }
   size_t print(long long value, int = DEC) override { return emit(value); }
   size_t print(unsigned long long value, int = DEC) override { return emit(value); }
+  size_t print(double value, int precision = 2) override {
+    char text[48];
+    int length = snprintf(text, sizeof(text), "%.*f", precision, value);
+    return write(reinterpret_cast<const uint8_t*>(text), length);
+  }
 
   const std::string& text() const { return _text; }
 };
+
+TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip) {
+  NodePrefs saved;
+  saved.notify_mode = NOTIFY_MODE_GPIO | NOTIFY_MODE_TONE;
+  saved.notify_gpio_pin = 45;
+  saved.notify_tone_pin = 31;
+  saved.notify_tone_id = 12;
+  saved.notify_tone_volume = 7;
+  saved.important_notify_mode = NOTIFY_MODE_TONE;
+  saved.notifications_muted = 1;
+  saved.notify_tone_bridge_enabled = 1;
+  saved.notify_tone_8bit_enabled = 1;
+  saved.notify_tone_high_drive_enabled = 1;
+  saved.notify_tone_resonance_hz = 3400;
+  saved.notify_tone_dm_id = 12;
+  saved.notify_tone_mention_id = 12;
+  saved.notify_tone_system_id = 12;
+
+  CaptureStream output;
+  ASSERT_TRUE(saved.saveSerial(output));
+  EXPECT_NE(std::string::npos, output.text().find("smart_ui:{"));
+  EXPECT_NE(std::string::npos, output.text().find("tone_pin:31"));
+  EXPECT_NE(std::string::npos, output.text().find("bridge:1"));
+
+  ReplayStream input(output.text().c_str());
+  NodePrefs loaded;
+  ASSERT_TRUE(loaded.loadSerial(input));
+  EXPECT_EQ(saved.notify_mode, loaded.notify_mode);
+  EXPECT_EQ(saved.notify_gpio_pin, loaded.notify_gpio_pin);
+  EXPECT_EQ(saved.notify_tone_pin, loaded.notify_tone_pin);
+  EXPECT_EQ(saved.notify_tone_id, loaded.notify_tone_id);
+  EXPECT_EQ(saved.notify_tone_volume, loaded.notify_tone_volume);
+  EXPECT_EQ(saved.important_notify_mode, loaded.important_notify_mode);
+  EXPECT_EQ(saved.notifications_muted, loaded.notifications_muted);
+  EXPECT_EQ(saved.notify_tone_bridge_enabled, loaded.notify_tone_bridge_enabled);
+  EXPECT_EQ(saved.notify_tone_8bit_enabled, loaded.notify_tone_8bit_enabled);
+  EXPECT_EQ(saved.notify_tone_high_drive_enabled, loaded.notify_tone_high_drive_enabled);
+  EXPECT_EQ(saved.notify_tone_resonance_hz, loaded.notify_tone_resonance_hz);
+  EXPECT_EQ(saved.notify_tone_dm_id, loaded.notify_tone_dm_id);
+  EXPECT_EQ(saved.notify_tone_mention_id, loaded.notify_tone_mention_id);
+  EXPECT_EQ(saved.notify_tone_system_id, loaded.notify_tone_system_id);
+}
 
 #if 0
 // Re-enable test once we can SET fem_ values in companion

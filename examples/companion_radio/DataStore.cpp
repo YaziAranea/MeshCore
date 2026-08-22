@@ -189,12 +189,152 @@ bool DataStore::saveMainIdentity(const mesh::LocalIdentity &identity) {
   return identity_store.save("_main", identity);
 }
 
+// PowerSaving-v16 wrote its fixed legacy fields through byte 139, then
+// appended the SmartUI extension.  Stock PowerSaving-v17 migrates only the
+// fixed prefix to prefs.json and deliberately leaves /new_prefs in place.
+static const uint32_t LEGACY_SMART_UI_PREFS_OFFSET = 140;
+
+static bool isPrefsKeyChar(char c) {
+  return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+}
+
+// ConfigSerializer emits a compact JSON-like object with unquoted keys.  Scan
+// only root-level keys and ignore quoted values, so a node name containing the
+// text "smart_ui" cannot suppress the legacy migration.
+static bool prefsHasRootKey(File& file, const char* wanted) {
+  int depth = 0;
+  bool in_string = false;
+  bool escaped = false;
+  char key[16];
+  size_t key_len = 0;
+
+  file.seek(0);
+  while (file.available() > 0) {
+    int value = file.read();
+    if (value < 0) break;
+    char c = (char)value;
+
+    if (in_string) {
+      if (escaped) {
+        escaped = false;
+      } else if (c == '\\') {
+        escaped = true;
+      } else if (c == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+
+    if (c == '"') {
+      in_string = true;
+      key_len = 0;
+      continue;
+    }
+    if (c == '{') {
+      depth++;
+      key_len = 0;
+      continue;
+    }
+    if (c == '}') {
+      if (depth > 0) depth--;
+      key_len = 0;
+      continue;
+    }
+    if (depth != 1) {
+      key_len = 0;
+      continue;
+    }
+
+    if (isPrefsKeyChar(c)) {
+      if (key_len + 1 < sizeof(key)) key[key_len++] = c;
+      continue;
+    }
+
+    if (c == ':' && key_len > 0) {
+      key[key_len] = 0;
+      if (strcmp(key, wanted) == 0) return true;
+    }
+    key_len = 0;
+  }
+  return false;
+}
+
+// Read a prefix of the known PS16 SmartUI tail.  Stop at the first incomplete
+// field: continuing after a truncated multi-byte value would shift every
+// following setting and could route the buzzer to an unrelated GPIO.
+static bool readLegacySmartUiTail(File& file, NodePrefs& prefs) {
+  bool loaded = false;
+#define READ_LEGACY_SMART_UI_FIELD(field)                                                \
+  do {                                                                                   \
+    if (file.available() < (int)sizeof(prefs.field)) return loaded;                      \
+    if (file.read((uint8_t *)&prefs.field, sizeof(prefs.field)) != sizeof(prefs.field))  \
+      return loaded;                                                                     \
+    loaded = true;                                                                       \
+  } while (0)
+  READ_LEGACY_SMART_UI_FIELD(radio_fem_rxgain);
+  READ_LEGACY_SMART_UI_FIELD(adc_multiplier);
+  READ_LEGACY_SMART_UI_FIELD(notify_mode);
+  READ_LEGACY_SMART_UI_FIELD(notify_gpio_pin);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_pin);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_id);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_volume);
+  READ_LEGACY_SMART_UI_FIELD(auto_advert_interval_mins);
+  READ_LEGACY_SMART_UI_FIELD(ch2_mode);
+  READ_LEGACY_SMART_UI_FIELD(board_leds_enabled);
+  READ_LEGACY_SMART_UI_FIELD(ui_font);
+  READ_LEGACY_SMART_UI_FIELD(ui_theme);
+  READ_LEGACY_SMART_UI_FIELD(unread_led_enabled);
+  READ_LEGACY_SMART_UI_FIELD(msg_popup_enabled);
+  READ_LEGACY_SMART_UI_FIELD(important_notify_mode);
+  READ_LEGACY_SMART_UI_FIELD(notifications_muted);
+  READ_LEGACY_SMART_UI_FIELD(ui_top_color);
+  READ_LEGACY_SMART_UI_FIELD(ui_bottom_color);
+  READ_LEGACY_SMART_UI_FIELD(backlight_timeout_idx);
+  READ_LEGACY_SMART_UI_FIELD(notify_vibe_pin);
+  READ_LEGACY_SMART_UI_FIELD(offline_dm_led_enabled);
+  READ_LEGACY_SMART_UI_FIELD(ble_dm_led_enabled);
+  READ_LEGACY_SMART_UI_FIELD(low_battery_shutdown_enabled);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_bridge_enabled);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_8bit_enabled);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_high_drive_enabled);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_resonance_hz);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_dm_id);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_mention_id);
+  READ_LEGACY_SMART_UI_FIELD(notify_tone_system_id);
+  READ_LEGACY_SMART_UI_FIELD(smart_profile_id);
+  READ_LEGACY_SMART_UI_FIELD(favorite_setting_1);
+  READ_LEGACY_SMART_UI_FIELD(favorite_setting_2);
+  READ_LEGACY_SMART_UI_FIELD(favorite_setting_3);
+  READ_LEGACY_SMART_UI_FIELD(night_prompt_day);
+  READ_LEGACY_SMART_UI_FIELD(night_quiet_active);
+  READ_LEGACY_SMART_UI_FIELD(gps_source);
+#undef READ_LEGACY_SMART_UI_FIELD
+  return loaded;
+}
+
 void DataStore::loadPrefs(NodePrefs& prefs) {
   if (_fs->exists("/prefs.json")) {
     File file = openRead(_fs, "/prefs.json");
     if (file) {
-      prefs.loadSerial(file);   // new Serial prefs
+      bool has_smart_ui = prefsHasRootKey(file, "smart_ui");
+      file.seek(0);
+      bool prefs_ok = prefs.loadSerial(file);   // new Serial prefs
       file.close();
+
+      // A stock PS17 boot may already have created prefs.json without knowing
+      // about SmartUI.  Merge only the retained PS16 extension, once.  Saving
+      // adds the smart_ui root object, which is the durable migration marker.
+      if (prefs_ok && !has_smart_ui && _fs->exists("/new_prefs")) {
+        File legacy = openRead(_fs, "/new_prefs");
+        if (legacy && legacy.size() > LEGACY_SMART_UI_PREFS_OFFSET &&
+            legacy.seek(LEGACY_SMART_UI_PREFS_OFFSET) &&
+            readLegacySmartUiTail(legacy, prefs)) {
+          legacy.close();
+          savePrefs(prefs);
+        } else if (legacy) {
+          legacy.close();
+        }
+      }
     }
   } else if (_fs->exists("/new_prefs")) {
     loadPrefsInt("/new_prefs", prefs);
@@ -240,52 +380,8 @@ void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
     file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
 
     // SmartUI on PowerSaving-v16 appended its settings to /new_prefs.  Read
-    // only fields that are actually present so stock legacy files keep the
-    // PS17 constructor defaults.  PS17 saves all migrated values as JSON.
-#define READ_LEGACY_SMART_UI_FIELD(field)                                                \
-    do {                                                                                 \
-      if (file.available() >= (int)sizeof(_prefs.field)) {                               \
-        file.read((uint8_t *)&_prefs.field, sizeof(_prefs.field));                       \
-      }                                                                                  \
-    } while (0)
-    READ_LEGACY_SMART_UI_FIELD(radio_fem_rxgain);
-    READ_LEGACY_SMART_UI_FIELD(adc_multiplier);
-    READ_LEGACY_SMART_UI_FIELD(notify_mode);
-    READ_LEGACY_SMART_UI_FIELD(notify_gpio_pin);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_pin);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_id);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_volume);
-    READ_LEGACY_SMART_UI_FIELD(auto_advert_interval_mins);
-    READ_LEGACY_SMART_UI_FIELD(ch2_mode);
-    READ_LEGACY_SMART_UI_FIELD(board_leds_enabled);
-    READ_LEGACY_SMART_UI_FIELD(ui_font);
-    READ_LEGACY_SMART_UI_FIELD(ui_theme);
-    READ_LEGACY_SMART_UI_FIELD(unread_led_enabled);
-    READ_LEGACY_SMART_UI_FIELD(msg_popup_enabled);
-    READ_LEGACY_SMART_UI_FIELD(important_notify_mode);
-    READ_LEGACY_SMART_UI_FIELD(notifications_muted);
-    READ_LEGACY_SMART_UI_FIELD(ui_top_color);
-    READ_LEGACY_SMART_UI_FIELD(ui_bottom_color);
-    READ_LEGACY_SMART_UI_FIELD(backlight_timeout_idx);
-    READ_LEGACY_SMART_UI_FIELD(notify_vibe_pin);
-    READ_LEGACY_SMART_UI_FIELD(offline_dm_led_enabled);
-    READ_LEGACY_SMART_UI_FIELD(ble_dm_led_enabled);
-    READ_LEGACY_SMART_UI_FIELD(low_battery_shutdown_enabled);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_bridge_enabled);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_8bit_enabled);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_high_drive_enabled);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_resonance_hz);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_dm_id);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_mention_id);
-    READ_LEGACY_SMART_UI_FIELD(notify_tone_system_id);
-    READ_LEGACY_SMART_UI_FIELD(smart_profile_id);
-    READ_LEGACY_SMART_UI_FIELD(favorite_setting_1);
-    READ_LEGACY_SMART_UI_FIELD(favorite_setting_2);
-    READ_LEGACY_SMART_UI_FIELD(favorite_setting_3);
-    READ_LEGACY_SMART_UI_FIELD(night_prompt_day);
-    READ_LEGACY_SMART_UI_FIELD(night_quiet_active);
-    READ_LEGACY_SMART_UI_FIELD(gps_source);
-#undef READ_LEGACY_SMART_UI_FIELD
+    // only a complete prefix so stock legacy files keep constructor defaults.
+    readLegacySmartUiTail(file, _prefs);
 
     // migrate old fields
     _prefs.setRepeatEn(_prefs._client_repeat != 0);

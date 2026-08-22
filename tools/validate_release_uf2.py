@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the three UF2 artifacts published with SmartUI v2.0.0-rc1."""
+"""Validate the three nRF52 UF2 artifacts for SmartUI 2.1 development."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ NRF52840_FAMILY = 0xADA52840
 APP_START = 0x26000
 
 EXPECTED = {
-    "T096_FEM_SmartUI_v2.0.0-rc1.uf2": b"T096 SmartUI 2.0.0-rc1",
-    "T114_SmartUI_v2.0.0-rc1.uf2": b"T114 SmartUI 2.0.0-rc1",
-    "ProMicro_RA62_SmartUI_v2.0.0-rc1.uf2": b"ProMicro SmartUI 2.0.0-rc1",
+    "T096_FEM_SmartUI_2.1.0-dev.uf2": b"T096 SmartUI 2.1.0-dev",
+    "T114_SmartUI_2.1.0-dev.uf2": b"T114 SmartUI 2.1.0-dev",
+    "ProMicro_RA62_SmartUI_2.1.0-dev.uf2": b"ProMicro SmartUI 2.1.0-dev",
 }
 
 
@@ -75,7 +75,7 @@ def main() -> int:
         nargs="?",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "firmware",
-        help="directory containing the three release UF2 files",
+        help="directory containing the three SmartUI development UF2 files",
     )
     args = parser.parse_args()
 

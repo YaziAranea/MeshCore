@@ -1,20 +1,26 @@
-# MeshCore Smart UI nRF52
+# MeshCore Smart UI — PowerSaving17
 
-Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для трёх nRF52840-плат:
+Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для пяти плат:
 
 - Heltec T096 с включённым FEM/LNA;
 - Heltec T114 с цветным TFT;
-- ProMicro nRF52840 + Heltec RA62 + OLED 128×64.
+- ProMicro nRF52840 + Heltec RA62 + OLED 128×64;
+- Heltec V4.3 OLED с включённым FEM/LNA;
+- Heltec Wireless Paper с e-paper 250×122.
 
-В `v2.0.0-rc1` страница версии показывает `T096 SmartUI 2.0.0-rc1`, `T114 SmartUI 2.0.0-rc1` или `ProMicro SmartUI 2.0.0-rc1`.
+Текущая development-ветка показывает маркер `SmartUI 2.1.0-dev`. Стабильный публичный выпуск пока остаётся `v2.0.0-rc1` для первых трёх плат.
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
+| Heltec V4.3 OLED | Heltec Wireless Paper WOOD |
+|---|---|
+| ![Часы V4.3 OLED с GPS и тишиной](docs/assets/ui/v4-3-oled-clock.png) | ![Большие часы Wireless Paper](docs/assets/ui/wireless-paper-wood-clock.png) |
+
 [Открыть проект на GitHub](https://github.com/YaziAranea/MeshCore)
 
-> Это независимая модификация. Она не является официальным выпуском MeshCore или IoTThinks. Порт закреплён на коммите [`a3b9ad91`](https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628) ветки `PowerSaving-v17` проекта IoTThinks/MeshCore. Это major-миграция с прежней PS16-линии; RC пока не проходил аппаратные испытания.
+> Это независимая модификация. Она не является официальным выпуском MeshCore или IoTThinks. Порт закреплён на коммите [`a3b9ad91`](https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628) ветки `PowerSaving-v17` проекта IoTThinks/MeshCore. Новые цели V4.3/Wireless Paper пока проверены сборкой и точной симуляцией, но не объявлены физически испытанными.
 
-Исходный код находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Сравнение с закреплённой базой показывает только изменения SmartUI: [`a3b9ad91...smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/compare/a3b9ad91a5bf04e7e00713595469dc868de53628...smartui-ps17.1).
+Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущие исправления и новые платы находятся в [`smartui-ps17.2-dev`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.2-dev); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
 
 ## Что умеет интерфейс
 
@@ -26,28 +32,33 @@
 - Одна общая мелодия важных уведомлений; серия ограничена двумя проигрываниями.
 - Ночной запрос тишины в 23:30 с отключением звука до 07:30.
 - Выбор шрифта и темы отдельными списками.
-- Аппаратный GPS на T096/T114 с понятными состояниями `GPS ON/OFF`; на ProMicro GPS скрыт.
+- Аппаратный GPS на T096/T114/V4.3 с понятными состояниями `GPS ON/OFF`; на ProMicro и Wireless Paper GPS скрыт.
 - Исправлен выход ProMicro из сна: первое нажатие будит OLED без обязательного Reset.
+- Калибровка измерения АКБ доступна на всех поддерживаемых платах.
+- Исправлены потерянные при PS17-переносе настройки зуммера и синхронизация времени назад с телефона.
+- Wireless Paper имеет рекомендуемый профиль `WOOD` и отдельный `FULL` с экранной клавиатурой.
 
 ## Поддерживаемые платы
 
-| Плата | Дисплей | GPS в этой цели | Файл релиза |
+| Плата | Дисплей | GPS в этой цели | Формат development-сборки |
 |---|---:|---:|---|
-| Heltec T096 FEM ON | TFT 160×80 | Аппаратный | `T096_FEM_SmartUI_v2.0.0-rc1.uf2` |
-| Heltec T114 с дисплеем | ST7789 240×135 | Аппаратный | `T114_SmartUI_v2.0.0-rc1.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | SSD1306 OLED 128×64 | Нет | `ProMicro_RA62_SmartUI_v2.0.0-rc1.uf2` |
+| Heltec T096 FEM ON | TFT 160×80 | Аппаратный | UF2 |
+| Heltec T114 с дисплеем | ST7789 240×135 | Аппаратный | UF2 |
+| ProMicro nRF52840 + Heltec RA62 | SSD1306 OLED 128×64 | Нет | UF2 |
+| Heltec V4.3 OLED FEM ON | SSD1306 OLED 128×64 | Аппаратный | merged + update BIN |
+| Heltec Wireless Paper | e-paper 250×122 | Нет | merged + update BIN |
 
-Это не прошивка для FakeTec/HT-RA62, Heltec V3/V4, T114 без дисплея или произвольной ProMicro-распайки. Подробности: [поддерживаемое оборудование](docs/SUPPORTED_BOARDS_RU.md).
+Это не прошивка для FakeTec/HT-RA62, V4 TFT, T114 без дисплея или произвольной ProMicro-распайки. Подробности: [поддерживаемое оборудование](docs/SUPPORTED_BOARDS_RU.md).
 
 ## Быстрый старт
 
-`v2.0.0-rc1` является предварительным выпуском. Берите UF2 и `SHA256SUMS.txt` только из [одного релиза v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1).
+Для обычной установки на T096/T114/ProMicro используйте проверенный [релиз v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1). Версия `2.1.0-dev` пока предназначена для проверки исправлений и новых плат; её файлы публикует CI ветки `smartui-ps17.2-dev`, а не стабильный Release.
 
-1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) и скачайте UF2 строго для своей платы.
-2. Скачайте из того же GitHub Release файл `SHA256SUMS.txt` и проверьте SHA-256.
+1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
+2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
 3. Подключите плату исправным USB-кабелем с передачей данных.
-4. Переведите её в UF2-загрузчик быстрым двойным нажатием физической кнопки **Reset**.
-5. Скопируйте UF2 на появившийся USB-диск и дождитесь автоматической перезагрузки.
+4. Для nRF52 переведите плату в UF2-загрузчик быстрым двойным нажатием **Reset**. Для ESP32-S3 используйте Web Flasher или `esptool`.
+5. На nRF52 скопируйте UF2 на USB-диск. На V4.3/Wireless Paper используйте `freshInstall-merged.bin` по адресу `0x0` или `update.bin` по адресу `0x10000`.
 6. Подключитесь из совместимого MeshCore-клиента. Если запрошен BLE PIN, используйте шестизначный код, показанный нодой.
 
 Полная инструкция: [прошивка](docs/FLASHING_RU.md) и [проверка SHA-256](docs/VERIFY_RU.md).
@@ -72,9 +83,12 @@
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
+pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
+pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_wood -t mergebin
+pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 ```
 
-Готовые файлы появятся в `.pio/build/<environment>/firmware.uf2`. Подробная воспроизводимая процедура: [сборка](docs/BUILD_RU.md).
+Для nRF52 получится `firmware.uf2`. Для ESP32-S3 нужны оба файла: `firmware-merged.bin` и `firmware.bin`. Подробная воспроизводимая процедура: [сборка](docs/BUILD_RU.md).
 
 ## Важные предупреждения
 
@@ -83,25 +97,30 @@ pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 - Импорт и экспорт приватного ключа включены на уровне companion-протокола. Никому не отправляйте экспортированный ключ и не добавляйте его в Git.
 - Phone GPS намеренно не поддерживается: телефон не отдаёт координаты ноде без отдельного приложения или сервиса.
 - Обычная прошивка может сохранить старые настройки ноды. Перед обновлением сохраните идентичность безопасным способом и проверьте радиопараметры после запуска.
+- На Wireless Paper GPIO45/VEXT питает одновременно дисплей и LoRa-тракт. Не включайте display auto-off и не переносите туда настройки обычного OLED.
+- V4.3 и Wireless Paper не имеют заявленного физического зуммера; tone GPIO для них намеренно не выдуман.
 
 Подробнее: [безопасность и радио](docs/SECURITY_RADIO_RU.md).
 
-## Проверки и статус RC
+## Проверки и статус разработки
 
-Финальная локальная проверка от 2026-08-21:
+Финальная локальная проверка `SmartUI 2.1.0-dev` от 2026-08-22:
 
-- три целевых PlatformIO environment: `3 / 3 SUCCESS`;
-- статический контракт: `31 PASS / 0 FAIL`;
-- точная framebuffer-симуляция: `455 PASS / 0 FAIL`;
-- структурная проверка UF2: `3 PASS / 0 FAIL`.
+- шесть PlatformIO-профилей для пяти плат: `6 / 6 SUCCESS`;
+- статический контракт: `75 PASS / 0 FAIL`;
+- точные framebuffer-симуляции: core `455 / 455`, V4.3 `20 / 20`, Wireless Paper `160 / 160`;
+- структурная проверка: UF2 `3 / 3`, ESP32-S3 BIN-пары `3 / 3`.
 
 | Плата | RAM | Flash |
 |---|---:|---:|
-| T096 FEM ON | 63,7% | 77,8% |
-| T114 | 64,3% | 78,0% |
-| ProMicro RA62 | 62,8% | 93,2% |
+| T096 FEM ON | 63,7% | 77,9% |
+| T114 | 64,3% | 78,3% |
+| ProMicro RA62 | 62,8% | 93,4% |
+| Heltec V4.3 OLED FEM ON | 8,4% | 22,9% |
+| Wireless Paper WOOD | 53,2% | 38,8% |
+| Wireless Paper FULL | 53,2% | 38,9% |
 
-Read-only CI повторяет сборку, native-тесты, UI QA и проверку UF2. T096 симулируется с реальными bitmap-метриками, T114 — через фактическое логическое масштабирование 128×64 → 240×135, ProMicro — по таблицам OLED 128×64. Приложенные изображения сгенерированы для визуального контракта PS17-порта. Они не подтверждают работу на железе; отдельная аппаратная проверка `v2.0.0-rc1` не заявляется.
+Read-only CI повторяет сборку, Linux native-тесты, все три набора UI QA, проверку UF2 и трёх ESP32-S3 BIN-пар. T096 симулируется с реальными bitmap-метриками, T114 — через фактическое логическое масштабирование 128×64 → 240×135, OLED-платы — по встроенным glyph-таблицам, Wireless Paper — в физической геометрии 250×122. Приложенные изображения фиксируют визуальный контракт, но не заменяют проверку на реальном устройстве. Новые V4.3/Wireless Paper-профили пока имеют статус development; стабильный `v2.0.0-rc1` не изменён.
 
 ## Документация
 
@@ -109,7 +128,7 @@ Read-only CI повторяет сборку, native-тесты, UI QA и про
 - [Поддерживаемые платы](docs/SUPPORTED_BOARDS_RU.md)
 - [Управление](docs/CONTROLS_RU.md)
 - [Экраны, меню, шрифты и симуляции](docs/SCREENS_RU.md)
-- [Прошивка готового UF2](docs/FLASHING_RU.md)
+- [Прошивка готового UF2 или BIN](docs/FLASHING_RU.md)
 - [Сборка из исходников](docs/BUILD_RU.md)
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)

@@ -140,6 +140,22 @@
   #endif
 #endif
 
+#ifndef BLE_TIME_SYNC_ACCEPT_BACKWARD
+  #define BLE_TIME_SYNC_ACCEPT_BACKWARD 0
+#endif
+
+#ifndef BLE_TIME_SYNC_MIN_UNIX
+  #define BLE_TIME_SYNC_MIN_UNIX 1704067200UL
+#endif
+
+#ifndef BLE_TIME_SYNC_MAX_UNIX
+  #define BLE_TIME_SYNC_MAX_UNIX 2208988800UL
+#endif
+
+#ifndef DEFAULT_NOTIFY_REPAIR_LEGACY
+  #define DEFAULT_NOTIFY_REPAIR_LEGACY 0
+#endif
+
 #ifndef UI_MENTION_SHORT_NAME_AT_ONLY_CHARS
 #define UI_MENTION_SHORT_NAME_AT_ONLY_CHARS 3
 #endif
@@ -1560,6 +1576,21 @@ void MyMesh::begin(bool has_display) {
   if (_prefs.notify_tone_volume == 0 || _prefs.notify_tone_volume > 10) {
     _prefs.notify_tone_volume = DEFAULT_NOTIFY_TONE_VOLUME;
   }
+#if DEFAULT_NOTIFY_REPAIR_LEGACY
+  bool notify_prefs_repaired = false;
+#ifdef PIN_MSG_ALERT
+  // Early SmartUI builds stored the shared alert LED as the tone GPIO.  The
+  // value is syntactically valid, so the normal range checks cannot repair it.
+  if (_prefs.notify_gpio_pin == PIN_MSG_ALERT && DEFAULT_NOTIFY_GPIO_PIN != PIN_MSG_ALERT) {
+    _prefs.notify_gpio_pin = DEFAULT_NOTIFY_GPIO_PIN;
+    notify_prefs_repaired = true;
+  }
+  if (_prefs.notify_tone_pin == PIN_MSG_ALERT && DEFAULT_NOTIFY_TONE_PIN != PIN_MSG_ALERT) {
+    _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+    notify_prefs_repaired = true;
+  }
+#endif
+#endif
 #if defined(UI_T096_PREMIUM_TFT)
   if (_prefs.ui_font < 5 || _prefs.ui_font > UI_FONT_PREF_MAX) _prefs.ui_font = 10;
 #else
@@ -1612,6 +1643,12 @@ void MyMesh::begin(bool has_display) {
   _prefs.notify_tone_high_drive_enabled = 0;
 #endif
   _prefs.important_notify_mode &= NOTIFY_MODE_ALL;
+
+#if DEFAULT_NOTIFY_REPAIR_LEGACY
+  // Persist the one-time GPIO repair immediately.  Otherwise the stale pin
+  // remains in prefs.json until the user happens to change another setting.
+  if (notify_prefs_repaired) _store->savePrefs(_prefs);
+#endif
 
 #ifdef BLE_PIN_CODE // 123456 by default
   if (_prefs.ble_pin == 0) {
@@ -2014,7 +2051,8 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
     uint32_t curr = getRTCClock()->getCurrentTime();
-    if (secs >= curr) {
+    bool sane_time = secs >= BLE_TIME_SYNC_MIN_UNIX && secs <= BLE_TIME_SYNC_MAX_UNIX;
+    if (sane_time && (BLE_TIME_SYNC_ACCEPT_BACKWARD || secs >= curr)) {
       getRTCClock()->setCurrentTime(secs);
       writeOKFrame();
     } else {

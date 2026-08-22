@@ -4085,6 +4085,14 @@ class HomeScreen : public UIScreen {
     _adc_draft = clampAdcMultiplier(_adc_draft + delta);
     _task->setAdcMultiplier(_adc_draft, false);
   }
+
+  void cancelAdcEdit() {
+    if (_adc_edit) {
+      _task->setAdcMultiplier(_node_prefs->adc_multiplier, false);
+    }
+    _adc_edit = false;
+    _adc_draft = 0.0f;
+  }
 #endif
 
 #if UI_COMPACT_SETTINGS_MENU == 1
@@ -4433,7 +4441,7 @@ class HomeScreen : public UIScreen {
       case HomePage::LINK_TEST: return "Опрос путей";
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
-      case HomePage::ADC: return "АЦП";
+      case HomePage::ADC: return "Калибр. АКБ";
 #endif
       case HomePage::BLUETOOTH: return "Bluetooth";
 #if UI_BOARD_LEDS_PAGE == 1
@@ -5276,6 +5284,9 @@ class HomeScreen : public UIScreen {
 
     if (_compact_settings_depth == 0) {
       if (_compact_settings_cursor >= COMPACT_SETTINGS_GROUP_COUNT) {
+#if UI_ADC_MULTIPLIER_PAGE == 1
+        cancelAdcEdit();
+#endif
         _settings_open = false;
         _compact_settings_cursor = 0;
       } else {
@@ -5618,7 +5629,7 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
     } else if (page == HomePage::ADC) {
-      _task->showAlert("АЦП", 800);
+      _task->showAlert("Калибровка АКБ", 800);
 #endif
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     } else if (page == HomePage::LOW_BATT_SHUTDOWN) {
@@ -6174,6 +6185,9 @@ public:
        }
 
   void resetToFirstPage() {
+#if UI_ADC_MULTIPLIER_PAGE == 1
+    cancelAdcEdit();
+#endif
     _page = defaultHomePage();
     _settings_open = false;
     _quick_reply_open = false;
@@ -7855,10 +7869,10 @@ public:
       char coef_line[32];
       sprintf(battery_line, "АКБ: %u.%02uВ", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
       snprintf(coef_line, sizeof(coef_line), "Коэф: %s", adc_buf);
-      drawOledCompactMenuPage(display, _adc_edit ? "АЦП правка" : "АЦП", battery_line, coef_line,
+      drawOledCompactMenuPage(display, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ", battery_line, coef_line,
           _adc_edit ? "+/-" : PRESS_LABEL);
 #else
-      display.drawTextCentered(display.width() / 2, 14, _adc_edit ? "АЦП правка" : "АЦП");
+      display.drawTextCentered(display.width() / 2, 14, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ");
       display.drawTextCentered(display.width() / 2, 24, "аналого-цифровой");
       display.drawTextCentered(display.width() / 2, 34, "преобразователь");
       display.setCursor(0, 44);
@@ -7981,12 +7995,9 @@ public:
       if (_settings_open) {
         renderCompactSettings(display);
       } else {
-        drawOledCompactMenuPage(display, "Настройки",
-#if UI_SMART_B11_EXTRAS == 1
-                                "7 компактных разделов",
-#else
-                                "6 компактных разделов",
-#endif
+        snprintf(tmp, sizeof(tmp), "%u компактных разделов",
+                 (unsigned)COMPACT_SETTINGS_GROUP_COUNT);
+        drawOledCompactMenuPage(display, "Настройки", tmp,
                                 "значения видны сразу", "вход: " PRESS_LABEL);
       }
 #else
@@ -8105,7 +8116,7 @@ public:
       if (_settings_open) {
         _settings_open = false;
 #if UI_ADC_MULTIPLIER_PAGE == 1
-        _adc_edit = false;
+        cancelAdcEdit();
 #endif
         _task->showAlert("Настройки закрыты", 800);
       } else {
@@ -12022,15 +12033,15 @@ float UITask::getAdcMultiplier() const {
 }
 
 bool UITask::setAdcMultiplier(float multiplier, bool save) {
-  if (multiplier < 0.0f || multiplier > 20000.0f) {
+  if (!isfinite(multiplier) || multiplier < 0.0f || multiplier > 20000.0f) {
     return false;
   }
   if (!_board->setAdcMultiplier(multiplier)) {
     return false;
   }
   invalidateBatteryCache();
-  _node_prefs->adc_multiplier = multiplier;
   if (save) {
+    _node_prefs->adc_multiplier = multiplier;
     the_mesh.savePrefs();
     notify(UIEventType::ack);
   }

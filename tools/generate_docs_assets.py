@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Generate publication screenshots for the SmartUI three-board release.
+"""Generate publication screenshots for every SmartUI 2.1 target.
 
 The repository-local generator imports the exact framebuffer simulator, then
 renders documentation scenes with the same embedded glyph metrics:
@@ -7,12 +7,17 @@ renders documentation scenes with the same embedded glyph metrics:
 * T096: native 160x80, thresholded bitmap fonts and exact xAdvance.
 * T114: logical 128x64 mapped to physical 240x135 (1.875 x 2.109375, y+1).
 * ProMicro OLED: native 128x64, actual Utf8Cyrillic5x7 glyph tables.
+* Heltec V4.3 OLED: exact 128x64 GPS/mute/battery layout.
+* Wireless Paper: native 250x122 one-bit E213 renderer profiles.
 """
 
 from __future__ import annotations
 
 import math
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -59,7 +64,40 @@ from simulate_t114_fonts import (  # noqa: E402
 
 
 OUT = ROOT / "docs" / "assets" / "ui"
+QA_OUT = ROOT / "docs" / "assets" / "qa"
 LABEL_FONT_PATH = TOOLS / "font_sources" / "noto_sans_2_015" / "NotoSans-CondensedMedium.ttf"
+
+
+def generate_esp32_docs_assets() -> None:
+    """Run the exact ESP32 display simulators and publish canonical images."""
+    QA_OUT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="smartui-docs-") as temp_dir:
+        temp = Path(temp_dir)
+        v4_dir = temp / "v4"
+        paper_dir = temp / "wireless-paper"
+        subprocess.run(
+            [sys.executable, str(TOOLS / "simulate_v4_3_oled_qa.py"),
+             "--out-dir", str(v4_dir)],
+            check=True,
+        )
+        subprocess.run(
+            [sys.executable, str(TOOLS / "simulate_wireless_paper_ps17_qa.py"),
+             "--out-dir", str(paper_dir)],
+            check=True,
+        )
+
+        copies = {
+            v4_dir / "V4_3_OLED_CLOCK_GPS_MUTE.png": OUT / "v4-3-oled-clock.png",
+            v4_dir / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png":
+                QA_OUT / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png",
+            paper_dir / "wood_clock_final.png": OUT / "wireless-paper-wood-clock.png",
+            paper_dir / "compact_settings_final.png": OUT / "wireless-paper-settings.png",
+            paper_dir / "keyboard.png": OUT / "wireless-paper-full-keyboard.png",
+            paper_dir / "contact_sheet_final.png":
+                QA_OUT / "WIRELESS_PAPER_SMARTUI_2_1_EXACT_QA_MATRIX.png",
+        }
+        for source, destination in copies.items():
+            shutil.copyfile(source, destination)
 
 
 def label_font(size: int) -> ImageFont.FreeTypeFont:
@@ -420,6 +458,7 @@ def main() -> None:
     t096_font_samples().save(OUT / "font-catalog-t096.png")
     t114_font_samples().save(OUT / "font-catalog-t114.png")
     oled_font_samples().save(OUT / "font-catalog-promicro-ra62.png")
+    generate_esp32_docs_assets()
     print(OUT)
 
 

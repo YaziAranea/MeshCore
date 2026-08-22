@@ -20,6 +20,7 @@
 class HeltecV3Board : public ESP32Board {
 private:
   bool adc_active_state;
+  float adc_mult = ADC_MULTIPLIER;
 
 public:
   RefCountedDigitalPin periph_power;
@@ -53,6 +54,7 @@ public:
   uint16_t getBattMilliVolts() override {
     analogReadResolution(10);
     digitalWrite(PIN_ADC_CTRL, adc_active_state);
+    delay(10);
 
     uint32_t raw = 0;
     for (int i = 0; i < 8; i++) {
@@ -62,7 +64,16 @@ public:
 
     digitalWrite(PIN_ADC_CTRL, !adc_active_state);
 
-    return (ADC_MULTIPLIER * (3.3 / 1024.0) * raw) * 1000;
+    return (adc_mult * (3.3 / 1024.0) * raw) * 1000;
+  }
+
+  bool setAdcMultiplier(float multiplier) override {
+    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    return true;
+  }
+
+  float getAdcMultiplier() const override {
+    return adc_mult;
   }
 
   const char* getManufacturerName() const override {

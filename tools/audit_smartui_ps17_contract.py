@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Static release contract for the three-board SmartUI v2.0.0-rc1 port."""
+"""Static contract for the five-board SmartUI 2.1 development profile."""
 
 from __future__ import annotations
 
@@ -82,18 +82,33 @@ uitask = read("examples/companion_radio/ui-new/UITask.cpp")
 uitask_live = without_if_zero(uitask)
 mymesh = read("examples/companion_radio/MyMesh.cpp")
 mymesh_h = read("examples/companion_radio/MyMesh.h")
+datastore = read("examples/companion_radio/DataStore.cpp")
 simulator = read("tools/simulate_smartui_ps17_qa.py")
+adc_boards = {
+    "T096": read("variants/heltec_t096/T096Board.cpp"),
+    "T114": read("variants/heltec_t114/T114Board.h"),
+    "ProMicro": read("variants/promicro/PromicroBoard.h"),
+    "V4.3 OLED": read("variants/heltec_v4/HeltecV4Board.h") + read("variants/heltec_v4/HeltecV4Board.cpp"),
+    "Wireless Paper": read("variants/heltec_v3/HeltecV3Board.h"),
+}
+e213 = read("src/helpers/ui/E213Display.h") + read("src/helpers/ui/E213Display.cpp")
 
 config_sources = {
     "T096": read("variants/heltec_t096/platformio.ini"),
     "T114": read("variants/heltec_t114/platformio.ini"),
     "ProMicro": read("variants/promicro/platformio.ini"),
+    "V4.3 OLED": read("variants/heltec_v4/platformio.ini"),
+    "Wireless Paper WOOD": read("variants/heltec_wireless_paper/platformio.ini"),
+    "Wireless Paper FULL": read("variants/heltec_wireless_paper/platformio.ini"),
 }
 
 target_sections = {
     "T096": "env:Heltec_t096_companion_radio_ble_femon",
     "T114": "env:Heltec_t114_companion_radio_ble",
     "ProMicro": "env:ProMicro_ra62_companion_radio_ble",
+    "V4.3 OLED": "env:heltec_v4_3_companion_radio_ble_femon_smartui",
+    "Wireless Paper WOOD": "env:Heltec_Wireless_Paper_companion_radio_ble_smartui_wood",
+    "Wireless Paper FULL": "env:Heltec_Wireless_Paper_companion_radio_ble_smartui_full",
 }
 
 effective = {
@@ -101,13 +116,13 @@ effective = {
     for name in target_sections
 }
 
+keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FULL")
+
 for name, block in effective.items():
     check(
-        f"{name}: SmartUI keyboard and DM-only profile",
-        "UI_QUICK_REPLY_KEYBOARD=1" in block
-        and "UI_UNREAD_DIRECT_ONLY=1" in block
-        and "SmartUI 2.0.0-rc1" in block,
-        "the effective target profile must enable keyboard, DM-only unread and carry the RC marker",
+        f"{name}: DM-only profile and development marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev" in block,
+        "every public profile must use DM-only unread and carry the 2.1 development marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -115,10 +130,25 @@ for name, block in effective.items():
         "SmartUI PS17 must not inherit UI_PHONE_GPS=1",
     )
 
+for name in keyboard_targets:
+    check(
+        f"{name}: keyboard and targeted send enabled",
+        "UI_QUICK_REPLY_KEYBOARD=1" in effective[name],
+        "feature-parity builds must expose the keyboard and target picker",
+    )
+
 check(
-    "Publication scope contains exactly the three supported targets",
-    tuple(target_sections) == ("T096", "T114", "ProMicro"),
-    "do not silently advertise or gate the release on an untested fourth board",
+    "Wireless Paper WOOD avoids per-keystroke e-paper refresh",
+    "UI_QUICK_REPLY_KEYBOARD=1" not in effective["Wireless Paper WOOD"],
+    "the recommended WOOD profile deliberately omits the e-paper keyboard",
+)
+
+check(
+    "Publication scope is five boards with two explicit Wireless Paper profiles",
+    tuple(target_sections) == (
+        "T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper WOOD", "Wireless Paper FULL"
+    ),
+    "keep the three nRF52 targets, V4.3 OLED and the two documented e-paper profiles",
 )
 
 check(
@@ -159,6 +189,152 @@ for name in ("T096", "T114", "ProMicro"):
         "UI_SMART_B12_TONE_LIST=1" in effective[name],
         "the tone-capable target must use the common B12 melody selector",
     )
+
+for name in target_sections:
+    check(
+        f"{name}: obsolete profile and export/import pages stay hidden",
+        "UI_SMART_B12_TONE_LIST=1" in effective[name],
+        "B12 is also the established gate that removes SMART_PROFILE and SETTINGS_TRANSFER",
+    )
+
+for name in target_sections:
+    check(
+        f"{name}: real ADC calibration page enabled",
+        "UI_ADC_MULTIPLIER_PAGE=1" in effective[name],
+        "all five supported boards implement a mutable battery ADC multiplier",
+    )
+
+for name in target_sections:
+    check(
+        f"{name}: backward BLE time correction enabled",
+        "BLE_TIME_SYNC_ACCEPT_BACKWARD=1" in effective[name],
+        "a bad future RTC value must not block correction from the companion app",
+    )
+
+check(
+    "V4.3 profile is OLED, FEM-on and never invents a buzzer",
+    has_all(
+        effective["V4.3 OLED"],
+        (
+            "UI_V4_3_OLED_PROFILE=1",
+            "RADIO_FEM_RXGAIN=1",
+            "UI_TONE_FALLBACK_TO_ALERT=0",
+            "UI_SOUND_SETTINGS_GROUP=0",
+        ),
+    )
+    and "PIN_MSG_TONE" not in effective["V4.3 OLED"],
+    "the requested target is the 128x64 OLED V4.3 with LNA/FEM, not TFT and not a fake tone pin",
+)
+
+for name in ("Wireless Paper WOOD", "Wireless Paper FULL"):
+    check(
+        f"{name}: shared e-paper/LoRa rail is protected",
+        has_all(
+            effective[name],
+            ("AUTO_OFF_MILLIS=0", "MESHCORE_E213_PROFILE_FONTS=1", "UI_SOUND_SETTINGS_GROUP=0"),
+        ),
+        "GPIO45/VEXT powers both display and radio; auto-off would kill LoRa",
+    )
+
+for name, source in adc_boards.items():
+    check(
+        f"{name}: ADC multiplier is a real board capability",
+        has_all(source, ("setAdcMultiplier", "getAdcMultiplier"))
+        and ("adc_mult" in source or name in ("T096", "ProMicro")),
+        "do not expose a calibration page whose Board setter always returns false",
+    )
+
+check(
+    "ADC preview is finite, transactional and cancellable",
+    has_all(
+        uitask,
+        (
+            "!isfinite(multiplier)",
+            "void cancelAdcEdit()",
+            "_task->setAdcMultiplier(_node_prefs->adc_multiplier, false);",
+            "if (save) {\n    _node_prefs->adc_multiplier = multiplier;",
+        ),
+    )
+    and uitask.count("cancelAdcEdit();") >= 3,
+    "preview must not leak into persisted prefs or survive leaving the settings page",
+)
+
+check(
+    "Legacy buzzer GPIO repair is compiled and applied",
+    has_all(
+        mymesh,
+        (
+            "#ifndef DEFAULT_NOTIFY_REPAIR_LEGACY",
+            "#if DEFAULT_NOTIFY_REPAIR_LEGACY",
+            "_prefs.notify_tone_pin == PIN_MSG_ALERT",
+            "_prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;",
+            "notify_prefs_repaired = true;",
+            "if (notify_prefs_repaired) _store->savePrefs(_prefs);",
+        ),
+    ),
+    "the target INI flags are useless unless MyMesh repairs the saved legacy tone pin",
+)
+
+check(
+    "Compact-settings landing page reports the real group count",
+    has_all(
+        uitask,
+        (
+            'snprintf(tmp, sizeof(tmp), "%u компактных разделов",',
+            "(unsigned)COMPACT_SETTINGS_GROUP_COUNT",
+        ),
+    )
+    and '"7 компактных разделов"' not in uitask,
+    "profiles without the sound group must not claim seven sections",
+)
+
+check(
+    "SmartUI settings survive a stock PS17 JSON migration",
+    has_all(
+        datastore,
+        (
+            "LEGACY_SMART_UI_PREFS_OFFSET = 140",
+            'prefsHasRootKey(file, "smart_ui")',
+            "readLegacySmartUiTail",
+            "prefs_ok && !has_smart_ui",
+            "savePrefs(prefs);",
+        ),
+    ),
+    "merge only the retained SmartUI tail once; never overwrite current JSON on every boot",
+)
+
+check(
+    "BLE time sync validates range and can repair a future RTC",
+    has_all(
+        mymesh,
+        (
+            "BLE_TIME_SYNC_MIN_UNIX 1704067200UL",
+            "BLE_TIME_SYNC_MAX_UNIX 2208988800UL",
+            "bool sane_time = secs >= BLE_TIME_SYNC_MIN_UNIX",
+            "BLE_TIME_SYNC_ACCEPT_BACKWARD || secs >= curr",
+        ),
+    ),
+    "phone time must be sane, while enabled targets may move the RTC backward",
+)
+
+check(
+    "Wireless Paper driver uses exact Cyrillic profiles and clipped e-paper drawing",
+    has_all(
+        e213,
+        (
+            '"Стандарт"',
+            '"Четкий"',
+            '"Компакт"',
+            '"Моно"',
+            '"Плотный"',
+            "meshcoreReadUtf8Codepoint",
+            "fillRectClipped",
+            "display_crc.update<ColorVal>(bkg)",
+            "E213_FULL_REFRESH_EVERY",
+        ),
+    ),
+    "the 250x122 target must not fall back to the stock Latin renderer or draw outside the panel",
+)
 
 check(
     "No SmartUI PS17 target config retains Phone GPS",
@@ -452,7 +628,7 @@ check(
 
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"Smart UI v2.0.0-rc1 contract audit: {passed} passed, {failed} failed")
+print(f"Smart UI 2.1 five-board contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:
