@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-`v2.0.0-rc1` — предварительный PS17-порт без заявленного аппаратного теста. Версия `2.1.0-dev` распространяется как артефакты CI, а не как стабильный Release. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для development BIN.
+`v2.1.0-dev` опубликован как предварительный GitHub Release для пяти плат. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
 
 ## Перед началом
 
@@ -15,11 +15,11 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_v2.0.0-rc1.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_v2.0.0-rc1.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_v2.0.0-rc1.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.uf2` |
 
-Development-ветка `2.1.0-dev` использует имена `T096_FEM_SmartUI_2.1.0-dev.uf2`, `T114_SmartUI_2.1.0-dev.uf2` и `ProMicro_RA62_SmartUI_2.1.0-dev.uf2`.
+Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|

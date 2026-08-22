@@ -6,7 +6,9 @@ MeshCore Smart UI — неофициальная модификация Companio
 
 Цель проекта — дать маленькой автономной ноде понятный интерфейс без обязательного открытия телефона для каждого действия: просматривать состояние сети и сообщения, отвечать готовой фразой или с экранной клавиатуры, выбирать адресата, управлять уведомлениями, GPS и внешним видом.
 
-Стабильный `v2.0.0-rc1` охватывает первые три платы. Ветка `smartui-ps17.2-dev` добавляет исправления зуммера/времени/ADC и две ESP32-S3 платы с маркером `SmartUI 2.1.0-dev`.
+[⬇ Скачать предварительный Release v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev) · [выбор файла](RELEASE_NOTES_v2.1.0-dev_RU.md#какой-файл-скачать) · [прошивка](docs/FLASHING_RU.md)
+
+Стабильный `v2.0.0-rc1` охватывает первые три платы. Предварительный Release `v2.1.0-dev` из ветки `smartui-ps17.2-dev` добавляет исправления зуммера/времени/ADC и две ESP32-S3 платы с маркером `SmartUI 2.1.0-dev`.
 
 Проект основан на закреплённом коммите [`a3b9ad91`](https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628) ветки `PowerSaving-v17` IoTThinks/MeshCore и сохраняет архитектуру MeshCore Companion, BLE и LoRa mesh. Это major-миграция с эталонной PS16-линии. Исходники RC находятся в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1); аппаратная проверка этого порта пока не заявляется.
 
@@ -128,7 +130,7 @@ T096 предлагает 15 публичных профилей, T114 — 10, P
 
 Для обычного пользователя компиляция не нужна:
 
-1. Скачайте файл своей платы из [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или из артефакта CI ветки `smartui-ps17.2-dev`.
+1. Скачайте файл своей платы из [GitHub Release v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev). CI-артефакты ветки нужны только для неопубликованных development-сборок.
 2. Сверьте SHA-256 с манифестом из того же Release/CI-артефакта.
 3. Для T096/T114/ProMicro переведите плату в UF2-загрузчик двойным Reset и скопируйте UF2 на появившийся USB-диск.
 4. Для V4.3/Wireless Paper используйте ESP32-S3 BIN: `freshInstall-merged.bin` по адресу `0x00000` или `update.bin` по адресу `0x10000`.

@@ -8,7 +8,9 @@
 - Heltec V4.3 OLED с включённым FEM/LNA;
 - Heltec Wireless Paper с e-paper 250×122.
 
-Текущая development-ветка показывает маркер `SmartUI 2.1.0-dev`. Стабильный публичный выпуск пока остаётся `v2.0.0-rc1` для первых трёх плат.
+Текущий предварительный GitHub Release показывает маркер `SmartUI 2.1.0-dev`. Он добавляет V4.3/Wireless Paper и исправления для первых трёх плат, но не заменяет стабильную RC-линию `v2.0.0-rc1`.
+
+[⬇ Скачать SmartUI v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-dev_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
@@ -52,7 +54,7 @@
 
 ## Быстрый старт
 
-Для обычной установки на T096/T114/ProMicro используйте проверенный [релиз v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1). Версия `2.1.0-dev` пока предназначена для проверки исправлений и новых плат; её файлы публикует CI ветки `smartui-ps17.2-dev`, а не стабильный Release.
+Для исправлений зуммера/настроек/времени, калибровки ADC и новых плат используйте [предварительный Release v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev). Прежний [v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1) остаётся неизменным baseline для T096/T114/ProMicro.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
@@ -134,6 +136,7 @@ Read-only CI повторяет сборку, Linux native-тесты, все т
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
+- [Примечания к v2.1.0-dev](RELEASE_NOTES_v2.1.0-dev_RU.md)
 - [Примечания к v2.0.0-rc1](RELEASE_NOTES_v2.0.0-rc1_RU.md)
 
 ## Лицензии и авторство
