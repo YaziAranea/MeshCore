@@ -67,6 +67,7 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   saved.notify_tone_bridge_enabled = 1;
   saved.notify_tone_8bit_enabled = 1;
   saved.notify_tone_high_drive_enabled = 1;
+  saved.notify_pin_fix_version = 1;
   saved.notify_tone_resonance_hz = 3400;
   saved.notify_tone_dm_id = 12;
   saved.notify_tone_mention_id = 12;
@@ -77,10 +78,11 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   EXPECT_NE(std::string::npos, output.text().find("smart_ui:{"));
   EXPECT_NE(std::string::npos, output.text().find("tone_pin:31"));
   EXPECT_NE(std::string::npos, output.text().find("bridge:1"));
+  EXPECT_NE(std::string::npos, output.text().find("pin_fix:1"));
 
   ReplayStream input(output.text().c_str());
   NodePrefs loaded;
-  ASSERT_TRUE(loaded.loadSerial(input));
+  ASSERT_TRUE(loaded.loadSerial(input)) << output.text();
   EXPECT_EQ(saved.notify_mode, loaded.notify_mode);
   EXPECT_EQ(saved.notify_gpio_pin, loaded.notify_gpio_pin);
   EXPECT_EQ(saved.notify_tone_pin, loaded.notify_tone_pin);
@@ -91,10 +93,27 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   EXPECT_EQ(saved.notify_tone_bridge_enabled, loaded.notify_tone_bridge_enabled);
   EXPECT_EQ(saved.notify_tone_8bit_enabled, loaded.notify_tone_8bit_enabled);
   EXPECT_EQ(saved.notify_tone_high_drive_enabled, loaded.notify_tone_high_drive_enabled);
+  EXPECT_EQ(saved.notify_pin_fix_version, loaded.notify_pin_fix_version);
   EXPECT_EQ(saved.notify_tone_resonance_hz, loaded.notify_tone_resonance_hz);
   EXPECT_EQ(saved.notify_tone_dm_id, loaded.notify_tone_dm_id);
   EXPECT_EQ(saved.notify_tone_mention_id, loaded.notify_tone_mention_id);
   EXPECT_EQ(saved.notify_tone_system_id, loaded.notify_tone_system_id);
+}
+
+TEST(CompanionNodePrefs, LegacyBuzzerRepairRunsOnce) {
+  NodePrefs prefs;
+  prefs.notify_gpio_pin = 45;
+  prefs.notify_tone_pin = 45;
+
+  ASSERT_TRUE(migrateLegacyNotifyPins(prefs, 45, 45, 31, 1));
+  EXPECT_EQ(45, prefs.notify_gpio_pin);
+  EXPECT_EQ(31, prefs.notify_tone_pin);
+  EXPECT_EQ(1, prefs.notify_pin_fix_version);
+
+  // Sharing the alert/tone pin is a valid explicit choice after migration.
+  prefs.notify_tone_pin = 45;
+  EXPECT_FALSE(migrateLegacyNotifyPins(prefs, 45, 45, 31, 1));
+  EXPECT_EQ(45, prefs.notify_tone_pin);
 }
 
 #if 0

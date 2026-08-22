@@ -1469,6 +1469,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.low_battery_shutdown_enabled = LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED ? 1 : 0;
   _prefs.notify_tone_bridge_enabled = 0;
   _prefs.notify_tone_8bit_enabled = 0;
+  _prefs.notify_pin_fix_version = 0;
 #ifdef DEFAULT_NOTIFY_TONE_HIGH_DRIVE
   _prefs.notify_tone_high_drive_enabled = DEFAULT_NOTIFY_TONE_HIGH_DRIVE ? 1 : 0;
 #else
@@ -1577,17 +1578,17 @@ void MyMesh::begin(bool has_display) {
     _prefs.notify_tone_volume = DEFAULT_NOTIFY_TONE_VOLUME;
   }
 #if DEFAULT_NOTIFY_REPAIR_LEGACY
-  bool notify_prefs_repaired = false;
+  bool notify_prefs_changed = false;
 #ifdef PIN_MSG_ALERT
   // Early SmartUI builds stored the shared alert LED as the tone GPIO.  The
   // value is syntactically valid, so the normal range checks cannot repair it.
-  if (_prefs.notify_gpio_pin == PIN_MSG_ALERT && DEFAULT_NOTIFY_GPIO_PIN != PIN_MSG_ALERT) {
-    _prefs.notify_gpio_pin = DEFAULT_NOTIFY_GPIO_PIN;
-    notify_prefs_repaired = true;
-  }
-  if (_prefs.notify_tone_pin == PIN_MSG_ALERT && DEFAULT_NOTIFY_TONE_PIN != PIN_MSG_ALERT) {
-    _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
-    notify_prefs_repaired = true;
+  notify_prefs_changed = migrateLegacyNotifyPins(
+      _prefs, PIN_MSG_ALERT, DEFAULT_NOTIFY_GPIO_PIN, DEFAULT_NOTIFY_TONE_PIN,
+      DEFAULT_NOTIFY_REPAIR_LEGACY);
+#else
+  if (_prefs.notify_pin_fix_version < DEFAULT_NOTIFY_REPAIR_LEGACY) {
+    _prefs.notify_pin_fix_version = DEFAULT_NOTIFY_REPAIR_LEGACY;
+    notify_prefs_changed = true;
   }
 #endif
 #endif
@@ -1647,7 +1648,7 @@ void MyMesh::begin(bool has_display) {
 #if DEFAULT_NOTIFY_REPAIR_LEGACY
   // Persist the one-time GPIO repair immediately.  Otherwise the stale pin
   // remains in prefs.json until the user happens to change another setting.
-  if (notify_prefs_repaired) _store->savePrefs(_prefs);
+  if (notify_prefs_changed) _store->savePrefs(_prefs);
 #endif
 
 #ifdef BLE_PIN_CODE // 123456 by default
@@ -2050,10 +2051,16 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_SET_DEVICE_TIME && len >= 5) {
     uint32_t secs;
     memcpy(&secs, &cmd_frame[1], 4);
-    uint32_t curr = getRTCClock()->getCurrentTime();
+    mesh::RTCClock* rtc = getRTCClock();
+    uint32_t curr = rtc->getCurrentTime();
+    bool backward = secs < curr;
     bool sane_time = secs >= BLE_TIME_SYNC_MIN_UNIX && secs <= BLE_TIME_SYNC_MAX_UNIX;
-    if (sane_time && (BLE_TIME_SYNC_ACCEPT_BACKWARD || secs >= curr)) {
-      getRTCClock()->setCurrentTime(secs);
+    if (sane_time && (!backward || BLE_TIME_SYNC_ACCEPT_BACKWARD)) {
+      if (backward) {
+        rtc->setCurrentTimeAndRebaseUnique(secs);
+      } else {
+        rtc->setCurrentTime(secs);
+      }
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);

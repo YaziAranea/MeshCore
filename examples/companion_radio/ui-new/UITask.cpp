@@ -1260,6 +1260,10 @@ static const char* uiSemanticColorName(uint8_t idx) {
   #define UI_SOUND_SETTINGS_GROUP 1
 #endif
 
+#ifndef UI_NOTIFICATION_SETTINGS
+  #define UI_NOTIFICATION_SETTINGS 1
+#endif
+
 #ifndef UI_CH2_RELAY_PAGE
   #define UI_CH2_RELAY_PAGE 0
 #endif
@@ -4141,8 +4145,10 @@ class HomeScreen : public UIScreen {
 
   uint8_t favoritePageFromId(uint8_t id) const {
     switch (id) {
+#if UI_NOTIFICATION_SETTINGS == 1
       case SMART_FAVORITE_NOTIFY_MODE: return HomePage::ALERTS;
       case SMART_FAVORITE_IMPORTANT_NOTIFY: return HomePage::IMPORTANT_NOTIFY;
+#endif
 #ifdef PIN_MSG_TONE
 #if UI_SMART_B12_TONE_LIST == 1
       case SMART_FAVORITE_SYSTEM_TONE:
@@ -4182,6 +4188,43 @@ class HomeScreen : public UIScreen {
     }
   }
 
+  uint8_t defaultFavoritePageAt(uint8_t slot) const {
+    static const uint8_t candidates[] = {
+#if UI_NOTIFICATION_SETTINGS == 1
+      HomePage::ALERTS,
+#endif
+#ifdef PIN_MSG_TONE
+      HomePage::ALERT_SOUND,
+#endif
+#if UI_APPEARANCE_MENU
+      HomePage::UI_FONT,
+      HomePage::UI_THEME,
+#endif
+#if UI_AUTO_ADVERT_PAGE == 1
+      HomePage::ADVERT_TIMER,
+#endif
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      HomePage::ADC,
+#endif
+      HomePage::BLUETOOTH,
+      HomePage::RADIO,
+      HomePage::MSG_POPUP,
+    };
+    uint8_t visible = 0;
+    for (uint8_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
+      if (!isSettingsItem(candidates[i])) continue;
+      if (visible == slot) return candidates[i];
+      visible++;
+    }
+    return HomePage::SETTINGS;
+  }
+
+  uint8_t resolvedFavoritePageAt(uint8_t slot) const {
+    uint8_t page = favoritePageFromId(favoriteIdAt(slot));
+    if (page != HomePage::SETTINGS && isSettingsItem(page)) return page;
+    return defaultFavoritePageAt(slot);
+  }
+
   void setFavoriteId(uint8_t slot, uint8_t id) {
     if (_node_prefs == NULL) return;
     if (slot == 0) _node_prefs->favorite_setting_1 = id;
@@ -4213,8 +4256,10 @@ class HomeScreen : public UIScreen {
 
   const uint8_t* compactSettingsRawPages(uint8_t group, uint8_t& count) const {
     static const uint8_t notification_pages[] = {
+#if UI_NOTIFICATION_SETTINGS == 1
       HomePage::ALERTS,
       HomePage::IMPORTANT_NOTIFY,
+#endif
       HomePage::MSG_POPUP,
 #if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
       HomePage::OFFLINE_DM_LED,
@@ -4364,8 +4409,7 @@ class HomeScreen : public UIScreen {
 #if UI_SMART_B11_EXTRAS == 1
     if (group == 0) {
       if (index >= 3) return HomePage::SETTINGS;
-      uint8_t page = favoritePageFromId(favoriteIdAt(index));
-      return page != HomePage::SETTINGS && isSettingsItem(page) ? page : HomePage::ALERTS;
+      return resolvedFavoritePageAt(index);
     }
 #endif
     uint8_t raw_count = 0;
@@ -4644,10 +4688,7 @@ class HomeScreen : public UIScreen {
       case HomePage::FAVORITE_SLOT_2:
       case HomePage::FAVORITE_SLOT_3: {
         uint8_t slot = page - HomePage::FAVORITE_SLOT_1;
-        uint8_t favorite_page = favoritePageFromId(favoriteIdAt(slot));
-        if (favorite_page == HomePage::SETTINGS || !isSettingsItem(favorite_page)) {
-          favorite_page = HomePage::ALERTS;
-        }
+        uint8_t favorite_page = resolvedFavoritePageAt(slot);
         snprintf(out, out_len, "%s", compactSettingsLabel(favorite_page));
         break;
       }
@@ -4683,7 +4724,11 @@ class HomeScreen : public UIScreen {
 #endif
     switch (group) {
       case 0:
+#if UI_NOTIFICATION_SETTINGS == 1
         snprintf(out, out_len, "%s", _task->getNotifyModeName());
+#else
+        snprintf(out, out_len, "ЭКРАН");
+#endif
         break;
       case 1:
         snprintf(out, out_len, "%s", _task->isNotifyToneHighDriveEnabled() ? "МАКС" : "ОБЫЧ");
@@ -5309,7 +5354,9 @@ class HomeScreen : public UIScreen {
 #endif
 
   bool isSettingsItem(uint8_t page) const {
+#if UI_NOTIFICATION_SETTINGS == 1
     if (page == HomePage::ALERTS) return true;
+#endif
 #ifdef PIN_MSG_ALERT
     if (page == HomePage::ALERT_LED) return true;
 #endif
@@ -5341,7 +5388,9 @@ class HomeScreen : public UIScreen {
 #endif
     if (page == HomePage::BLUETOOTH) return true;
     if (page == HomePage::MSG_POPUP) return true;
+#if UI_NOTIFICATION_SETTINGS == 1
     if (page == HomePage::IMPORTANT_NOTIFY) return true;
+#endif
 #if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
     if (page == HomePage::OFFLINE_DM_LED) return true;
     if (page == HomePage::BLE_DM_LED) return true;
@@ -5397,6 +5446,9 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
+#if UI_NOTIFICATION_SETTINGS == 0
+    if (page == HomePage::ALERTS || page == HomePage::IMPORTANT_NOTIFY) return false;
+#endif
 #if UI_COMPACT_SETTINGS_MENU == 1 && UI_APPEARANCE_MENU
     if (page == HomePage::FONT_PICKER || page == HomePage::THEME_PICKER) return false;
 #endif

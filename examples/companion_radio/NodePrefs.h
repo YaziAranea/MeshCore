@@ -103,6 +103,7 @@ public:
   uint8_t notify_tone_bridge_enabled = 0;
   uint8_t notify_tone_8bit_enabled = 0;
   uint8_t notify_tone_high_drive_enabled = 0;
+  uint8_t notify_pin_fix_version = 0;
   uint16_t notify_tone_resonance_hz = DEFAULT_NOTIFY_TONE_RESONANCE_HZ;
   uint8_t notify_tone_dm_id = 0;
   uint8_t notify_tone_mention_id = 0;
@@ -226,6 +227,7 @@ private:
       def("bridge", _parent->notify_tone_bridge_enabled);
       def("tone_8bit", _parent->notify_tone_8bit_enabled);
       def("high_drive", _parent->notify_tone_high_drive_enabled);
+      def("pin_fix", _parent->notify_pin_fix_version);
       def("res_hz", _parent->notify_tone_resonance_hz);
       def("tone_dm", _parent->notify_tone_dm_id);
       def("tone_mention", _parent->notify_tone_mention_id);
@@ -299,6 +301,7 @@ private:
     notify_tone_bridge_enabled = other.notify_tone_bridge_enabled;
     notify_tone_8bit_enabled = other.notify_tone_8bit_enabled;
     notify_tone_high_drive_enabled = other.notify_tone_high_drive_enabled;
+    notify_pin_fix_version = other.notify_pin_fix_version;
     notify_tone_resonance_hz = other.notify_tone_resonance_hz;
     notify_tone_dm_id = other.notify_tone_dm_id;
     notify_tone_mention_id = other.notify_tone_mention_id;
@@ -343,3 +346,18 @@ public:
   bool isRepeatEn() const { return repeat.disable_fwd == 0; }
   void setRepeatEn(bool en) { repeat.disable_fwd = en ? 0 : 1; }
 };
+
+inline bool migrateLegacyNotifyPins(NodePrefs& prefs, int8_t alert_pin,
+                                    int8_t default_gpio_pin, int8_t default_tone_pin,
+                                    uint8_t target_version) {
+  if (target_version == 0 || prefs.notify_pin_fix_version >= target_version) return false;
+
+  if (prefs.notify_gpio_pin == alert_pin && default_gpio_pin != alert_pin) {
+    prefs.notify_gpio_pin = default_gpio_pin;
+  }
+  if (prefs.notify_tone_pin == alert_pin && default_tone_pin != alert_pin) {
+    prefs.notify_tone_pin = default_tone_pin;
+  }
+  prefs.notify_pin_fix_version = target_version;
+  return true;
+}

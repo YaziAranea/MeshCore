@@ -82,6 +82,8 @@ uitask = read("examples/companion_radio/ui-new/UITask.cpp")
 uitask_live = without_if_zero(uitask)
 mymesh = read("examples/companion_radio/MyMesh.cpp")
 mymesh_h = read("examples/companion_radio/MyMesh.h")
+meshcore_h = read("src/MeshCore.h")
+nodeprefs = read("examples/companion_radio/NodePrefs.h")
 datastore = read("examples/companion_radio/DataStore.cpp")
 simulator = read("tools/simulate_smartui_ps17_qa.py")
 adc_boards = {
@@ -262,17 +264,34 @@ check(
 check(
     "Legacy buzzer GPIO repair is compiled and applied",
     has_all(
-        mymesh,
+        mymesh + nodeprefs,
         (
             "#ifndef DEFAULT_NOTIFY_REPAIR_LEGACY",
             "#if DEFAULT_NOTIFY_REPAIR_LEGACY",
-            "_prefs.notify_tone_pin == PIN_MSG_ALERT",
-            "_prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;",
-            "notify_prefs_repaired = true;",
-            "if (notify_prefs_repaired) _store->savePrefs(_prefs);",
+            'def("pin_fix", _parent->notify_pin_fix_version);',
+            "inline bool migrateLegacyNotifyPins",
+            "prefs.notify_tone_pin == alert_pin",
+            "prefs.notify_pin_fix_version = target_version;",
+            "if (notify_prefs_changed) _store->savePrefs(_prefs);",
         ),
     ),
-    "the target INI flags are useless unless MyMesh repairs the saved legacy tone pin",
+    "repair the saved legacy tone pin once, then preserve an explicit shared alert/tone choice",
+)
+
+check(
+    "Notification pages and favorite fallbacks follow board capabilities",
+    all("UI_NOTIFICATION_SETTINGS=0" in effective[name] for name in ("Wireless Paper WOOD", "Wireless Paper FULL"))
+    and has_all(
+        uitask,
+        (
+            "#ifndef UI_NOTIFICATION_SETTINGS",
+            "uint8_t resolvedFavoritePageAt(uint8_t slot) const",
+            "return defaultFavoritePageAt(slot);",
+            "if (page == HomePage::ALERTS || page == HomePage::IMPORTANT_NOTIFY) return false;",
+            'snprintf(out, out_len, "ЭКРАН");',
+        ),
+    ),
+    "boards without any alert/tone output must not expose dead pages or fall back to ALERTS",
 )
 
 check(
@@ -306,12 +325,15 @@ check(
 check(
     "BLE time sync validates range and can repair a future RTC",
     has_all(
-        mymesh,
+        mymesh + meshcore_h,
         (
             "BLE_TIME_SYNC_MIN_UNIX 1704067200UL",
             "BLE_TIME_SYNC_MAX_UNIX 2208988800UL",
+            "bool backward = secs < curr;",
             "bool sane_time = secs >= BLE_TIME_SYNC_MIN_UNIX",
-            "BLE_TIME_SYNC_ACCEPT_BACKWARD || secs >= curr",
+            "!backward || BLE_TIME_SYNC_ACCEPT_BACKWARD",
+            "rtc->setCurrentTimeAndRebaseUnique(secs);",
+            "last_unique = applied > 0 ? applied - 1 : 0;",
         ),
     ),
     "phone time must be sane, while enabled targets may move the RTC backward",

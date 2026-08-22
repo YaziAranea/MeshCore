@@ -112,6 +112,19 @@ public:
   virtual void setCurrentTime(uint32_t time) = 0;
 
   /**
+   * Apply an explicit clock correction and rebase the monotonic timestamp
+   * floor.  This is required when a trusted source repairs an RTC that was
+   * accidentally set in the future; otherwise getCurrentTimeUnique() keeps
+   * returning timestamps from that obsolete future.
+   */
+  void setCurrentTimeAndRebaseUnique(uint32_t time) {
+    setCurrentTime(time);
+    // Use the value actually applied by the concrete RTC implementation.
+    uint32_t applied = getCurrentTime();
+    last_unique = applied > 0 ? applied - 1 : 0;
+  }
+
+  /**
    * override in classes that need to periodically update internal state
    */
   virtual void tick() { /* no op */}

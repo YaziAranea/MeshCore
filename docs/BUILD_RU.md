@@ -128,9 +128,9 @@ $uf2Rows = Get-ChildItem .\firmware\*.uf2 |
     $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $($_.Name)"
   }
-[System.IO.File]::WriteAllLines(
+[System.IO.File]::WriteAllText(
   (Join-Path $PWD 'firmware/SHA256SUMS.txt'),
-  $uf2Rows,
+  ([string]::Join("`n", $uf2Rows) + "`n"),
   [System.Text.UTF8Encoding]::new($false)
 )
 
@@ -140,9 +140,9 @@ $espRows = Get-ChildItem .\firmware\*.bin |
     $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     "$hash  $($_.Name)"
   }
-[System.IO.File]::WriteAllLines(
+[System.IO.File]::WriteAllText(
   (Join-Path $PWD 'firmware/SHA256SUMS-ESP32.txt'),
-  $espRows,
+  ([string]::Join("`n", $espRows) + "`n"),
   [System.Text.UTF8Encoding]::new($false)
 )
 ```
@@ -211,14 +211,14 @@ python tools/generate_docs_assets.py
 
 | Цель | RAM | Flash |
 |---|---:|---:|
-| T096 FEM ON | 150092 / 235520 байт (63,7%) | 555212 / 712704 байт (77,9%) |
-| T114 | 151516 / 235520 байт (64,3%) | 558072 / 712704 байт (78,3%) |
-| ProMicro RA62 | 147996 / 235520 байт (62,8%) | 665752 / 712704 байт (93,4%) |
-| Heltec V4.3 OLED FEM ON | 176340 / 2097152 байт (8,4%) | 1502417 / 6553600 байт (22,9%) |
-| Wireless Paper WOOD | 174256 / 327680 байт (53,2%) | 1295585 / 3342336 байт (38,8%) |
-| Wireless Paper FULL | 174264 / 327680 байт (53,2%) | 1300577 / 3342336 байт (38,9%) |
+| T096 FEM ON | 150100 / 235520 байт (63,7%) | 555276 / 712704 байт (77,9%) |
+| T114 | 151524 / 235520 байт (64,3%) | 558136 / 712704 байт (78,3%) |
+| ProMicro RA62 | 148004 / 235520 байт (62,8%) | 665608 / 712704 байт (93,4%) |
+| Heltec V4.3 OLED FEM ON | 176348 / 2097152 байт (8,4%) | 1502609 / 6553600 байт (22,9%) |
+| Wireless Paper WOOD | 174264 / 327680 байт (53,2%) | 1295769 / 3342336 байт (38,8%) |
+| Wireless Paper FULL | 174272 / 327680 байт (53,2%) | 1300741 / 3342336 байт (38,9%) |
 
-Это локальная компиляционная проверка. Linux native-тест выполняется GitHub Actions; аппаратная проверка новых V4.3/Wireless Paper-профилей до стабильного Release всё ещё обязательна.
+Дополнительно локально в Linux/WSL прошли native core `69 / 69` и KISS modem `8 / 8`; GitHub Actions повторяет эти тесты. Аппаратная проверка новых V4.3/Wireless Paper-профилей до стабильного Release всё ещё обязательна.
 
 ## Стабильный baseline: размеры v2.0.0-rc1
 
