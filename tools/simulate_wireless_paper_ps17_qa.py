@@ -310,6 +310,33 @@ def render_main_clock(profile: str = "Стандарт") -> Canvas:
     return c
 
 
+def render_ble_pin(profile: str = "Стандарт") -> Canvas:
+    """Exact 250x122 onboarding page shown until the first BLE connection."""
+    c = Canvas("ble_pin")
+    c.text(0, 0, c.ellipsize("Heltec WP SmartUI", W - 82, profile=profile),
+           profile=profile, layer="header")
+    main_battery(c, profile)
+    # Exact Wireless Paper home-page set with UI_RECENT_PAGE=0,
+    # UI_LINK_TEST_PAGE=0 and UI_HIDE_FIRST_PAGE=1:
+    # clock, BLE PIN, network, chat, advert, settings, shutdown.
+    page_count, active = 7, 1
+    step = 10
+    x = (W - step * (page_count - 1)) // 2
+    for index in range(page_count):
+        if index == active:
+            c.fill(x - 1, 13, 3, 3, layer="page_indicator")
+        else:
+            c.fill(x, 14, 1, 1, layer="page_indicator")
+        x += step
+
+    c.centered(W // 2, 20, "ПИНКОД BLE", profile=profile, size=2, bold=True, layer="title")
+    c.centered(W // 2, 42, "428731", profile=profile, size=4, bold=True, layer="pin")
+    c.centered(W // 2, 82, "ОТКРОЙТЕ MESHCORE", profile=profile, layer="step1")
+    c.centered(W // 2, 96, "УСТРОЙСТВА > ДОБАВИТЬ", profile=profile, layer="step2")
+    c.centered(W // 2, 110, "PIN / PASSKEY: ЭТИ 6 ЦИФР", profile=profile, layer="step3")
+    return c
+
+
 def render_settings(profile: str = "Стандарт") -> Canvas:
     c = Canvas("compact_settings")
     line_h = max(8, (8 + PROFILES[profile][1]))
@@ -501,7 +528,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
 
     canvases = [
-        render_wood_safe(), render_main_clock(), render_settings_8(), render_font_picker(),
+        render_wood_safe(), render_main_clock(), render_ble_pin(), render_settings_8(), render_font_picker(),
         render_chat(), render_unread(), render_keyboard(), render_target(),
     ]
     for canvas in canvases:
@@ -511,7 +538,7 @@ def main() -> None:
     # Extremal font pass catches width/height errors hidden by the default profile.
     profile_matrix = []
     for profile in PROFILES:
-        for renderer in (render_wood_safe, render_main_clock, render_settings_8, render_font_picker,
+        for renderer in (render_wood_safe, render_main_clock, render_ble_pin, render_settings_8, render_font_picker,
                          render_chat, render_unread, render_keyboard, render_target):
             canvas = renderer(profile)
             stat = canvas.stats()

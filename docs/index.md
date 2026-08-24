@@ -8,7 +8,7 @@
 - [поддерживаемые платы](./SUPPORTED_BOARDS_RU.md);
 - [управление](./CONTROLS_RU.md);
 - [экраны, меню, шрифты и симуляции](./SCREENS_RU.md);
-- [прошивка UF2](./FLASHING_RU.md);
+- [прошивка UF2 или BIN](./FLASHING_RU.md);
 - [сборка из исходников](./BUILD_RU.md);
 - [проверка SHA-256](./VERIFY_RU.md);
 - [безопасность и радиопараметры](./SECURITY_RADIO_RU.md).

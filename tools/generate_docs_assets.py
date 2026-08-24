@@ -91,6 +91,7 @@ def generate_esp32_docs_assets() -> None:
             v4_dir / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png":
                 QA_OUT / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png",
             paper_dir / "wood_clock_final.png": OUT / "wireless-paper-wood-clock.png",
+            paper_dir / "ble_pin.png": OUT / "wireless-paper-ble-pin.png",
             paper_dir / "compact_settings_final.png": OUT / "wireless-paper-settings.png",
             paper_dir / "keyboard.png": OUT / "wireless-paper-full-keyboard.png",
             paper_dir / "contact_sheet_final.png":

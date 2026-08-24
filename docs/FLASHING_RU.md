@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-`v2.1.0-dev` опубликован как предварительный GitHub Release для пяти плат. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
+`v2.1.0-dev.1` — предварительный hotfix GitHub Release для пяти плат, заменяющий `v2.1.0-dev`. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
 
 ## Перед началом
 
@@ -15,17 +15,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.1.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.1.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev-update.bin` |
-| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1-update.bin` |
+| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1-update.bin` |
+| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -68,13 +68,20 @@ Web Flasher должен работать с merged-файлом. Если се�
 
 1. Откройте совместимый MeshCore-клиент.
 2. Найдите companion-ноду рядом.
-3. Если клиент просит PIN, введите шестизначный код с экрана ноды.
-4. При отсутствии сохранённого PIN прошивка может создавать случайный активный код на текущий сеанс. Не считайте `123456` универсальным пользовательским PIN.
-5. После подключения отдельная страница BLE PIN на T096 скрывается, чтобы не образовывать лишний экран.
+3. До связи любая из пяти плат автоматически показывает отдельную страницу `ПИНКОД BLE` с крупными шестью цифрами.
+4. Когда клиент, Android/iOS или операционная система просит `PIN`, `passkey` или «код сопряжения», введите именно эти цифры.
+5. При отсутствии сохранённого PIN прошивка создаёт случайный активный код на текущий сеанс. `123456` в build flags не является универсальным паролем.
+6. После успешного подключения PIN-страница на всех пяти платах автоматически исчезает.
+
+### Wireless Paper: PIN на e-paper
+
+Wireless Paper сохраняет PIN-страницу при idle-переходах и не заменяет её часами или e-paper screensaver, пока BLE не подключён. После запуска дождитесь полного обновления панели. Код исчезнет только после успешной BLE-связи.
+
+![Страница BLE PIN на Wireless Paper](assets/ui/wireless-paper-ble-pin.png)
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо development `2.1.0-dev`.
+- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо hotfix development `2.1.0-dev.1`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

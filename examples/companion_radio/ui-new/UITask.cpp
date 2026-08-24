@@ -475,6 +475,14 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
   #define UI_HIDE_FIRST_PAGE 0
 #endif
 
+#ifndef UI_BLE_PIN_PAGE
+  #if defined(UI_T096_PREMIUM_TFT) && UI_T096_PREMIUM_TFT
+    #define UI_BLE_PIN_PAGE 1
+  #else
+    #define UI_BLE_PIN_PAGE 0
+  #endif
+#endif
+
 #ifndef UI_DISPLAY_VALIDATE_ON_INPUT
   #define UI_DISPLAY_VALIDATE_ON_INPUT 0
 #endif
@@ -3198,6 +3206,78 @@ static uint32_t uiLocalClockTime(uint32_t now) {
 #endif
 }
 
+#if UI_BLE_PIN_PAGE
+static int renderBlePinPage(DisplayDriver& display, uint32_t ble_pin, bool connected) {
+  char pin_text[12];
+  if (ble_pin != 0) {
+    snprintf(pin_text, sizeof(pin_text), "%06lu", (unsigned long)ble_pin);
+  } else {
+    strcpy(pin_text, "------");
+  }
+
+#if UI_WIRELESS_PAPER_BIG_CLOCK
+  if (display.width() > 200 && display.height() > 80) {
+    display.setColor(DisplayDriver::LIGHT);
+    display.setBold(true);
+    display.setTextSize(2);
+    drawRichTextCentered(display, display.width() / 2, 20, "ПИНКОД BLE");
+
+    display.setTextSize(4);
+    drawRichTextCentered(display, display.width() / 2, 42, pin_text);
+
+    display.setBold(false);
+    display.setTextSize(1);
+    drawRichTextCentered(display, display.width() / 2, 82,
+                         connected ? "BLE ПОДКЛЮЧЕН" : "ОТКРОЙТЕ MESHCORE");
+    if (!connected) {
+      drawRichTextCentered(display, display.width() / 2, 96, "УСТРОЙСТВА > ДОБАВИТЬ");
+      drawRichTextCentered(display, display.width() / 2, 110, "PIN / PASSKEY: ЭТИ 6 ЦИФР");
+    }
+    return UI_EINK_SAVER_REFRESH_MILLIS;
+  }
+#endif
+
+  display.setColor(DisplayDriver::YELLOW);
+#if UI_NATIVE_TFT_PROFILE
+  // T114 exposes very large user-selectable fonts.  Keep the instruction
+  // lines on the fixed dense-list font and reserve enough physical rows for
+  // the 128x64 -> 240x135 scaling used by its display driver.
+  const int title_y = 18;
+  const int pin_y = 31;
+  const int hint_y = 51;
+  uint8_t title_font = uiPushCompactSettingsFont(display);
+#else
+  const int title_y = 21;
+  const int pin_y = 38;
+#if UI_T096_PREMIUM_TFT
+  const int hint_y = 57;
+#else
+  // SSD1306 uses an 8-row cell; y=57 would clip its last row on 64 px.
+  const int hint_y = 55;
+#endif
+  uint8_t title_font = uiPushOledRoleFont(display, UI_OLED_FONT_S);
+#endif
+  drawRichTextCentered(display, display.width() / 2, title_y, "ПИНКОД BLE");
+  uiPopFont(display, title_font);
+
+  display.setColor(DisplayDriver::GREEN);
+  uint8_t hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
+  drawRichTextCentered(display, display.width() / 2, pin_y, pin_text);
+  uiPopFont(display, hero_font);
+
+  display.setColor(DisplayDriver::LIGHT);
+#if UI_NATIVE_TFT_PROFILE
+  uint8_t small_font = uiPushCompactSettingsFont(display);
+#else
+  uint8_t small_font = uiPushCompactChromeFont(display);
+#endif
+  drawRichTextCentered(display, display.width() / 2, hint_y,
+                       connected ? "BLE подключен" : "код в приложении");
+  uiPopFont(display, small_font);
+  return UI_IDLE_REFRESH_MILLIS;
+}
+#endif
+
 #if UI_EINK_IDLE_SCREENSAVER || UI_WIRELESS_PAPER_BIG_CLOCK
 static void drawUiPixel(DisplayDriver& display, int x, int y) {
   if (x < 0 || y < 0 || x >= display.width() || y >= display.height()) return;
@@ -3317,6 +3397,11 @@ static void drawPaperBatteryIndicator(DisplayDriver& display, uint16_t milli_vol
 }
 
 static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCClock* rtc, bool with_backdrop) {
+#if UI_BLE_PIN_PAGE
+  if (!task->hasConnection() && the_mesh.getBLEPin() != 0) {
+    return renderBlePinPage(display, the_mesh.getBLEPin(), false);
+  }
+#endif
   uint32_t rtc_now = rtc->getCurrentTime();
   bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
   DateTime dt(time_valid ? uiLocalClockTime(rtc_now) : 0);
@@ -3474,7 +3559,7 @@ public:
 class HomeScreen : public UIScreen {
   enum HomePage {
     CLOCK,
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
     BLE_PIN,
 #endif
     RECENT,
@@ -5461,7 +5546,7 @@ class HomeScreen : public UIScreen {
 #if UI_HIDE_FIRST_PAGE
     if (page == HomePage::FIRST) return false;
 #endif
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
     if (page == HomePage::BLE_PIN) {
       return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0;
     }
@@ -5490,7 +5575,7 @@ class HomeScreen : public UIScreen {
         HomePage::SETTINGS,
         HomePage::SHUTDOWN,
         HomePage::CLOCK,
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
         HomePage::BLE_PIN
 #endif
       };
@@ -5553,7 +5638,7 @@ class HomeScreen : public UIScreen {
         HomePage::SETTINGS,
         HomePage::SHUTDOWN,
         HomePage::CLOCK,
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
         HomePage::BLE_PIN
 #endif
       };
@@ -5597,7 +5682,7 @@ class HomeScreen : public UIScreen {
       _task->showAlert("Опрос путей", 800);
     } else if (page == HomePage::BLUETOOTH) {
       _task->showAlert("Bluetooth", 800);
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
     } else if (page == HomePage::BLE_PIN) {
       _task->showAlert("BLE PIN", 800);
 #endif
@@ -6234,6 +6319,11 @@ public:
         memset(&_compact_undo_prefs, 0, sizeof(_compact_undo_prefs));
 #endif
 #endif
+#if UI_BLE_PIN_PAGE
+        if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
+          _page = HomePage::BLE_PIN;
+        }
+#endif
        }
 
   void resetToFirstPage() {
@@ -6241,6 +6331,14 @@ public:
     cancelAdcEdit();
 #endif
     _page = defaultHomePage();
+#if UI_BLE_PIN_PAGE
+    // Auto-home, display wake and the global Home shortcut must never hide
+    // the only passkey a fresh client can use.  Once connected, the same
+    // reset naturally returns to the normal clock page.
+    if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
+      _page = HomePage::BLE_PIN;
+    }
+#endif
     _settings_open = false;
     _quick_reply_open = false;
     _quick_reply_idx = 0;
@@ -6346,6 +6444,14 @@ public:
 
   bool isClockPage() const {
     return !_settings_open && _page == HomePage::CLOCK;
+  }
+
+  bool isBlePinPage() const {
+#if UI_BLE_PIN_PAGE
+    return !_settings_open && _page == HomePage::BLE_PIN;
+#else
+    return false;
+#endif
   }
 
   void poll() override {
@@ -7533,29 +7639,9 @@ public:
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "перекл: " PRESS_LABEL);
 #endif
-#if UI_T096_PREMIUM_TFT
+#if UI_BLE_PIN_PAGE
     } else if (_page == HomePage::BLE_PIN) {
-      uint32_t ble_pin = the_mesh.getBLEPin();
-
-      display.setColor(DisplayDriver::YELLOW);
-      uint8_t title_font = uiPushOledRoleFont(display, UI_OLED_FONT_S);
-      drawRichTextCentered(display, display.width() / 2, 21, "ПИНКОД BLE");
-      uiPopFont(display, title_font);
-
-      display.setColor(DisplayDriver::GREEN);
-      uint8_t hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
-      if (ble_pin != 0) {
-        snprintf(tmp, sizeof(tmp), "%06lu", (unsigned long)ble_pin);
-      } else {
-        snprintf(tmp, sizeof(tmp), "------");
-      }
-      drawRichTextCentered(display, display.width() / 2, 38, tmp);
-      uiPopFont(display, hero_font);
-
-      display.setColor(DisplayDriver::LIGHT);
-      uint8_t small_font = uiPushCompactChromeFont(display);
-      drawRichTextCentered(display, display.width() / 2, 57, _task->hasConnection() ? "BLE подключен" : "ввести в приложении");
-      uiPopFont(display, small_font);
+      renderBlePinPage(display, the_mesh.getBLEPin(), _task->hasConnection());
 #endif
     } else if (_page == HomePage::MSG_POPUP) {
 #if UI_V4_3_OLED_PROFILE
@@ -11331,6 +11417,15 @@ void UITask::extendAutoOff(unsigned long now) {
 
 void UITask::markDisplayWake(bool reset_to_clock) {
   unsigned long now = millis();
+#if UI_BLE_PIN_PAGE
+  // A user display wake during first-time pairing must reveal the active
+  // passkey, even on boards whose normal wake policy preserves the page.
+  // A message popup already selected by handlePendingPopupWake() keeps
+  // priority and returns to the onboarding page after it is dismissed.
+  if (!hasConnection() && the_mesh.getBLEPin() != 0 && curr != msg_preview) {
+    reset_to_clock = true;
+  }
+#endif
 #if UI_WAKE_DEBUG_LOG
   Serial.printf("[DBG UI] markDisplayWake now=%lu reset=%d display_on=%d\r\n",
                 now, reset_to_clock ? 1 : 0,
@@ -11514,6 +11609,20 @@ void UITask::updateConnectionState() {
   if (connected != _last_connection_state) {
     _last_connection_state = connected;
     _ble_state_changed_at = millis();
+#if UI_BLE_PIN_PAGE
+    if (connected && home != NULL && ((HomeScreen*)home)->isBlePinPage()) {
+      ((HomeScreen*)home)->resetToFirstPage();
+      if (curr == home) _next_refresh = 0;
+    }
+#if UI_EINK_IDLE_SCREENSAVER
+    if (connected && idle_saver != NULL && curr == idle_saver) {
+      // The e-paper saver can be holding the onboarding PIN for a full
+      // minute.  Refresh immediately after pairing so the passkey does not
+      // remain visible after it has served its purpose.
+      _next_refresh = 0;
+    }
+#endif
+#endif
   }
 }
 

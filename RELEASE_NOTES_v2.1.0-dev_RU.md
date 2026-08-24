@@ -1,5 +1,7 @@
 # MeshCore SmartUI PS17 v2.1.0-dev
 
+> Этот предварительный выпуск заменён hotfix [`v2.1.0-dev.1`](RELEASE_NOTES_v2.1.0-dev.1_RU.md), в котором BLE PIN корректно показывается на всех пяти платах. Файл сохранён для истории; для новой установки используйте hotfix.
+
 Предварительный выпуск единого русского SmartUI для пяти плат. Основан на PowerSaving-v17 и не заменяет прежний `v2.0.0-rc1`.
 
 [Скачать файлы Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev) · [подробная прошивка](docs/FLASHING_RU.md) · [проверка SHA-256](docs/VERIFY_RU.md)

@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 from simulate_oled_128x64 import H, SCALE, STYLES, W, Oled, font
 
 
-SCENES = ("GPS OFF + mute", "GPS ON + mute", "GPS ON", "ADC calibration")
+SCENES = ("GPS OFF + mute", "GPS ON + mute", "GPS ON", "ADC calibration", "BLE PIN")
 STATUS_ICON_SIZE = 10
 BATTERY_ICON_X = W - 18 - 2
 
@@ -63,6 +63,32 @@ def adc_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]:
     return oled.img, oled.overflows
 
 
+def ble_pin_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]:
+    """Exact shared 128x64 onboarding page used by V4.3 and ProMicro."""
+    oled = Oled(style)
+    voltage = "4.09V"
+    voltage_width = oled.text_width(voltage)
+    name_right = BATTERY_ICON_X - voltage_width - 5
+    oled.ellipsized(0, 0, "Heltec V4.3", name_right)
+    oled.text(BATTERY_ICON_X - 3, 0, voltage, right=True)
+    oled.battery(W - 16, 1, 82)
+
+    page_count, active = 7, 1
+    step = 10
+    x = (W - step * (page_count - 1)) // 2
+    for index in range(page_count):
+        if index == active:
+            oled.draw.rectangle((x - 1, 13, x + 1, 15), fill=1)
+        else:
+            oled.draw.point((x, 14), fill=1)
+        x += step
+
+    oled.text(W // 2, 21, "ПИНКОД BLE", center=True)
+    oled.text(W // 2, 38, "428731", center=True, size=2)
+    oled.text(W // 2, 55, "код в приложении", center=True)
+    return oled.img, oled.overflows
+
+
 def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, list[str]]:
     if name == "GPS OFF + mute":
         return clock_scene(style, "GPS OFF", True)
@@ -70,6 +96,8 @@ def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, 
         return clock_scene(style, "GPS ON", True)
     if name == "GPS ON":
         return clock_scene(style, "GPS ON", False)
+    if name == "BLE PIN":
+        return ble_pin_scene(style)
     return adc_scene(style)
 
 

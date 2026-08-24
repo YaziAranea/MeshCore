@@ -76,6 +76,16 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
 
+Публичные stems hotfix `v2.1.0-dev.1`:
+
+```text
+Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1
+Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1
+Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1
+```
+
+К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
+
 ## Сразу писать публичные имена
 
 Переменная `UF2_FILE_PATH` позволяет задать выходное имя. В PowerShell:
@@ -83,13 +93,13 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-dev.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-dev.1.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-dev.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-dev.1.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-dev.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -99,11 +109,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-dev.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-dev.1.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-dev.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-dev.1.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-dev.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -193,6 +203,8 @@ python tools/generate_docs_assets.py
 
 При изменении UI проверьте не только отсутствие выхода за framebuffer, но и реальные фотографии платы. Симуляция — защита от регрессий, не замена железа.
 
+Локальный QA hotfix `v2.1.0-dev.1` от 2026-08-23: статический контракт `88 / 88`, core/T096/T114 `470 / 470`, V4.3 + ProMicro OLED `25 / 25`, Wireless Paper `180 / 180`, native core `69 / 69`, KISS modem `8 / 8`. PIN-экран проверен всеми пятью семействами плат и всеми публичными шрифтами; подсказка OLED 128×64 — «код в приложении».
+
 ## Проверки перед релизом
 
 1. Все три `create_uf2` и нужные ESP32 `mergebin` завершились `SUCCESS`.
@@ -205,18 +217,18 @@ python tools/generate_docs_assets.py
 8. `validate_release_uf2.py` и `validate_release_esp32.py` прошли без ошибок.
 9. Тег и Release создаются только после этих проверок и нужной аппаратной проверки.
 
-## Текущие размеры SmartUI 2.1.0-dev
+## Текущие размеры SmartUI 2.1.0-dev.1
 
-Локальная финальная сборка от 2026-08-22 дала `6 / 6 SUCCESS`:
+Финальная локальная сборка hotfix дала `6 / 6 SUCCESS`:
 
 | Цель | RAM | Flash |
 |---|---:|---:|
-| T096 FEM ON | 150100 / 235520 байт (63,7%) | 555276 / 712704 байт (77,9%) |
-| T114 | 151524 / 235520 байт (64,3%) | 558136 / 712704 байт (78,3%) |
-| ProMicro RA62 | 148004 / 235520 байт (62,8%) | 665608 / 712704 байт (93,4%) |
-| Heltec V4.3 OLED FEM ON | 176348 / 2097152 байт (8,4%) | 1502609 / 6553600 байт (22,9%) |
-| Wireless Paper WOOD | 174264 / 327680 байт (53,2%) | 1295769 / 3342336 байт (38,8%) |
-| Wireless Paper FULL | 174272 / 327680 байт (53,2%) | 1300741 / 3342336 байт (38,9%) |
+| T096 FEM ON | 150100 / 235520 байт (63,7%) | 555404 / 712704 байт (77,9%) |
+| T114 | 151524 / 235520 байт (64,3%) | 558552 / 712704 байт (78,4%) |
+| ProMicro RA62 | 148004 / 235520 байт (62,8%) | 666040 / 712704 байт (93,4%) |
+| Heltec V4.3 OLED FEM ON | 176348 / 2097152 байт (8,4%) | 1503193 / 6553600 байт (22,9%) |
+| Wireless Paper WOOD | 174264 / 327680 байт (53,2%) | 1296761 / 3342336 байт (38,8%) |
+| Wireless Paper FULL | 174272 / 327680 байт (53,2%) | 1301789 / 3342336 байт (38,9%) |
 
 Дополнительно локально в Linux/WSL прошли native core `69 / 69` и KISS modem `8 / 8`; GitHub Actions повторяет эти тесты. Аппаратная проверка новых V4.3/Wireless Paper-профилей до стабильного Release всё ещё обязательна.
 

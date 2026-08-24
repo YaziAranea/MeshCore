@@ -16,9 +16,9 @@ NRF52840_FAMILY = 0xADA52840
 APP_START = 0x26000
 
 EXPECTED = {
-    "T096_FEM_SmartUI_2.1.0-dev.uf2": b"T096 SmartUI 2.1.0-dev",
-    "T114_SmartUI_2.1.0-dev.uf2": b"T114 SmartUI 2.1.0-dev",
-    "ProMicro_RA62_SmartUI_2.1.0-dev.uf2": b"ProMicro SmartUI 2.1.0-dev",
+    "T096_FEM_SmartUI_2.1.0-dev.1.uf2": b"T096 SmartUI 2.1.0-dev.1",
+    "T114_SmartUI_2.1.0-dev.1.uf2": b"T114 SmartUI 2.1.0-dev.1",
+    "ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2": b"ProMicro SmartUI 2.1.0-dev.1",
 }
 
 

@@ -261,8 +261,8 @@ def draw_ble_pin():
     img, draw, t = new_screen(1, False)
     chrome(draw, t, profile, 1)
     center(draw, 21, "ПИНКОД BLE", load_font(profile, "S"), t["yellow"])
-    center(draw, 35, "123456", load_font(profile, "XL"), t["green"])
-    center(draw, 61, "ввести в приложении", load_font(profile, "S"), t["fg"])
+    center(draw, 38, "123456", load_font(profile, "XL"), t["green"])
+    center(draw, 57, "код в приложении", load_font(profile, "S"), t["fg"])
     return "03_ble_pin", img
 
 

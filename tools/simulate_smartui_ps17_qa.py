@@ -969,6 +969,59 @@ def render_unread_senders(profile: BoardProfile, *, count: int, cursor: int | No
     return frame
 
 
+def render_ble_pin(profile: BoardProfile) -> Frame:
+    """Render the exact non-e-paper BLE onboarding page font roles.
+
+    T096 uses its real small/large embedded bitmap profiles.  T114 uses the
+    fixed Roboto L instruction font plus every public user-selected hero font,
+    matching the board-specific protection in UITask.cpp.
+    """
+    frame = Frame(profile, "BLE PIN onboarding", True)
+    if profile.board == "T096":
+        family_index = next(
+            index for index, family in enumerate(T096_FAMILIES)
+            if family[0] == profile.profile
+        )
+        title_font: ExactFont = T096ExactFont(
+            f"{profile.profile} S", load_compact_settings_font(5 + family_index)
+        )
+        hero_font: ExactFont = T096ExactFont(
+            f"{profile.profile} XL", load_compact_settings_font(15 + family_index)
+        )
+        title_y, pin_y, hint_y = 21, 38, 57
+    elif profile.board == "T114":
+        title_font = profile.desired_font
+        hero_font = profile.current_font
+        title_y, pin_y, hint_y = 18, 31, 51
+    else:
+        raise ValueError(f"BLE PIN role simulator does not support {profile.board}")
+
+    def exact_text(font_obj: ExactFont, y: int, value: str, color: str, tag: str) -> None:
+        frame.font = font_obj
+        frame.text(profile.logical_w // 2, y, value, color, center=True,
+                   max_w=10000, tag=tag)
+
+    exact_text(title_font, title_y, "ПИНКОД BLE", "yellow", "pin title")
+    exact_text(hero_font, pin_y, "428731", "green", "pin digits")
+    exact_text(title_font, hint_y, "код в приложении", "light", "pin hint")
+
+    boxes = [item.physical_box for item in frame.elements if item.tag.startswith("pin ")]
+    no_overlap = True
+    for index, first in enumerate(boxes):
+        if first is None:
+            continue
+        for second in boxes[index + 1:]:
+            if second is None:
+                continue
+            if first[0] < second[2] and first[2] > second[0] and first[1] < second[3] and first[3] > second[1]:
+                no_overlap = False
+    frame.facts.update({"full_pin_text": all(
+        item.shown in ("ПИНКОД BLE", "428731", "код в приложении")
+        for item in frame.elements if item.tag.startswith("pin ")
+    ), "no_pin_overlap": no_overlap})
+    return frame
+
+
 def canonical_scenes(profile: BoardProfile) -> list[tuple[str, Frame]]:
     return [
         ("CURRENT keyboard: начало", render_keyboard(profile, desired=False, cursor=20)),
@@ -1070,6 +1123,15 @@ def run_release_assertions(profiles: dict[str, list[BoardProfile]]) -> tuple[lis
                 record(frame, f"unread senders={count}", semantic)
 
     t114_active = make_t114_active_profiles()
+    for profile in profiles["T096"]:
+        frame = render_ble_pin(profile)
+        record(frame, "BLE PIN onboarding",
+               bool(frame.facts.get("full_pin_text")) and bool(frame.facts.get("no_pin_overlap")))
+    for profile in t114_active:
+        frame = render_ble_pin(profile)
+        record(frame, "BLE PIN onboarding physical",
+               bool(frame.facts.get("full_pin_text")) and bool(frame.facts.get("no_pin_overlap")))
+
     for profile in t114_active:
         for state in ("missing", "off", "search", "fix"):
             frame = render_t114_gps(profile, state)
@@ -1133,6 +1195,7 @@ def write_reports(out: Path, records: list[dict], failures: list[str], canonical
         "Stress cases: 0/1/350 contacts, 1/8/350 compact rows, 0/1/12 DM senders,",
         "three keyboard pages, service-key selection, long Russian labels and typed-text tail.",
         "T114 extras: all 10 public fonts x 4 GPS states, font/theme pickers and physical 240x135 bounds.",
+        "BLE onboarding: all 5 T096 families and all 10 T114 public fonts, complete text and no overlaps.",
         "",
         "Reference overflows (informational, not the SmartUI PS17 gate):",
     ]

@@ -29,15 +29,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-dev.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-dev.1.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-dev.uf2
+            uf2_name: T114_SmartUI_2.1.0-dev.1.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2
 
     steps:
       - name: Check out source
@@ -134,15 +134,15 @@ jobs:
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1
           - board: Heltec Wireless Paper WOOD
             artifact_id: wireless-paper-wood
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_wood
-            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev
+            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1
 
     steps:
       - name: Check out source

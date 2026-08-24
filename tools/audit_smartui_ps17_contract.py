@@ -86,6 +86,7 @@ meshcore_h = read("src/MeshCore.h")
 nodeprefs = read("examples/companion_radio/NodePrefs.h")
 datastore = read("examples/companion_radio/DataStore.cpp")
 simulator = read("tools/simulate_smartui_ps17_qa.py")
+oled_simulator = read("tools/simulate_v4_3_oled_qa.py")
 adc_boards = {
     "T096": read("variants/heltec_t096/T096Board.cpp"),
     "T114": read("variants/heltec_t114/T114Board.h"),
@@ -94,6 +95,7 @@ adc_boards = {
     "Wireless Paper": read("variants/heltec_v3/HeltecV3Board.h"),
 }
 e213 = read("src/helpers/ui/E213Display.h") + read("src/helpers/ui/E213Display.cpp")
+wireless_simulator = read("tools/simulate_wireless_paper_ps17_qa.py")
 
 config_sources = {
     "T096": read("variants/heltec_t096/platformio.ini"),
@@ -118,12 +120,125 @@ effective = {
     for name in target_sections
 }
 
+for name, block in effective.items():
+    check(
+        f"{name}: BLE PIN onboarding page enabled",
+        "UI_BLE_PIN_PAGE=1" in block,
+        "every published display profile must expose its active random BLE passkey",
+    )
+
+check(
+    "All published profiles hide the duplicate legacy FIRST page",
+    all("UI_HIDE_FIRST_PAGE=1" in block for block in effective.values()),
+    "the dedicated BLE PIN page must be the only pairing page in the home carousel",
+)
+
+check(
+    "BLE PIN page is capability-aware and survives Wireless Paper idle mode",
+    has_all(
+        uitask,
+        (
+            "#if UI_BLE_PIN_PAGE",
+            "static int renderBlePinPage",
+            "return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0;",
+            "return renderBlePinPage(display, the_mesh.getBLEPin(), false);",
+            "_page = HomePage::BLE_PIN;",
+            "isBlePinPage()",
+            "connected && idle_saver != NULL && curr == idle_saver",
+        ),
+    ),
+    "the PIN must auto-open, remain visible through the e-paper saver and disappear after pairing",
+)
+
+reset_home_block = between(uitask, "void resetToFirstPage()", "void readGpsUiState")
+connection_block = between(uitask, "void UITask::updateConnectionState()", "void UITask::handlePendingPopupWake()")
+wake_block = between(uitask, "void UITask::markDisplayWake", "void UITask::resetButtonStateAfterWake")
+popup_wake_block = between(uitask, "void UITask::handlePendingPopupWake()", "void UITask::shutdown")
+check(
+    "Auto-home and off-screen pairing cannot strand or hide the BLE PIN page",
+    has_all(
+        reset_home_block,
+        (
+            "_page = defaultHomePage();",
+            "!_task->hasConnection() && the_mesh.getBLEPin() != 0",
+            "_page = HomePage::BLE_PIN;",
+        ),
+    )
+    and has_all(
+        connection_block,
+        (
+            "connected && home != NULL && ((HomeScreen*)home)->isBlePinPage()",
+            "((HomeScreen*)home)->resetToFirstPage();",
+        ),
+    )
+    and "curr == home && ((HomeScreen*)home)->isBlePinPage()" not in connection_block
+    and has_all(
+        wake_block,
+        (
+            "!hasConnection() && the_mesh.getBLEPin() != 0",
+            "curr != msg_preview",
+            "reset_to_clock = true;",
+            "gotoHomeFirstScreen();",
+        ),
+    )
+    and has_all(
+        popup_wake_block,
+        (
+            "setCurrScreen(msg_preview);",
+            "markDisplayWake(false);",
+        ),
+    ),
+    "reset paths must retain the PIN while disconnected without replacing a pending message popup",
+)
+
+check(
+    "Wireless Paper exact simulator covers the BLE PIN page",
+    has_all(
+        wireless_simulator,
+        (
+            "def render_ble_pin",
+            'Canvas("ble_pin")',
+            '"ПИНКОД BLE"',
+            '"PIN / PASSKEY: ЭТИ 6 ЦИФР"',
+        ),
+    ),
+    "the onboarding page must use the real embedded 5x7 Cyrillic glyph metrics",
+)
+
+check(
+    "T096 and T114 exact simulators sweep the BLE PIN page",
+    has_all(
+        simulator,
+        (
+            "def render_ble_pin",
+            'profiles["T096"]',
+            "for profile in t114_active",
+            '"no_pin_overlap"',
+        ),
+    ),
+    "all T096 families and all ten T114 public fonts must keep the complete PIN page in bounds",
+)
+
+check(
+    "V4.3 and ProMicro OLED styles sweep the BLE PIN page",
+    has_all(
+        oled_simulator,
+        (
+            '"BLE PIN"',
+            "def ble_pin_scene",
+            '"код в приложении"',
+            "for row, style in enumerate(STYLES)",
+        ),
+    ),
+    "all five 128x64 OLED spacing styles must keep the onboarding page in bounds",
+)
+
 keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FULL")
 
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev" in block,
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev.1" in block,
         "every public profile must use DM-only unread and carry the 2.1 development marker",
     )
     check(

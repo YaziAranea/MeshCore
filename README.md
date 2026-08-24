@@ -8,9 +8,9 @@
 - Heltec V4.3 OLED с включённым FEM/LNA;
 - Heltec Wireless Paper с e-paper 250×122.
 
-Текущий предварительный GitHub Release показывает маркер `SmartUI 2.1.0-dev`. Он добавляет V4.3/Wireless Paper и исправления для первых трёх плат, но не заменяет стабильную RC-линию `v2.0.0-rc1`.
+Текущий предварительный GitHub Release показывает маркер `SmartUI 2.1.0-dev.1`. Hotfix добавляет крупную автоматическую страницу активного BLE PIN на всех пяти платах и заменяет предыдущий `v2.1.0-dev`, но не заменяет RC-линию `v2.0.0-rc1`.
 
-[⬇ Скачать SmartUI v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-dev_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать SmartUI v2.1.0-dev.1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev.1) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-dev.1_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
@@ -39,6 +39,7 @@
 - Калибровка измерения АКБ доступна на всех поддерживаемых платах.
 - Исправлены потерянные при PS17-переносе настройки зуммера, чтение ключей `prefs.json`, содержащих цифры, и полная синхронизация времени назад вместе с timestamp сообщений.
 - Wireless Paper имеет рекомендуемый профиль `WOOD` и отдельный `FULL` с экранной клавиатурой.
+- Случайный активный BLE PIN автоматически и крупно показывается до подключения на всех пяти платах; после связи страница исчезает.
 
 ## Поддерживаемые платы
 
@@ -54,14 +55,14 @@
 
 ## Быстрый старт
 
-Для исправлений зуммера/настроек/времени, калибровки ADC и новых плат используйте [предварительный Release v2.1.0-dev](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev). Прежний [v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1) остаётся неизменным baseline для T096/T114/ProMicro.
+Для исправлений зуммера/настроек/времени, калибровки ADC, новых плат и исправленного первого BLE-сопряжения используйте [предварительный Release v2.1.0-dev.1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev.1). Предыдущий `v2.1.0-dev` заменён этим hotfix; [v2.0.0-rc1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.0.0-rc1) остаётся неизменным baseline для T096/T114/ProMicro.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
 3. Подключите плату исправным USB-кабелем с передачей данных.
 4. Для nRF52 переведите плату в UF2-загрузчик быстрым двойным нажатием **Reset**. Для ESP32-S3 используйте Web Flasher или `esptool`.
 5. На nRF52 скопируйте UF2 на USB-диск. На V4.3/Wireless Paper используйте `freshInstall-merged.bin` по адресу `0x0` или `update.bin` по адресу `0x10000`.
-6. Подключитесь из совместимого MeshCore-клиента. Если запрошен BLE PIN, используйте шестизначный код, показанный нодой.
+6. Подключитесь из совместимого MeshCore-клиента. До связи нода автоматически показывает крупную страницу BLE PIN; введите эти шесть цифр, когда клиент или система просит PIN/passkey.
 
 Полная инструкция: [прошивка](docs/FLASHING_RU.md) и [проверка SHA-256](docs/VERIFY_RU.md).
 
@@ -106,18 +107,20 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Финальная локальная проверка `SmartUI 2.1.0-dev` от 2026-08-22:
+Локальная QA-проверка hotfix `SmartUI 2.1.0-dev.1` от 2026-08-23:
 
-- шесть PlatformIO-профилей для пяти плат: `6 / 6 SUCCESS`;
 - Linux/WSL native-тесты: core `69 / 69`, KISS modem `8 / 8`;
-- статический контракт: `76 PASS / 0 FAIL`;
-- точные framebuffer-симуляции: core `455 / 455`, V4.3 `20 / 20`, Wireless Paper `160 / 160`;
-- структурная проверка: UF2 `3 / 3`, ESP32-S3 BIN-пары `3 / 3`.
+- статический контракт: `88 PASS / 0 FAIL`;
+- точные framebuffer-симуляции: core/T096/T114 `470 / 470`, V4.3 + ProMicro OLED `25 / 25`, Wireless Paper `180 / 180`.
+
+PIN-страница проверена всеми пятью семействами плат и всеми публичными шрифтами; на OLED 128×64 подсказка компактно пишется «код в приложении».
+
+Финальные локальные размеры hotfix `v2.1.0-dev.1` (`6 / 6 SUCCESS`):
 
 | Плата | RAM | Flash |
 |---|---:|---:|
 | T096 FEM ON | 63,7% | 77,9% |
-| T114 | 64,3% | 78,3% |
+| T114 | 64,3% | 78,4% |
 | ProMicro RA62 | 62,8% | 93,4% |
 | Heltec V4.3 OLED FEM ON | 8,4% | 22,9% |
 | Wireless Paper WOOD | 53,2% | 38,8% |
@@ -136,6 +139,7 @@ Read-only CI повторяет сборку, Linux native-тесты, все т
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
+- [Примечания к v2.1.0-dev.1](RELEASE_NOTES_v2.1.0-dev.1_RU.md)
 - [Примечания к v2.1.0-dev](RELEASE_NOTES_v2.1.0-dev_RU.md)
 - [Примечания к v2.0.0-rc1](RELEASE_NOTES_v2.0.0-rc1_RU.md)
 
