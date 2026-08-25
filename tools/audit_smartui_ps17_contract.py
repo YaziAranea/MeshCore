@@ -122,9 +122,9 @@ effective = {
 
 for name, block in effective.items():
     check(
-        f"{name}: BLE PIN onboarding page enabled",
-        "UI_BLE_PIN_PAGE=1" in block,
-        "every published display profile must expose its active random BLE passkey",
+        f"{name}: manual stable BLE PIN page enabled",
+        "UI_BLE_PIN_PAGE=1" in block and "BLE_PIN_PERSIST_RANDOM=1" in block,
+        "every published display profile must expose a passkey that survives ordinary reboots",
     )
 
 check(
@@ -133,21 +133,29 @@ check(
     "the dedicated BLE PIN page must be the only pairing page in the home carousel",
 )
 
+home_constructor_block = between(uitask, "HomeScreen(UITask*", "void resetToFirstPage()")
 check(
-    "BLE PIN page is capability-aware and survives Wireless Paper idle mode",
+    "BLE PIN page is manual and never replaces boot or Wireless Paper idle clock",
     has_all(
         uitask,
         (
             "#if UI_BLE_PIN_PAGE",
             "static int renderBlePinPage",
             "return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0;",
-            "return renderBlePinPage(display, the_mesh.getBLEPin(), false);",
-            "_page = HomePage::BLE_PIN;",
             "isBlePinPage()",
-            "connected && idle_saver != NULL && curr == idle_saver",
+        ),
+    )
+    and "return renderBlePinPage(display, the_mesh.getBLEPin(), false);" not in uitask
+    and "_page = HomePage::BLE_PIN;" not in home_constructor_block
+    and has_all(
+        mymesh,
+        (
+            "BLE_PIN_PERSIST_RANDOM",
+            "_prefs.ble_pin = _active_ble_pin;",
+            "_store->savePrefs(_prefs);",
         ),
     ),
-    "the PIN must auto-open, remain visible through the e-paper saver and disappear after pairing",
+    "the PIN must be opened by the user, never hijack idle UI, and remain stable until erase/reset",
 )
 
 reset_home_block = between(uitask, "void resetToFirstPage()", "void readGpsUiState")
@@ -155,15 +163,13 @@ connection_block = between(uitask, "void UITask::updateConnectionState()", "void
 wake_block = between(uitask, "void UITask::markDisplayWake", "void UITask::resetButtonStateAfterWake")
 popup_wake_block = between(uitask, "void UITask::handlePendingPopupWake()", "void UITask::shutdown")
 check(
-    "Auto-home and off-screen pairing cannot strand or hide the BLE PIN page",
+    "Messages, telemetry, auto-home and wake return to normal UI instead of BLE PIN",
     has_all(
         reset_home_block,
-        (
-            "_page = defaultHomePage();",
-            "!_task->hasConnection() && the_mesh.getBLEPin() != 0",
-            "_page = HomePage::BLE_PIN;",
-        ),
+        ("_page = defaultHomePage();",),
     )
+    and "getBLEPin" not in reset_home_block
+    and "HomePage::BLE_PIN" not in reset_home_block
     and has_all(
         connection_block,
         (
@@ -172,15 +178,13 @@ check(
         ),
     )
     and "curr == home && ((HomeScreen*)home)->isBlePinPage()" not in connection_block
+    and "connected && idle_saver != NULL && curr == idle_saver" not in connection_block
     and has_all(
         wake_block,
-        (
-            "!hasConnection() && the_mesh.getBLEPin() != 0",
-            "curr != msg_preview",
-            "reset_to_clock = true;",
-            "gotoHomeFirstScreen();",
-        ),
+        ("gotoHomeFirstScreen();",),
     )
+    and "getBLEPin" not in wake_block
+    and "curr != msg_preview" not in wake_block
     and has_all(
         popup_wake_block,
         (
@@ -188,7 +192,7 @@ check(
             "markDisplayWake(false);",
         ),
     ),
-    "reset paths must retain the PIN while disconnected without replacing a pending message popup",
+    "PIN onboarding must never take priority over the clock, saver, telemetry or message popup",
 )
 
 check(

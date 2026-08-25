@@ -1656,7 +1656,13 @@ void MyMesh::begin(bool has_display) {
 #ifdef DISPLAY_CLASS
     if (has_display && BLE_PIN_CODE == 123456) {
       StdRNG rng;
-      _active_ble_pin = rng.nextInt(100000, 999999); // random pin each session
+      _active_ble_pin = rng.nextInt(100000, 999999);
+#if defined(BLE_PIN_PERSIST_RANDOM) && BLE_PIN_PERSIST_RANDOM
+      // Generate a new passkey after an erase/factory reset, then keep it
+      // stable across ordinary reboots so the printed UI value stays useful.
+      _prefs.ble_pin = _active_ble_pin;
+      _store->savePrefs(_prefs);
+#endif
     } else {
       _active_ble_pin = BLE_PIN_CODE; // otherwise static pin
     }

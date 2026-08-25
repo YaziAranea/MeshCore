@@ -3397,11 +3397,6 @@ static void drawPaperBatteryIndicator(DisplayDriver& display, uint16_t milli_vol
 }
 
 static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCClock* rtc, bool with_backdrop) {
-#if UI_BLE_PIN_PAGE
-  if (!task->hasConnection() && the_mesh.getBLEPin() != 0) {
-    return renderBlePinPage(display, the_mesh.getBLEPin(), false);
-  }
-#endif
   uint32_t rtc_now = rtc->getCurrentTime();
   bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
   DateTime dt(time_valid ? uiLocalClockTime(rtc_now) : 0);
@@ -6319,11 +6314,6 @@ public:
         memset(&_compact_undo_prefs, 0, sizeof(_compact_undo_prefs));
 #endif
 #endif
-#if UI_BLE_PIN_PAGE
-        if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
-          _page = HomePage::BLE_PIN;
-        }
-#endif
        }
 
   void resetToFirstPage() {
@@ -6331,14 +6321,6 @@ public:
     cancelAdcEdit();
 #endif
     _page = defaultHomePage();
-#if UI_BLE_PIN_PAGE
-    // Auto-home, display wake and the global Home shortcut must never hide
-    // the only passkey a fresh client can use.  Once connected, the same
-    // reset naturally returns to the normal clock page.
-    if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
-      _page = HomePage::BLE_PIN;
-    }
-#endif
     _settings_open = false;
     _quick_reply_open = false;
     _quick_reply_idx = 0;
@@ -11417,15 +11399,6 @@ void UITask::extendAutoOff(unsigned long now) {
 
 void UITask::markDisplayWake(bool reset_to_clock) {
   unsigned long now = millis();
-#if UI_BLE_PIN_PAGE
-  // A user display wake during first-time pairing must reveal the active
-  // passkey, even on boards whose normal wake policy preserves the page.
-  // A message popup already selected by handlePendingPopupWake() keeps
-  // priority and returns to the onboarding page after it is dismissed.
-  if (!hasConnection() && the_mesh.getBLEPin() != 0 && curr != msg_preview) {
-    reset_to_clock = true;
-  }
-#endif
 #if UI_WAKE_DEBUG_LOG
   Serial.printf("[DBG UI] markDisplayWake now=%lu reset=%d display_on=%d\r\n",
                 now, reset_to_clock ? 1 : 0,
@@ -11614,14 +11587,6 @@ void UITask::updateConnectionState() {
       ((HomeScreen*)home)->resetToFirstPage();
       if (curr == home) _next_refresh = 0;
     }
-#if UI_EINK_IDLE_SCREENSAVER
-    if (connected && idle_saver != NULL && curr == idle_saver) {
-      // The e-paper saver can be holding the onboarding PIN for a full
-      // minute.  Refresh immediately after pairing so the passkey does not
-      // remain visible after it has served its purpose.
-      _next_refresh = 0;
-    }
-#endif
 #endif
   }
 }
