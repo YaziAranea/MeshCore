@@ -239,9 +239,9 @@ jobs:
       matrix:
         environment:
           - Heltec_v3_companion_radio_ble
-          - RAK_4631_companion_radio_ble
+          - RAK_4631_companion_radio_usb
           - Xiao_S3_WIO_companion_radio_ble
-          - Heltec_t1_companion_radio_ble
+          - Heltec_t1_companion_radio_usb
 
     # Compile-only representatives of shared display backends. These boards
     # are not added to the supported SmartUI release or its downloadable files.

@@ -33,7 +33,9 @@ git switch smartui-ps17.2-dev
 | Wireless Paper WOOD | `Heltec_Wireless_Paper_companion_radio_ble_smartui_wood` | merged + update BIN |
 | Wireless Paper FULL | `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` | merged + update BIN |
 
-FakeTec, V4 TFT и обычный Heltec V3 не входят в набор релизных файлов. Отдельная compile-only матрица CI проверяет общие display-драйверы на `Heltec_v3_companion_radio_ble`, `RAK_4631_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_ble`; это не заявление поддержки этих плат в Release.
+FakeTec, V4 TFT и обычный Heltec V3 не входят в набор релизных файлов. Отдельная compile-only матрица CI проверяет общие display-драйверы на `Heltec_v3_companion_radio_ble`, `RAK_4631_companion_radio_usb`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это не заявление поддержки этих плат в Release.
+
+Известное ограничение этой ветки: дополнительные BLE-цели `Heltec_t1_companion_radio_ble` и `RAK_4631_companion_radio_ble` в CI превысили доступную flash на 636 и 24204 байта соответственно. Они не входят в опубликованный комплект. Для контроля тех же общих UI/display-бэкендов CI использует их существующие USB-варианты без BLE; это не доказательство дефекта upstream и не заявление, что BLE-варианты теперь исправлены. Шесть релизных конфигураций остаются неизменными.
 
 ## Сборка UF2
 
