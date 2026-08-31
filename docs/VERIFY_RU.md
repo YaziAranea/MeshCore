@@ -4,7 +4,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 ## Где находится эталон
 
-Для предварительного hotfix `v2.1.0-dev.1` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev.1):
+Для Release `v2.1.0-dev.2` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-dev.2):
 
 - UF2 или BIN своей платы;
 - `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
@@ -21,14 +21,14 @@ GitHub хранит артефакт как ZIP. Распакуйте бинар
 Для одного файла:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-dev.1.uf2
+Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-dev.2.uf2
 ```
 
 или:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-dev.1.uf2
-Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2
+Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-dev.2.uf2
+Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2
 ```
 
 Скопируйте полученную 64-символьную строку и сравните её с соответствующей строкой своего манифеста. Регистр букв не важен; каждый символ важен.
@@ -62,7 +62,7 @@ if ($failed) { throw 'SHA-256 verification failed' }
 ## Windows без PowerShell
 
 ```text
-certutil -hashfile T096_FEM_SmartUI_2.1.0-dev.1.uf2 SHA256
+certutil -hashfile T096_FEM_SmartUI_2.1.0-dev.2.uf2 SHA256
 ```
 
 ## Linux
@@ -78,7 +78,7 @@ sha256sum -c SHA256SUMS-ESP32.txt
 Для одного файла:
 
 ```bash
-shasum -a 256 T096_FEM_SmartUI_2.1.0-dev.1.uf2
+shasum -a 256 T096_FEM_SmartUI_2.1.0-dev.2.uf2
 ```
 
 ## Если сумма не совпала

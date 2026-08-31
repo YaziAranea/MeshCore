@@ -7,6 +7,24 @@
 #include <Adafruit_SSD1306.h>
 #include <helpers/RefCountedDigitalPin.h>
 
+#ifndef SSD1306_COMPACT_STYLE_PROFILE
+  #if defined(HELTEC_LORA_V4_3_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
+    #define SSD1306_COMPACT_STYLE_PROFILE 1
+  #else
+    #define SSD1306_COMPACT_STYLE_PROFILE 0
+  #endif
+#endif
+
+// Compact profiles use five styles over the shared 5x7 glyphs. Do not keep
+// the much larger TFT bitmap tables through unreachable runtime fallbacks.
+#ifndef SSD1306_USE_EMBEDDED_FONTS
+  #define SSD1306_USE_EMBEDDED_FONTS (!SSD1306_COMPACT_STYLE_PROFILE)
+#endif
+
+#if !SSD1306_COMPACT_STYLE_PROFILE && !SSD1306_USE_EMBEDDED_FONTS
+  #error "Non-compact SSD1306 profiles require embedded bitmap fonts"
+#endif
+
 #ifndef PIN_OLED_RESET
   #define PIN_OLED_RESET        21 // Reset pin # (or -1 if sharing Arduino reset pin)
 #endif
@@ -27,8 +45,10 @@ class SSD1306Display : public DisplayDriver {
   bool i2c_probe(TwoWire& wire, uint8_t addr);
   bool useBoldStroke() const;
   bool useLegacyFont() const;
+#if SSD1306_USE_EMBEDDED_FONTS
   const struct MeshcoreBitmapFont* currentFont() const;
   const struct MeshcoreBitmapGlyph* glyphForCodepoint(uint16_t codepoint) const;
+#endif
   uint8_t fontLineHeight() const;
   uint16_t readCodepoint(const char*& str) const;
   uint16_t codepointWidth(uint16_t codepoint) const;

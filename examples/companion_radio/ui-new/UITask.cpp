@@ -1,4 +1,6 @@
 #include "UITask.h"
+#include "BatteryShutdownPolicy.h"
+#include "ConfirmedChoice.h"
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/ui/Utf8Cyrillic5x7.h>
@@ -597,6 +599,11 @@ static void uiButtonWakeIrqHandler() {
 
 #ifndef LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED
   #define LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED (!DISABLE_LOW_BATTERY_SHUTDOWN)
+#endif
+
+// Non-SmartUI profiles retain the original meaning of disabled protection.
+#ifndef LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS
+  #define LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS 0
 #endif
 
 #ifndef UI_LOW_BATTERY_SHUTDOWN_PAGE
@@ -3652,6 +3659,9 @@ class HomeScreen : public UIScreen {
 #endif
     FIRST,
     SETTINGS,
+#if UI_COMPACT_SETTINGS_MENU == 1
+    NOTIFY_PICKER,
+#endif
     SHUTDOWN,
     Count    // keep as last
   };
@@ -3678,6 +3688,8 @@ class HomeScreen : public UIScreen {
   uint8_t _compact_settings_depth;
   uint8_t _compact_settings_group;
   uint8_t _compact_settings_cursor;
+  smartui::ConfirmedChoice _notify_picker;
+  uint8_t _notify_picker_page = SETTINGS;
 #if UI_APPEARANCE_MENU
   uint8_t _font_picker_cursor;
   uint8_t _theme_picker_cursor;
@@ -4636,7 +4648,11 @@ class HomeScreen : public UIScreen {
         break;
 #endif
       case HomePage::ALERT_VOLUME:
+#if UI_TONE_HIGH_DRIVE_PAGE == 1
         snprintf(out, out_len, "%s", _task->getNotifyToneDriveName());
+#else
+        snprintf(out, out_len, "%u/10", _task->getNotifyToneVolume());
+#endif
         break;
 #if UI_TONE_RESONANCE_PAGE == 1
       case HomePage::ALERT_TONE_RESONANCE:
@@ -4755,7 +4771,13 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
       case HomePage::LOW_BATT_SHUTDOWN:
-        snprintf(out, out_len, "%s", _task->isLowBatteryShutdownEnabled() ? "ВКЛ" : "ВЫКЛ");
+        if (_task->getLowBatteryShutdownThreshold()) {
+          uint16_t mv = _task->getLowBatteryShutdownThreshold();
+          snprintf(out, out_len, "%s %u.%u", _task->isLowBatteryShutdownEnabled() ? "ВКЛ" : "ВЫК",
+                   mv / 1000, (mv % 1000) / 100);
+        } else {
+          snprintf(out, out_len, "ВЫКЛ");
+        }
         break;
 #endif
 #if UI_SMART_B11_EXTRAS == 1
@@ -5078,6 +5100,145 @@ class HomeScreen : public UIScreen {
   }
 #endif
 
+  int notifyPickerActiveValue() const {
+    switch (_notify_picker_page) {
+#ifdef PIN_MSG_ALERT
+      case HomePage::ALERT_LED: return _task->getNotifyLedPin();
+#endif
+#ifdef PIN_MSG_TONE
+      case HomePage::ALERT_TONE_PIN: return _task->getNotifyTonePin();
+      case HomePage::ALERT_VOLUME: return _task->getNotifyToneVolume();
+#if UI_TONE_RESONANCE_PAGE == 1
+      case HomePage::ALERT_TONE_RESONANCE: return _task->getNotifyToneResonanceHz();
+#endif
+#endif
+      case HomePage::ALERT_VIBE_PIN: return _task->getNotifyVibePin();
+      default: return -1;
+    }
+  }
+
+  void beginNotifyPicker(uint8_t page) {
+    _notify_picker.reset();
+    _notify_picker_page = page;
+#ifdef PIN_MSG_TONE
+#if UI_TONE_RESONANCE_PAGE == 1
+    if (page == HomePage::ALERT_TONE_RESONANCE) {
+      for (int hz = 1800; hz <= 4200; hz += 400) _notify_picker.add(hz);
+    } else
+#endif
+    if (page == HomePage::ALERT_VOLUME) {
+      for (int volume = 1; volume <= 10; volume++) _notify_picker.add(volume);
+    } else
+#endif
+    {
+#if UI_NOTIFY_GPIO_SELECT
+#if defined(PIN_MSG_TONE) && UI_TONE_BRIDGE_PAGE == 1
+      if (page == HomePage::ALERT_TONE_PIN && _task->isNotifyToneBridgeEnabled()) {
+        _task->cycleNotifyTonePin();  // Fixed bridge pair: informational alert only.
+        return;
+      }
+#endif
+      for (size_t i = 0; i < sizeof(notify_gpio_pins) / sizeof(notify_gpio_pins[0]); i++) {
+        int pin = notify_gpio_pins[i];
+        if (isNotifyGpioPinBlockedByBuild(pin)) continue;
+#if UI_TONE_BRIDGE_PAGE == 1
+        if (_task->isNotifyToneBridgeEnabled() &&
+            (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) continue;
+#endif
+        _notify_picker.add(pin);
+      }
+#else
+      _task->showAlert("Вывод фиксирован", 900);
+      return;
+#endif
+    }
+    _notify_picker.begin(notifyPickerActiveValue());
+    _page = HomePage::NOTIFY_PICKER;
+  }
+
+  void renderNotifyPicker(DisplayDriver& display) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    int line_h = display.getTextLineHeight();
+    if (line_h < 8) line_h = 8;
+    const uint8_t item_count = _notify_picker.count() + 1;
+    const uint8_t cursor = _notify_picker.cursor();
+    int row_y = 14 + line_h + 1;
+    if (display.height() <= 64 && row_y < 28) row_y = 28;
+    int row_h = line_h > 12 ? line_h : 12;
+    int available_rows = (display.height() - row_y) / row_h;
+    uint8_t visible_rows = available_rows < 1 ? 1 : available_rows;
+    if (visible_rows > UI_COMPACT_SETTINGS_MAX_ROWS) visible_rows = UI_COMPACT_SETTINGS_MAX_ROWS;
+    uint8_t start = cursor >= visible_rows ? cursor - visible_rows + 1 : 0;
+    if (item_count > visible_rows && start + visible_rows > item_count) start = item_count - visible_rows;
+    const bool has_scrollbar = item_count > visible_rows;
+
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, compactSettingsLabel(_notify_picker_page));
+    display.setColor(DisplayDriver::LIGHT);
+    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    const int active_value = notifyPickerActiveValue();
+    for (uint8_t row = 0; row < visible_rows && start + row < item_count; row++) {
+      uint8_t index = start + row;
+      bool selected = index == cursor;
+      int y = row_y + row * row_h;
+      if (selected) {
+        display.setColor(DisplayDriver::YELLOW);
+        display.fillRect(0, y, display.width() - (has_scrollbar ? 3 : 0), row_h);
+      }
+      display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+      display.setBold(selected);
+      char label[32];
+      bool active = false;
+      if (index < _notify_picker.count()) {
+        int value = _notify_picker.value(index);
+        active = value == active_value;
+        const char* format = "D%d";
+#ifdef PIN_MSG_TONE
+        if (_notify_picker_page == HomePage::ALERT_VOLUME) format = "%d/10";
+#if UI_TONE_RESONANCE_PAGE == 1
+        if (_notify_picker_page == HomePage::ALERT_TONE_RESONANCE) format = "%d Гц";
+#endif
+#endif
+        snprintf(label, sizeof(label), format, value);
+      } else {
+        snprintf(label, sizeof(label), "Отмена");
+      }
+      int right_guard = has_scrollbar ? 5 : 3;
+      int marker_width = active ? display.getTextWidth("OK") + 4 : 0;
+      drawRichTextStaticEllipsized(display, 3, y, display.width() - 3 - right_guard - marker_width, label);
+      if (active) display.drawTextRightAlign(display.width() - right_guard, y, "OK");
+      display.setBold(false);
+    }
+    if (has_scrollbar) {
+      int track_h = visible_rows * row_h - 2;
+      int thumb_h = (track_h * visible_rows) / item_count;
+      if (thumb_h < 4) thumb_h = 4;
+      int thumb_y = row_y + ((track_h - thumb_h) * start) / (item_count - visible_rows);
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawRect(display.width() - 2, row_y, 2, track_h);
+      display.setColor(DisplayDriver::YELLOW);
+      display.fillRect(display.width() - 2, thumb_y, 2, thumb_h);
+    }
+    uiPopFont(display, saved_font);
+  }
+
+  void applyNotifyPickerChoice(int16_t value) {
+    switch (_notify_picker_page) {
+#ifdef PIN_MSG_ALERT
+      case HomePage::ALERT_LED: _task->setNotifyLedPin(value); break;
+#endif
+#ifdef PIN_MSG_TONE
+      case HomePage::ALERT_TONE_PIN: _task->setNotifyTonePin(value); break;
+      case HomePage::ALERT_VOLUME: _task->setNotifyToneVolume(value); break;
+#if UI_TONE_RESONANCE_PAGE == 1
+      case HomePage::ALERT_TONE_RESONANCE: _task->setNotifyToneResonanceHz(value); break;
+#endif
+#endif
+      case HomePage::ALERT_VIBE_PIN: _task->setNotifyVibePin(value); break;
+      default: break;
+    }
+  }
+
   void activateCompactSetting(uint8_t page) {
 #if UI_SMART_B11_EXTRAS == 1
     NodePrefs before = *_node_prefs;
@@ -5134,19 +5295,23 @@ class HomeScreen : public UIScreen {
         break;
 #endif
       case HomePage::ALERT_VOLUME:
+#if UI_TONE_HIGH_DRIVE_PAGE == 1
         _task->toggleNotifyToneHighDrive();
+#else
+        beginNotifyPicker(page);
+#endif
         break;
 #if UI_TONE_RESONANCE_PAGE == 1
       case HomePage::ALERT_TONE_RESONANCE:
-        _task->cycleNotifyToneResonance();
+        beginNotifyPicker(page);
         break;
 #endif
       case HomePage::ALERT_TONE_PIN:
-        _task->cycleNotifyTonePin();
+        beginNotifyPicker(page);
         break;
 #endif
       case HomePage::ALERT_VIBE_PIN:
-        _task->cycleNotifyVibePin();
+        beginNotifyPicker(page);
         break;
 #if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
       case HomePage::ALERT_TONE_BRIDGE:
@@ -5155,7 +5320,7 @@ class HomeScreen : public UIScreen {
 #endif
 #ifdef PIN_MSG_ALERT
       case HomePage::ALERT_LED:
-        _task->cycleNotifyLedPin();
+        beginNotifyPicker(page);
         break;
 #endif
 #if UI_APPEARANCE_MENU
@@ -5298,6 +5463,33 @@ class HomeScreen : public UIScreen {
   bool handleCompactSettingsInput(char c) {
     if (!_settings_open) return false;
     if (_page != HomePage::SETTINGS) {
+      if (_page == HomePage::NOTIFY_PICKER) {
+        if (c == KEY_LEFT || c == KEY_PREV) {
+          _notify_picker.move(-1);
+          return true;
+        }
+        if (c == KEY_NEXT || c == KEY_RIGHT) {
+          _notify_picker.move(1);
+          return true;
+        }
+        if (c != KEY_ENTER) return false;
+        int16_t value;
+        if (_notify_picker.selected(value)) {
+#if UI_SMART_B11_EXTRAS == 1
+          NodePrefs before = *_node_prefs;
+#endif
+          applyNotifyPickerChoice(value);
+#if UI_SMART_B11_EXTRAS == 1
+          if (memcmp(&before, _node_prefs, sizeof(NodePrefs)) != 0) {
+            _compact_undo_prefs = before;
+            _compact_undo_valid = true;
+          }
+#endif
+        }
+        _notify_picker.reset();
+        _page = HomePage::SETTINGS;
+        return true;
+      }
 #if UI_APPEARANCE_MENU
       if (_page == HomePage::FONT_PICKER || _page == HomePage::THEME_PICKER) {
         bool font_picker = _page == HomePage::FONT_PICKER;
@@ -5434,6 +5626,9 @@ class HomeScreen : public UIScreen {
 #endif
 
   bool isSettingsItem(uint8_t page) const {
+#if UI_COMPACT_SETTINGS_MENU == 1
+    if (page == HomePage::NOTIFY_PICKER) return true;
+#endif
 #if UI_NOTIFICATION_SETTINGS == 1
     if (page == HomePage::ALERTS) return true;
 #endif
@@ -5526,6 +5721,9 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
+#if UI_COMPACT_SETTINGS_MENU == 1
+    if (page == HomePage::NOTIFY_PICKER) return false;  // Only entered through a setting.
+#endif
 #if UI_NOTIFICATION_SETTINGS == 0
     if (page == HomePage::ALERTS || page == HomePage::IMPORTANT_NOTIFY) return false;
 #endif
@@ -6331,6 +6529,7 @@ public:
     _compact_settings_depth = 0;
     _compact_settings_group = 0;
     _compact_settings_cursor = 0;
+    _notify_picker.reset();
 #if UI_APPEARANCE_MENU
     _font_picker_cursor = 0;
     _theme_picker_cursor = 0;
@@ -7849,6 +8048,12 @@ public:
       int y = 18;
       int row_step = display.getTextLineHeight();
       if (row_step < 8) row_step = 8;
+      // Four GPS rows must fit below the chrome. T114's real compact font
+      // occupies 24 physical pixels (12 logical), not the old 22px mock-up.
+      if (display.height() <= 64) {
+        int gps_top = display.height() - 4 * row_step;
+        if (gps_top >= 14 && y > gps_top) y = gps_top;
+      }
       bool gps_state = false;
       bool gps_valid = false;
       int sats = -1;
@@ -8010,12 +8215,13 @@ public:
 #endif
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     } else if (_page == HomePage::LOW_BATT_SHUTDOWN) {
+      uint16_t threshold = _task->getLowBatteryShutdownThreshold();
 #if UI_V4_3_OLED_PROFILE
       char status_line[32];
       char threshold_line[32];
       snprintf(status_line, sizeof(status_line), "Статус: %s", _task->isLowBatteryShutdownEnabled() ? "ВКЛ" : "ВЫКЛ");
       snprintf(threshold_line, sizeof(threshold_line), "Порог: %u.%02uВ",
-          AUTO_SHUTDOWN_MILLIVOLTS / 1000, (AUTO_SHUTDOWN_MILLIVOLTS % 1000) / 10);
+          threshold / 1000, (threshold % 1000) / 10);
       drawOledCompactMenuPage(display, "Защита АКБ", status_line, threshold_line, PRESS_LABEL);
 #else
       display.setColor(DisplayDriver::GREEN);
@@ -8026,13 +8232,18 @@ public:
       display.print(tmp);
       display.setCursor(0, 42);
       snprintf(tmp, sizeof(tmp), "Порог: %u.%02uВ",
-          AUTO_SHUTDOWN_MILLIVOLTS / 1000, (AUTO_SHUTDOWN_MILLIVOLTS % 1000) / 10);
+          threshold / 1000, (threshold % 1000) / 10);
       display.print(tmp);
       display.setCursor(0, 53);
       display.print(PRESS_LABEL);
 #endif
 #endif
     }
+#if UI_COMPACT_SETTINGS_MENU == 1
+    else if (_page == HomePage::NOTIFY_PICKER) {
+      renderNotifyPicker(display);
+    }
+#endif
 #if UI_COMPACT_SETTINGS_MENU == 1 && UI_APPEARANCE_MENU
     else if (_page == HomePage::FONT_PICKER) {
       renderAppearancePicker(display, true);
@@ -9162,16 +9373,32 @@ bool UITask::isLowBatteryShutdownEnabled() const {
 #endif
 }
 
+uint16_t UITask::getLowBatteryShutdownThreshold() const {
+#if defined(AUTO_SHUTDOWN_MILLIVOLTS)
+  return smartui::batteryShutdownThreshold(isLowBatteryShutdownEnabled(),
+      AUTO_SHUTDOWN_MILLIVOLTS, LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS);
+#else
+  return 0;
+#endif
+}
+
 void UITask::toggleLowBatteryShutdown() {
 #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
   if (_node_prefs == NULL) return;
 
   _node_prefs->low_battery_shutdown_enabled = _node_prefs->low_battery_shutdown_enabled ? 0 : 1;
-  if (!isLowBatteryShutdownEnabled()) {
-    _low_batt_strikes = 0;
-  }
+  _low_batt_strikes = 0;  // Start a fresh confirmation sequence for the new threshold.
   the_mesh.savePrefs();
-  showAlert(isLowBatteryShutdownEnabled() ? "Защита АКБ: ВКЛ" : "Защита АКБ: ВЫКЛ", 900);
+  char alert[48];
+  uint16_t threshold = getLowBatteryShutdownThreshold();
+  if (threshold) {
+    snprintf(alert, sizeof(alert), "%s: %u.%uВ",
+             isLowBatteryShutdownEnabled() ? "Защита" : "Резерв",
+             threshold / 1000, (threshold % 1000) / 100);
+  } else {
+    snprintf(alert, sizeof(alert), "Защита АКБ: ВЫКЛ");
+  }
+  showAlert(alert, 1100);
   _next_refresh = 0;
 #endif
 }
@@ -9725,11 +9952,15 @@ const char* UITask::getNotifyToneName(uint8_t tone_id) const {
 void UITask::setCommonNotifyTone(uint8_t tone_id) {
 #ifdef PIN_MSG_TONE
   if (_node_prefs == NULL || tone_id >= notify_tone_count) return;
+  bool changed = _node_prefs->notify_tone_id != tone_id ||
+                 _node_prefs->notify_tone_system_id != tone_id ||
+                 _node_prefs->notify_tone_dm_id != tone_id ||
+                 _node_prefs->notify_tone_mention_id != tone_id;
   _node_prefs->notify_tone_id = tone_id;
   _node_prefs->notify_tone_system_id = tone_id;
   _node_prefs->notify_tone_dm_id = tone_id;
   _node_prefs->notify_tone_mention_id = tone_id;
-  the_mesh.savePrefs();
+  if (changed) the_mesh.savePrefs();
 
   char alert[48];
   snprintf(alert, sizeof(alert), "Мелодия: %s", getNotifyToneName(tone_id));
@@ -9890,15 +10121,7 @@ void UITask::cycleNotifyLedPin() {
 #else
   next = getNextNotifyGpioPin(getMsgAlertPin());
 #endif
-  configureMsgAlertPin(next);
-  if (_node_prefs != NULL) {
-    _node_prefs->notify_gpio_pin = next;
-    the_mesh.savePrefs();
-  }
-  char alert[32];
-  snprintf(alert, sizeof(alert), "Свет: D%d", next);
-  showAlert(alert, 900);
-  triggerMsgAlert();
+  setNotifyLedPin(next);
 #else
   showAlert("Свет фикс", 900);
 #endif
@@ -9919,15 +10142,7 @@ void UITask::cycleNotifyTonePin() {
   }
 #endif
   int next = getNextNotifyGpioPin(getMsgTonePin());
-  configureMsgTonePin(next);
-  if (_node_prefs != NULL) {
-    _node_prefs->notify_tone_pin = next;
-    the_mesh.savePrefs();
-  }
-  char alert[32];
-  snprintf(alert, sizeof(alert), "Зумер: D%d", next);
-  showAlert(alert, 900);
-  startMsgTone();
+  setNotifyTonePin(next);
 #else
   showAlert("Зумер фикс", 900);
 #endif
@@ -9945,17 +10160,74 @@ void UITask::cycleNotifyVibePin() {
 #else
   next = getNextNotifyGpioPin(current);
 #endif
-  configureMsgVibePin(next);
-  if (_node_prefs != NULL) {
-    _node_prefs->notify_vibe_pin = next;
-    the_mesh.savePrefs();
-  }
+  setNotifyVibePin(next);
+#else
+  showAlert("Вибро фикс", 900);
+#endif
+}
+
+void UITask::setNotifyLedPin(int pin) {
+#if defined(PIN_MSG_ALERT) && UI_NOTIFY_GPIO_SELECT
+  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+#if UI_TONE_BRIDGE_PAGE == 1
+  if (isNotifyToneBridgeEnabled() &&
+      (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
+#endif
+  if (getMsgAlertPin() == pin) return;
+  configureMsgAlertPin(pin);
+  _node_prefs->notify_gpio_pin = pin;
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+  _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
+  the_mesh.savePrefs();
   char alert[32];
-  snprintf(alert, sizeof(alert), "Вибро: D%d", next);
+  snprintf(alert, sizeof(alert), "Свет: D%d", pin);
+  showAlert(alert, 900);
+  triggerMsgAlert();
+#else
+  (void)pin;
+#endif
+}
+
+void UITask::setNotifyTonePin(int pin) {
+#if defined(PIN_MSG_TONE) && UI_NOTIFY_GPIO_SELECT
+  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+  if (isNotifyToneBridgeEnabled() || getMsgTonePin() == pin) return;
+  configureMsgTonePin(pin);
+  _node_prefs->notify_tone_pin = pin;
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+  _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
+  the_mesh.savePrefs();
+  char alert[32];
+  snprintf(alert, sizeof(alert), "Зумер: D%d", pin);
+  showAlert(alert, 900);
+  startMsgTone();
+#else
+  (void)pin;
+#endif
+}
+
+void UITask::setNotifyVibePin(int pin) {
+#if UI_NOTIFY_GPIO_SELECT
+  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+#if UI_TONE_BRIDGE_PAGE == 1
+  if (isNotifyToneBridgeEnabled() &&
+      (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
+#endif
+  if (getMsgVibePin() == pin) return;
+  configureMsgVibePin(pin);
+  _node_prefs->notify_vibe_pin = pin;
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+  _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
+  the_mesh.savePrefs();
+  char alert[32];
+  snprintf(alert, sizeof(alert), "Вибро: D%d", pin);
   showAlert(alert, 900);
   triggerMsgVibe();
 #else
-  showAlert("Вибро фикс", 900);
+  (void)pin;
 #endif
 }
 
@@ -10017,17 +10289,27 @@ void UITask::cycleNotifySystemSound() {
 
 void UITask::cycleNotifyToneVolume() {
 #ifdef PIN_MSG_TONE
-  if (_node_prefs == NULL) return;
-
   uint8_t volume = getNotifyToneVolume();
   volume = volume >= 10 ? 1 : volume + 1;
+  setNotifyToneVolume(volume);
+#endif
+}
+
+void UITask::setNotifyToneVolume(uint8_t volume) {
+#if defined(PIN_MSG_TONE) && UI_TONE_HIGH_DRIVE_PAGE != 1
+  if (!_node_prefs || volume < 1 || volume > 10 || getNotifyToneVolume() == volume) return;
   _node_prefs->notify_tone_volume = volume;
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+  _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
   the_mesh.savePrefs();
 
   char alert[32];
   snprintf(alert, sizeof(alert), "Громк: %u/10", volume);
   showAlert(alert, 900);
   startMsgTone();
+#else
+  (void)volume;
 #endif
 }
 
@@ -10067,13 +10349,26 @@ void UITask::cycleNotifyToneResonance() {
       break;
     }
   }
-  _node_prefs->notify_tone_resonance_hz = resonance_steps[next];
+  setNotifyToneResonanceHz(resonance_steps[next]);
+#endif
+}
+
+void UITask::setNotifyToneResonanceHz(uint16_t frequency) {
+#if UI_TONE_RESONANCE_PAGE == 1 && defined(PIN_MSG_TONE)
+  if (!_node_prefs || frequency < 1800 || frequency > 4200 ||
+      (frequency - 1800) % 400 != 0 || getNotifyToneResonanceHz() == frequency) return;
+  _node_prefs->notify_tone_resonance_hz = frequency;
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+  _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
   the_mesh.savePrefs();
 
   char alert[40];
-  snprintf(alert, sizeof(alert), "Тест: %u Гц", resonance_steps[next]);
+  snprintf(alert, sizeof(alert), "Тест: %u Гц", frequency);
   showAlert(alert, 900);
-  startNotifyToneTest(resonance_steps[next]);
+  startNotifyToneTest(frequency);
+#else
+  (void)frequency;
 #endif
 }
 
@@ -11958,19 +12253,14 @@ void UITask::loop() {
 #endif
 
 #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
-  if (!isLowBatteryShutdownEnabled()) {
+  const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();
+  if (shutdownThreshold == 0) {
     _low_batt_strikes = 0;
   } else if (millis() > next_batt_chck) {
     uint16_t milliVolts = getBattMilliVolts();
-    bool validLowReading = milliVolts >= LOW_BATTERY_VALID_MIN_MILLIVOLTS &&
-                           milliVolts < AUTO_SHUTDOWN_MILLIVOLTS;
-    if (validLowReading) {
-      if (_low_batt_strikes < LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT) {
-        _low_batt_strikes++;
-      }
-    } else {
-      _low_batt_strikes = 0;
-    }
+    _low_batt_strikes = smartui::nextLowBatteryStrikeCount(_low_batt_strikes,
+        milliVolts, shutdownThreshold, LOW_BATTERY_VALID_MIN_MILLIVOLTS,
+        LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);
 
     if (_low_batt_strikes >= LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT) {
 

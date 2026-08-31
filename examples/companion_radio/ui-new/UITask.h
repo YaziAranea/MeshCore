@@ -361,6 +361,11 @@ public:
   void cycleNotifyLedPin();
   void cycleNotifyTonePin();
   void cycleNotifyVibePin();
+  void setNotifyLedPin(int pin);
+  void setNotifyTonePin(int pin);
+  void setNotifyVibePin(int pin);
+  void setNotifyToneVolume(uint8_t volume);
+  void setNotifyToneResonanceHz(uint16_t frequency);
   void cycleNotifySound();
   void cycleNotifyDmSound();
   void cycleNotifyMentionSound();
@@ -386,6 +391,7 @@ public:
   bool isBleDmLedEnabled() const;
   void toggleBleDmLed();
   bool isLowBatteryShutdownEnabled() const;
+  uint16_t getLowBatteryShutdownThreshold() const;
   void toggleLowBatteryShutdown();
   const char* getUiFontName() const;
   const char* getUiThemeName() const;

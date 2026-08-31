@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-`v2.1.0-dev.1` — текущий публичный hotfix GitHub Release для пяти плат, заменяющий `v2.1.0-dev`. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
+`v2.1.0-dev.2` — текущий GitHub Release для пяти плат. Предыдущий `v2.1.0-dev.1` сохранён для отката. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
 
 ## Перед началом
 
@@ -15,17 +15,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.1.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.1.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.2.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.2.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1-update.bin` |
-| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2-update.bin` |
+| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2-update.bin` |
+| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -81,7 +81,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо hotfix development `2.1.0-dev.1`.
+- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо текущий `2.1.0-dev.2`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.
@@ -91,6 +91,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 - На V4.3 OLED видны аппаратный GPS и FEM/LNA; выдуманного меню зуммера нет.
 - На Wireless Paper радио не пропадает при бездействии, а экран не перерисовывается без изменения framebuffer.
 - В `Дополнительно → Калибр. АКБ` отображается реальный коэффициент, который следует сверять мультиметром.
+- Защита АКБ показывает порог 3,2 В во включённом состоянии и резервные 2,7 В при выключении. На чистых настройках включена защита 3,2 В; ранее сохранённое выключенное состояние остаётся выключенным.
 
 Старые настройки могут сохраниться после обычной прошивки UF2. Поэтому значение на экране или в приложении важнее заводского default из исходников.
 
@@ -105,3 +106,5 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 Откат выполняется так же: войдите в UF2-загрузчик и скопируйте ранее сохранённый совместимый UF2. Не используйте бинарник другой платы. Если менялся формат сохранённых настроек, после отката часть новых настроек может быть проигнорирована; идентичность ноды заранее сохраняйте отдельно и безопасно.
 
 Для ESP32-S3 откат выполняется совместимой парой форматов: merged при полной переустановке или update по адресу `0x10000`. Перед сменой ветки сохраните идентичность безопасным способом.
+
+При возврате на stock пересохранение `prefs.json` может удалить неизвестную ему секцию `smart_ui`. Не рассчитывайте на автоматическое восстановление всех настроек после обратной прошивки. Резервный `prefs.json` содержит BLE PIN и другие чувствительные данные в открытом виде: храните приватно и никогда не прикладывайте его к Issue или Release.

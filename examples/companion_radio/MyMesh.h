@@ -323,6 +323,7 @@ public:
   bool hasPendingWork() const;
 
 private:
+  mesh::Packet* createAdvertWithShareableLocation();
   void writeOKFrame();
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();

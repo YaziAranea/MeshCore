@@ -1,5 +1,7 @@
 #include "SSD1306Display.h"
+#if SSD1306_USE_EMBEDDED_FONTS
 #include "EmbeddedBitmapFonts.h"
+#endif
 #include "Utf8Cyrillic5x7.h"
 
 // PowerSaving-v17 semantic palette for monochrome OLEDs.
@@ -12,14 +14,6 @@ ColorVal UIColor::warning_txt = SSD1306_WHITE;
 ColorVal UIColor::popup_bkg = SSD1306_BLACK;
 ColorVal UIColor::popup_txt = SSD1306_WHITE;
 ColorVal UIColor::corp_blue = SSD1306_WHITE;
-
-#ifndef SSD1306_COMPACT_STYLE_PROFILE
-  #if defined(HELTEC_LORA_V4_3_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
-    #define SSD1306_COMPACT_STYLE_PROFILE 1
-  #else
-    #define SSD1306_COMPACT_STYLE_PROFILE 0
-  #endif
-#endif
 
 #ifndef SSD1306_REINIT_ON_TURNON
   #define SSD1306_REINIT_ON_TURNON 0
@@ -133,7 +127,10 @@ static void ssd1306HardResetController() {
 }
 
 static bool ssd1306UseLegacyFontId(uint8_t font_id) {
-#if SSD1306_COMPACT_STYLE_PROFILE
+#if !SSD1306_USE_EMBEDDED_FONTS
+  (void)font_id;
+  return true;
+#elif SSD1306_COMPACT_STYLE_PROFILE
   return font_id < 5;
 #elif defined(HELTEC_LORA_V4_OLED)
   return font_id == 0;
@@ -143,6 +140,7 @@ static bool ssd1306UseLegacyFontId(uint8_t font_id) {
 #endif
 }
 
+#if SSD1306_USE_EMBEDDED_FONTS
 static uint8_t ssd1306BitmapFontIndex(uint8_t font_id) {
 #if SSD1306_COMPACT_STYLE_PROFILE
   return font_id;
@@ -152,6 +150,7 @@ static uint8_t ssd1306BitmapFontIndex(uint8_t font_id) {
   return font_id;
 #endif
 }
+#endif
 
 static const char* const SSD1306_FONT_NAMES[] = {
   "Базовый",
@@ -363,6 +362,7 @@ bool SSD1306Display::useLegacyFont() const {
   return ssd1306UseLegacyFontId(_ui_font);
 }
 
+#if SSD1306_USE_EMBEDDED_FONTS
 const MeshcoreBitmapFont* SSD1306Display::currentFont() const {
   return meshcoreGetSmallFont(ssd1306BitmapFontIndex(_ui_font));
 }
@@ -373,10 +373,13 @@ const MeshcoreBitmapGlyph* SSD1306Display::glyphForCodepoint(uint16_t codepoint)
   if (glyph) return glyph;
   return meshcoreFindGlyph(font, '?');
 }
+#endif
 
 uint8_t SSD1306Display::fontLineHeight() const {
-  if (useLegacyFont()) return 8 * _text_size;
-  return currentFont()->height * _text_size;
+#if SSD1306_USE_EMBEDDED_FONTS
+  if (!useLegacyFont()) return currentFont()->height * _text_size;
+#endif
+  return 8 * _text_size;
 }
 
 void SSD1306Display::setUiFont(uint8_t font_id) {
@@ -397,11 +400,11 @@ uint8_t SSD1306Display::getUiFontCount() const {
 const char* SSD1306Display::getUiFontName(uint8_t font_id) const {
   if (font_id >= getUiFontCount()) font_id = 0;
 #if SSD1306_COMPACT_STYLE_PROFILE
-  if (ssd1306UseLegacyFontId(font_id)) return SSD1306_V43_PIXEL_FONT_NAMES[font_id];
+  return SSD1306_V43_PIXEL_FONT_NAMES[font_id];
 #else
   if (ssd1306UseLegacyFontId(font_id)) return "V4 6x8";
-#endif
   return meshcoreGetSmallFont(ssd1306BitmapFontIndex(font_id))->name;
+#endif
 }
 
 void SSD1306Display::setColor(ColorVal c) {
@@ -434,10 +437,14 @@ uint16_t SSD1306Display::codepointWidth(uint16_t codepoint) const {
     if (bold && advance < 7 && _ui_font != 4) advance = 7;
     return advance * _text_size;
   }
+#if SSD1306_USE_EMBEDDED_FONTS
   const MeshcoreBitmapGlyph* glyph = glyphForCodepoint(codepoint);
   if (!glyph) return 0;
   uint16_t extra = (_bold_text && _text_size == 1) ? 1 : 0;
   return glyph->xAdvance * _text_size + extra;
+#else
+  return 0; // All font IDs are handled by the legacy path in compact builds.
+#endif
 }
 
 void SSD1306Display::drawLegacyCodepoint(uint16_t codepoint) {
@@ -477,6 +484,7 @@ void SSD1306Display::drawCodepoint(uint16_t codepoint) {
     return;
   }
 
+#if SSD1306_USE_EMBEDDED_FONTS
   if (codepoint == '\r') return;
   if (codepoint == '\n') {
     display.setCursor(0, display.getCursorY() + fontLineHeight());
@@ -508,6 +516,7 @@ void SSD1306Display::drawCodepoint(uint16_t codepoint) {
     }
   }
   display.setCursor(x + codepointWidth(codepoint), y);
+#endif
 }
 
 void SSD1306Display::print(const char* str) {

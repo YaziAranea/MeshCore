@@ -52,18 +52,6 @@ ST7789_FONTS = [
     ("Roboto Clock", READABLE_SRC / "RobotoCondensed-wght.ttf", 28, [430], 36, 30, 6),
 ]
 
-E213_SIZES = [
-    ("M", 12, 17, 14, 3),
-    ("S", 10, 15, 12, 3),
-    ("L", 14, 19, 15, 4),
-]
-
-E213_FONTS = [
-    (f"{family} {suffix}", path, size, axes, height, ascent, descent)
-    for suffix, size, height, ascent, descent in E213_SIZES
-    for family, path, axes in ST7789_FAMILIES
-]
-
 EXTRAS = [
     0x00A0, 0x00AB, 0x00BB, 0x00B0, 0x2116,
     0x2013, 0x2014, 0x2018, 0x2019, 0x201C, 0x201D, 0x2026,
@@ -225,7 +213,6 @@ def main():
         "// Licenses: Roboto Condensed is Apache-2.0; Noto Sans, Open Sans, PT Sans Narrow, and Oswald are SIL OFL 1.1.",
         "// meshcoreSmallFonts are readable T096/TFT logical fonts, starting at L size.",
         "// meshcoreSt7789Fonts are native-pixel fonts for T114 ST7789.",
-        "// meshcoreE213Fonts are logical-pixel fonts for Heltec Wireless Paper E213.",
         "",
         "struct MeshcoreBitmapGlyph {",
         "  uint16_t codepoint;",
@@ -260,12 +247,6 @@ def main():
                     22, 18, 4,
                     antialias_threshold=92,
                     guard="defined(ST7789)")
-    append_font_set(chunks, E213_FONTS, "meshcore_e213_font", "meshcoreE213Fonts",
-                    "MESHCORE_E213_FONT_COUNT", "meshcoreGetE213Font",
-                    17, 14, 3,
-                    antialias_threshold=92,
-                    guard="defined(HELTEC_WIRELESS_PAPER)")
-
     chunks.append("static inline const MeshcoreBitmapGlyph* meshcoreFindGlyph(const MeshcoreBitmapFont* font, uint16_t codepoint) {")
     chunks.append("  if (font == NULL) return NULL;")
     chunks.append("  int lo = 0;")

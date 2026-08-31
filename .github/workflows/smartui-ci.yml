@@ -29,15 +29,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-dev.1.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-dev.2.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-dev.1.uf2
+            uf2_name: T114_SmartUI_2.1.0-dev.2.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2
 
     steps:
       - name: Check out source
@@ -134,15 +134,15 @@ jobs:
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2
           - board: Heltec Wireless Paper WOOD
             artifact_id: wireless-paper-wood
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_wood
-            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1
+            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2
 
     steps:
       - name: Check out source
@@ -231,6 +231,51 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  build-display-compatibility:
+    name: Shared display compatibility — ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - Heltec_v3_companion_radio_ble
+          - RAK_4631_companion_radio_ble
+          - Xiao_S3_WIO_companion_radio_ble
+          - Heltec_t1_companion_radio_ble
+
+    # Compile-only representatives of shared display backends. These boards
+    # are not added to the supported SmartUI release or its downloadable files.
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Restore PlatformIO dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            .pio/libdeps/${{ matrix.environment }}
+          key: ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-${{ matrix.environment }}-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-${{ matrix.environment }}-
+            ${{ runner.os }}-${{ runner.arch }}-pio-${{ env.PLATFORMIO_CORE_VERSION }}-
+
+      - name: Install pinned PlatformIO
+        run: python -m pip install --disable-pip-version-check "platformio==${PLATFORMIO_CORE_VERSION}"
+
+      - name: Compile shared-backend representative
+        run: pio run -e "${{ matrix.environment }}"
+
   native-tests:
     name: Native tests — ${{ matrix.environment }}
     runs-on: ubuntu-latest
@@ -294,6 +339,9 @@ jobs:
       - name: Check SmartUI contract
         run: python tools/audit_smartui_ps17_contract.py
 
+      - name: Check SSD1306 font profile guards
+        run: python tools/test_ssd1306_font_profiles.py
+
       - name: Run exact display simulation
         run: python tools/simulate_smartui_ps17_qa.py --out-dir qa_outputs/ci
 
@@ -302,6 +350,9 @@ jobs:
 
       - name: Run Wireless Paper 250x122 simulation
         run: python tools/simulate_wireless_paper_ps17_qa.py --out-dir qa_outputs/wireless_paper
+
+      - name: Check confirmed-choice lists with embedded glyph tables
+        run: python tools/simulate_dev2_settings.py
 
       - name: Upload framebuffer QA output
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

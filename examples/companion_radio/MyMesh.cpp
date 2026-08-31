@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include "CompanionUiLogic.h"
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
@@ -205,188 +206,30 @@ static uint16_t nextAutoAdvertIntervalMins(uint16_t mins) {
   }
 }
 
-static bool isUtf8Continuation(uint8_t c) {
-  return (c & 0xC0) == 0x80;
-}
-
-static const char* readUtf8Codepoint(const char* p, uint32_t& cp) {
-  const uint8_t* s = (const uint8_t*)p;
-  uint8_t b0 = s[0];
-  if (b0 == 0 || b0 < 0x80) {
-    cp = b0;
-    return p + (b0 ? 1 : 0);
-  }
-  if ((b0 & 0xE0) == 0xC0 && isUtf8Continuation(s[1])) {
-    cp = ((uint32_t)(b0 & 0x1F) << 6) | (s[1] & 0x3F);
-    return p + 2;
-  }
-  if ((b0 & 0xF0) == 0xE0 && isUtf8Continuation(s[1]) && isUtf8Continuation(s[2])) {
-    cp = ((uint32_t)(b0 & 0x0F) << 12) | ((uint32_t)(s[1] & 0x3F) << 6) | (s[2] & 0x3F);
-    return p + 3;
-  }
-  if ((b0 & 0xF8) == 0xF0 && isUtf8Continuation(s[1]) &&
-      isUtf8Continuation(s[2]) && isUtf8Continuation(s[3])) {
-    cp = ((uint32_t)(b0 & 0x07) << 18) | ((uint32_t)(s[1] & 0x3F) << 12) |
-         ((uint32_t)(s[2] & 0x3F) << 6) | (s[3] & 0x3F);
-    return p + 4;
-  }
-  cp = b0;
-  return p + 1;
-}
-
-static uint32_t mentionLowerCodepoint(uint32_t cp) {
-  if (cp >= 'A' && cp <= 'Z') return cp + ('a' - 'A');
-  if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x20;
-  if (cp == 0x0401) return 0x0451;
-  if (cp == 0x0404) return 0x0454;
-  if (cp == 0x0406) return 0x0456;
-  if (cp == 0x0407) return 0x0457;
-  if (cp == 0x0490) return 0x0491;
-  return cp;
-}
-
-static bool mentionWordCodepoint(uint32_t cp) {
-  if (cp >= '0' && cp <= '9') return true;
-  if (cp >= 'A' && cp <= 'Z') return true;
-  if (cp >= 'a' && cp <= 'z') return true;
-  if (cp == '_' || cp == '-') return true;
-  if (cp >= 0x0410 && cp <= 0x044F) return true;
-  return cp == 0x0401 || cp == 0x0451 || cp == 0x0404 || cp == 0x0454 ||
-         cp == 0x0406 || cp == 0x0456 || cp == 0x0407 || cp == 0x0457 ||
-         cp == 0x0490 || cp == 0x0491;
-}
-
-static bool mentionNameTokenCodepoint(uint32_t cp) {
-  return mentionWordCodepoint(cp) && cp != '_' && cp != '-';
-}
-
-static size_t utf8CodepointCount(const char* s) {
-  size_t count = 0;
-  while (s && *s) {
-    uint32_t cp;
-    s = readUtf8Codepoint(s, cp);
-    count++;
-  }
-  return count;
-}
-
-static size_t utf8NameFirstTokenCodepointCount(const char* node_name) {
-  size_t count = 0;
-  for (const char* n = node_name; n && *n;) {
-    uint32_t cp;
-    const char* next = readUtf8Codepoint(n, cp);
-    if (!mentionNameTokenCodepoint(cp)) break;
-    count++;
-    n = next;
-  }
-  return count;
-}
-
-static bool utf8NameMatchesAt(const char* text, const char* node_name, const char** after_text) {
-  const char* t = text;
-  const char* n = node_name;
-  while (*n) {
-    if (!*t) return false;
-    uint32_t tc, nc;
-    t = readUtf8Codepoint(t, tc);
-    n = readUtf8Codepoint(n, nc);
-    if (mentionLowerCodepoint(tc) != mentionLowerCodepoint(nc)) return false;
-  }
-  if (after_text) *after_text = t;
-  return true;
-}
-
-static bool utf8NameFirstTokenMatchesAt(const char* text, const char* node_name,
-                                        const char** after_text) {
-  const char* t = text;
-  const char* n = node_name;
-  size_t matched = 0;
-  while (*n) {
-    uint32_t nc;
-    const char* next_n = readUtf8Codepoint(n, nc);
-    if (!mentionNameTokenCodepoint(nc)) break;
-    if (!*t) return false;
-    uint32_t tc;
-    t = readUtf8Codepoint(t, tc);
-    if (mentionLowerCodepoint(tc) != mentionLowerCodepoint(nc)) return false;
-    n = next_n;
-    matched++;
-  }
-  if (matched < 2) return false;
-  if (after_text) *after_text = t;
-  return true;
-}
-
-static const char* channelMentionBodyText(const char* text) {
-  const char* sep = text ? strstr(text, ": ") : NULL;
-  return (sep && sep > text) ? sep + 2 : text;
-}
-
-static bool mentionMatchEndsAtBoundary(const char* after) {
-  uint32_t after_cp = 0;
-  if (after && *after) readUtf8Codepoint(after, after_cp);
-  return !mentionWordCodepoint(after_cp);
-}
-
-static uint16_t mentionMatchRankAt(const char* text, const char* node_name, bool allow_first_token) {
-  if (!text || !node_name || !*node_name) return 0;
-  uint16_t best_rank = 0;
-  const char* after = NULL;
-  size_t name_chars = utf8CodepointCount(node_name);
-  if (name_chars >= 2 && utf8NameMatchesAt(text, node_name, &after) &&
-      mentionMatchEndsAtBoundary(after)) {
-    best_rank = (uint16_t)(name_chars * 2 + 1);
-  }
-  size_t first_token_chars = utf8NameFirstTokenCodepointCount(node_name);
-  if (allow_first_token && first_token_chars >= 2 &&
-      utf8NameFirstTokenMatchesAt(text, node_name, &after) && mentionMatchEndsAtBoundary(after)) {
-    uint16_t rank = (uint16_t)(first_token_chars * 2);
-    if (rank > best_rank) best_rank = rank;
-  }
-  return best_rank;
-}
-
-static bool mentionCandidateBelongsToNode(MyMesh* mesh, const char* text, const char* node_name,
-                                          bool allow_first_token) {
-  uint16_t own_rank = mentionMatchRankAt(text, node_name, allow_first_token);
-  if (own_rank == 0) return false;
-  ContactsIterator contacts = mesh->startContactsIterator();
-  ContactInfo contact;
-  while (contacts.hasNext(mesh, contact)) {
-    if (!contact.name[0]) continue;
-    if (mentionMatchRankAt(text, contact.name, allow_first_token) > own_rank) return false;
-  }
-  NetworkStatusEntry recent[NETWORK_STATUS_TABLE_SIZE];
-  int recent_count = mesh->getRecentNetworkStatus(recent, NETWORK_STATUS_TABLE_SIZE, 0xFFFFFFFFUL);
-  for (int i = 0; i < recent_count; i++) {
-    if (recent[i].type != ADV_TYPE_REPEATER && recent[i].type != ADV_TYPE_CHAT) continue;
-    if (mentionMatchRankAt(text, recent[i].name, allow_first_token) > own_rank) return false;
-  }
-  return true;
-}
-
 static bool textMentionsNodeName(MyMesh* mesh, const char* text, const char* node_name) {
-  if (!text || !node_name || !*node_name) return false;
-  size_t name_chars = utf8CodepointCount(node_name);
-  if (name_chars < 2) return false;
-  size_t first_token_chars = utf8NameFirstTokenCodepointCount(node_name);
-  bool at_only = UI_MENTION_REQUIRE_AT || name_chars <= UI_MENTION_SHORT_NAME_AT_ONLY_CHARS;
-  bool plain_full_allowed = !at_only || UI_MENTION_ALLOW_PLAIN_NODE_NAME;
-  bool plain_first_allowed = UI_MENTION_ALLOW_PLAIN_FIRST_TOKEN &&
-                             first_token_chars >= UI_MENTION_PLAIN_FIRST_TOKEN_MIN_CHARS;
-  bool prev_boundary = true;
-  for (const char* p = text; *p;) {
-    uint32_t cp;
-    const char* next = readUtf8Codepoint(p, cp);
-    if (cp == '@' && mentionCandidateBelongsToNode(mesh, next, node_name, true)) return true;
-    if (prev_boundary) {
-      if (plain_full_allowed && mentionCandidateBelongsToNode(mesh, p, node_name, false)) return true;
-      if (plain_first_allowed && mentionCandidateBelongsToNode(mesh, p, node_name, true)) return true;
-    }
-    prev_boundary = !mentionWordCodepoint(cp);
-    p = next;
-  }
-  return false;
+  const smartui::MentionPolicy policy = {
+    UI_MENTION_REQUIRE_AT != 0, UI_MENTION_SHORT_NAME_AT_ONLY_CHARS,
+    UI_MENTION_ALLOW_PLAIN_NODE_NAME != 0, UI_MENTION_ALLOW_PLAIN_FIRST_TOKEN != 0,
+    UI_MENTION_PLAIN_FIRST_TOKEN_MIN_CHARS
+  };
+  smartui::LazyMentionSnapshot<NetworkStatusEntry, NETWORK_STATUS_TABLE_SIZE> recent;
+  return smartui::textMentionsNodeName(text, node_name, policy,
+      [&](const char* at, bool allow_first_token, uint16_t own_rank) {
+        ContactsIterator contacts = mesh->startContactsIterator();
+        ContactInfo contact;
+        while (contacts.hasNext(mesh, contact)) {
+          if (!contact.name[0]) continue;
+          if (smartui::mentionMatchRankAt(at, contact.name, allow_first_token) > own_rank) return false;
+        }
+        int recent_count = recent.load([&](NetworkStatusEntry* entries, size_t capacity) {
+          return mesh->getRecentNetworkStatus(entries, capacity, 0xFFFFFFFFUL);
+        });
+        for (int i = 0; i < recent_count; i++) {
+          if (recent.entries[i].type != ADV_TYPE_REPEATER && recent.entries[i].type != ADV_TYPE_CHAT) continue;
+          if (smartui::mentionMatchRankAt(at, recent.entries[i].name, allow_first_token) > own_rank) return false;
+        }
+        return true;
+      });
 }
 
 #ifndef UI_FONT_PREF_MAX
@@ -1107,7 +950,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   if (getChannel(channel_idx, channel_details)) channel_name = channel_details.name;
   noteTrafficStatus(channel_name, channel_idx, path_len, NETWORK_STATUS_CHANNEL_TRAFFIC);
   noteChannelChat(channel_name, pkt, text);
-  const char* mention_text = channelMentionBodyText(text);
+  const char* mention_text = smartui::channelMentionBodyText(text);
   uint8_t ui_flags = textMentionsNodeName(this, mention_text, _prefs.node_name)
                          ? UI_MSG_FLAG_MENTION
                          : UI_MSG_FLAG_NONE;
@@ -2072,12 +1915,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
-    mesh::Packet* pkt;
-    if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-      pkt = createSelfAdvert(_prefs.node_name);
-    } else {
-      pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
-    }
+    mesh::Packet* pkt = createAdvertWithShareableLocation();
     if (pkt) {
       if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
         unsigned long delay_millis = 0;
@@ -2633,28 +2471,17 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
-    char *dp = (char *)&out_frame[1];
+    smartui::CustomVarsWriter vars((char *)&out_frame[1], sizeof(out_frame) - 1);
 #if UI_PHONE_GPS == 1
-    if (dp != (char *)&out_frame[1]) *dp++ = ',';
-    strcpy(dp, isPhoneGpsEnabled() ? "gps_source:PHONE,phone_gps:" : "gps_source:HW,phone_gps:OFF");
-    dp = strchr(dp, 0);
-    if (isPhoneGpsEnabled()) {
-      strcpy(dp, isPhoneGpsFresh() ? "FRESH" :
-             (phone_gps_last_update_ms == 0 ? "WAIT" : "STALE"));
-      dp = strchr(dp, 0);
-    }
+    vars.append("gps_source", isPhoneGpsEnabled() ? "PHONE" : "HW");
+    vars.append("phone_gps", !isPhoneGpsEnabled() ? "OFF" :
+                (isPhoneGpsFresh() ? "FRESH" :
+                 (phone_gps_last_update_ms == 0 ? "WAIT" : "STALE")));
 #endif
-    for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
-      if (dp != (char *)&out_frame[1]) {
-        *dp++ = ',';
-      }
-      strcpy(dp, sensors.getSettingName(i));
-      dp = strchr(dp, 0);
-      *dp++ = ':';
-      strcpy(dp, sensors.getSettingValue(i));
-      dp = strchr(dp, 0);
+    for (int i = 0; i < sensors.getNumSettings() && vars.size() < 140; i++) {
+      if (!vars.append(sensors.getSettingName(i), sensors.getSettingValue(i))) break;
     }
-    _serial->writeFrame(out_frame, dp - (char *)out_frame);
+    _serial->writeFrame(out_frame, 1 + vars.size());
   } else if (cmd_frame[0] == CMD_SET_CUSTOM_VAR && len >= 4) {
     cmd_frame[len] = 0;
     char *sp = (char *)&cmd_frame[1];
@@ -3120,14 +2947,16 @@ void MyMesh::sampleChannelBusy() {
   channel_busy_sample_ms = now;
 }
 
-bool MyMesh::advert() {
-  mesh::Packet* pkt;
+mesh::Packet* MyMesh::createAdvertWithShareableLocation() {
   double lat, lon, alt;
   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE || !getShareableLocation(lat, lon, alt)) {
-    pkt = createSelfAdvert(_prefs.node_name);
-  } else {
-    pkt = createSelfAdvert(_prefs.node_name, lat, lon);
+    return createSelfAdvert(_prefs.node_name);
   }
+  return createSelfAdvert(_prefs.node_name, lat, lon);
+}
+
+bool MyMesh::advert() {
+  mesh::Packet* pkt = createAdvertWithShareableLocation();
   if (pkt) {
     sendZeroHop(pkt);
     return true;

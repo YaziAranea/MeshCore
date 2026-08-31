@@ -242,7 +242,7 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev.1" in block,
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev.2" in block,
         "every public profile must use DM-only unread and carry the 2.1 development marker",
     )
     check(
@@ -483,21 +483,96 @@ check(
     "remove the old positive Phone GPS build flag instead of hiding the menu only",
 )
 
+phone_command = between(mymesh, "} else if (cmd_frame[0] == CMD_SET_PHONE_GPS)",
+                        "} else if (cmd_frame[0] == CMD_GET_DEVICE_TIME)")
+phone_source = between(mymesh, "void MyMesh::setGpsSource", "bool MyMesh::setPhoneGpsFix")
+phone_fix = between(mymesh, "bool MyMesh::setPhoneGpsFix", "bool MyMesh::getShareableLocation")
+phone_enabled = between(mymesh_h, "bool isPhoneGpsEnabled() const", "bool isPhoneGpsFresh() const")
+custom_vars = between(mymesh, "} else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS)",
+                      "} else if (cmd_frame[0] == CMD_SET_CUSTOM_VAR")
+phone_vars = between(custom_vars, "#if UI_PHONE_GPS == 1", "#endif")
 check(
     "Disabled Phone GPS is hardened at runtime and BLE boundary",
-    has_all(
-        mymesh + mymesh_h,
-        (
-            "#if UI_PHONE_GPS != 1",
-            "source = GPS_SOURCE_HW;",
-            "_prefs.gps_source = GPS_SOURCE_HW;",
-            "writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);",
-            "return false;",
-            "if (dp != (char *)&out_frame[1]) *dp++ = ',';",
-        ),
-    )
-    and "#if UI_PHONE_GPS == 1\n    if (dp != (char *)&out_frame[1])" in mymesh,
-    "old PHONE prefs, command 44 and custom vars must not reactivate the rejected feature",
+    has_all(phone_command, ("#if UI_PHONE_GPS == 1", "#else\n    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);"))
+    and "#else\n  source = GPS_SOURCE_HW;" in phone_source
+    and "#if UI_PHONE_GPS != 1" in phone_fix and "return false;\n#else" in phone_fix
+    and "#else\n    return false;" in phone_enabled
+    and "_prefs.gps_source = GPS_SOURCE_HW;" in mymesh
+    and has_all(phone_vars, ('vars.append("gps_source",', 'vars.append("phone_gps",'))
+    and custom_vars.count('vars.append("gps_source",') == 1
+    and custom_vars.count('vars.append("phone_gps",') == 1
+    and has_all(custom_vars, (
+        "smartui::CustomVarsWriter vars((char *)&out_frame[1], sizeof(out_frame) - 1);",
+        "if (!vars.append(sensors.getSettingName(i), sensors.getSettingValue(i))) break;",
+        "_serial->writeFrame(out_frame, 1 + vars.size());",
+    ))
+    and "strcpy(" not in custom_vars,
+    "old PHONE prefs and command 44 stay disabled; both Phone GPS fields remain gated inside the bounded writer",
+)
+
+notify_handler = between(uitask, "bool handleCompactSettingsInput(char c)", "bool isSettingsItem")
+notify_picker_input = between(notify_handler, "if (_page == HomePage::NOTIFY_PICKER)",
+                              "#if UI_APPEARANCE_MENU")
+notify_navigation = between(notify_picker_input, "if (c == KEY_LEFT", "if (c != KEY_ENTER) return false;")
+check(
+    "Notification picker navigation and cancellation cannot save or apply hardware",
+    has_all(notify_navigation, ("_notify_picker.move(-1);", "_notify_picker.move(1);"))
+    and not any(token in notify_navigation for token in
+                ("savePrefs", "applyNotifyPickerChoice", "configureMsg", "_node_prefs->"))
+    and has_all(notify_picker_input, (
+        "if (c != KEY_ENTER) return false;",
+        "if (_notify_picker.selected(value)) {",
+        "applyNotifyPickerChoice(value);",
+        "_notify_picker.reset();",
+        "_page = HomePage::SETTINGS;",
+    ))
+    and notify_picker_input.count("applyNotifyPickerChoice(value);") == 1
+    and "savePrefs" not in notify_picker_input,
+    "browsing changes only the draft; Enter applies a real option once and Cancel only returns to settings",
+)
+
+notify_setter_specs = (
+    ("setNotifyLedPin(int pin)", "setNotifyTonePin", "getMsgAlertPin() == pin"),
+    ("setNotifyTonePin(int pin)", "setNotifyVibePin", "getMsgTonePin() == pin"),
+    ("setNotifyVibePin(int pin)", "cycleNotifySound", "getMsgVibePin() == pin"),
+    ("setNotifyToneVolume(uint8_t volume)", "toggleNotifyTone8Bit", "getNotifyToneVolume() == volume"),
+    ("setNotifyToneResonanceHz(uint16_t frequency)", "toggleNotifyToneBridge", "getNotifyToneResonanceHz() == frequency"),
+)
+notify_setter_blocks = [
+    (between(uitask, f"void UITask::{start}", f"void UITask::{end}"), unchanged)
+    for start, end, unchanged in notify_setter_specs
+]
+check(
+    "Confirmed notification setters skip unchanged values and save only once",
+    all(block.count("the_mesh.savePrefs();") == 1
+        and unchanged in block
+        and block.index(unchanged) < block.index("the_mesh.savePrefs();")
+        and "return;" in block[:block.index("the_mesh.savePrefs();")]
+        for block, unchanged in notify_setter_blocks)
+    and "if (changed) the_mesh.savePrefs();" in between(
+        uitask, "void UITask::setCommonNotifyTone", "uint8_t UITask::getNotifyToneVolume"),
+    "confirmation must not rewrite unchanged settings or duplicate the one durable preference write",
+)
+
+battery_getter = between(uitask, "uint16_t UITask::getLowBatteryShutdownThreshold() const",
+                         "void UITask::toggleLowBatteryShutdown")
+battery_toggle = between(uitask, "void UITask::toggleLowBatteryShutdown()", "uint8_t UITask::getUiFontCount")
+check(
+    "Battery shutdown uses the selected threshold and resets confirmation on mode change",
+    has_all(battery_getter, (
+        "#if defined(AUTO_SHUTDOWN_MILLIVOLTS)",
+        "smartui::batteryShutdownThreshold(isLowBatteryShutdownEnabled(),",
+        "AUTO_SHUTDOWN_MILLIVOLTS, LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS)",
+        "#else\n  return 0;",
+    ))
+    and "_low_batt_strikes = 0;" in battery_toggle
+    and has_all(uitask, (
+        "const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();",
+        "_low_batt_strikes = smartui::nextLowBatteryStrikeCount(_low_batt_strikes,",
+        "milliVolts, shutdownThreshold, LOW_BATTERY_VALID_MIN_MILLIVOLTS,",
+        "LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);",
+    )),
+    "the actual shutdown loop must use the tested normal/emergency policy without changing valid-reading rules",
 )
 
 check(
@@ -648,6 +723,8 @@ check(
             "uint8_t gps_saved_font = uiPushCompactSettingsFont(display);",
             "int row_step = display.getTextLineHeight();",
             "if (row_step < 8) row_step = 8;",
+            "int gps_top = display.height() - 4 * row_step;",
+            "if (gps_top >= 14 && y > gps_top) y = gps_top;",
             "y += row_step;",
             "uiPopFont(display, gps_saved_font);",
         ),

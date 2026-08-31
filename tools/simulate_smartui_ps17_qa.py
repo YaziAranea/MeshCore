@@ -5,8 +5,11 @@ The script intentionally reuses the same glyph generator/metrics as the
 firmware simulators:
 
 * T096: thresholded embedded bitmap glyphs (threshold 104), 160x80 native.
-* T114: thresholded ST7789 glyphs (threshold 92), logical 128x64 mapped to
-  240x135 with SCALE_X=1.875, SCALE_Y=2.109375 and Y_OFFSET=1.
+* T114 dense/current-release font: actual checked-in ST7789 profile-0 bytes,
+  not an 18/22px approximation. Logical 128x64 maps to 240x135 with
+  SCALE_X=1.875, SCALE_Y=2.109375 and Y_OFFSET=1.
+  Historical comparison/body-font models still rerasterize at threshold 92;
+  they are not the current forced compact font or hardware screenshots.
 * OLED: the actual Utf8Cyrillic5x7 tables and the five SSD1306 spacing styles.
 
 It renders the reference and current SmartUI PS17 versions of the keyboard, target
@@ -25,6 +28,7 @@ from typing import Iterable, Sequence
 
 from PIL import Image, ImageDraw, ImageFont
 
+from embedded_bitmap_fonts import EmbeddedRaw
 from simulate_oled_128x64 import STYLES as OLED_STYLES, glyph_for
 from simulate_t096_premium import FAMILIES as T096_FAMILIES, load_compact_settings_font
 from simulate_t114_fonts import (
@@ -164,7 +168,7 @@ class T096ExactFont(ExactFont):
 
 
 class T114ExactFont(ExactFont):
-    def __init__(self, name: str, raw: FirmwareT114Font):
+    def __init__(self, name: str, raw: FirmwareT114Font | EmbeddedRaw):
         self.name = name
         self.raw = raw
         self.logical_height = max(1, math.ceil(raw.height / T114_SCALE_Y))
@@ -429,12 +433,15 @@ def make_profiles() -> dict[str, list[BoardProfile]]:
             "T096", family_name, 160, 80, 160, 80, font, font,
         ))
 
+    # Firmware uiPushCompactSettingsFont always selects ST7789 profile 0,
+    # irrespective of the active body family. Read its real 24px bitmap rows.
+    desired_raw = EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 0)
     for family_name in T114_FAMILIES:
-        desired_raw = FirmwareT114Font(family_name, 18, 22, 18, 4)
+        # Kept only for before/after historical illustrations, not release QA.
         current_raw = FirmwareT114Font(family_name, 20, 26, 22, 4)
         profiles["T114"].append(BoardProfile(
             "T114", family_name, 128, 64, 240, 135,
-            T114ExactFont(f"{family_name} L/compact", desired_raw),
+            T114ExactFont("Roboto profile 0 / embedded compact", desired_raw),
             T114ExactFont(f"{family_name} XXL/current", current_raw),
             T114_SCALE_X, T114_SCALE_Y, T114_Y_OFFSET,
         ))
@@ -449,7 +456,7 @@ def make_profiles() -> dict[str, list[BoardProfile]]:
 
 def make_t114_active_profiles() -> list[BoardProfile]:
     """All ten public ST7789 body profiles, plus the forced dense-screen font."""
-    compact_raw = FirmwareT114Font("Roboto", 18, 22, 18, 4)
+    compact_raw = EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 0)
     compact = T114ExactFont("Roboto L/profile 0", compact_raw)
     profiles: list[BoardProfile] = []
     for name, family, px_size, height in T114_ACTIVE_FONT_PROFILES:
@@ -816,6 +823,10 @@ def render_t114_gps(profile: BoardProfile, state: str) -> Frame:
     row_step = line_h
     frame.line(((0, 12), (w - 1, 12)), "border", tag="chrome boundary")
     y = 18
+    if h <= 64:
+        gps_top = h - 4 * row_step
+        if gps_top >= 14 and y > gps_top:
+            y = gps_top
     icon_size = min(12, max(9, line_h - 1))
     frame.rect(0, y + 1, 25, icon_size, "yellow" if state != "fix" else "green",
                outline=True, tag="GPS badge bounds")
@@ -1189,7 +1200,8 @@ def write_reports(out: Path, records: list[dict], failures: list[str], canonical
         "",
         "Display contracts:",
         "- T096: 160x80, embedded bitmap glyphs, threshold 104, exact xAdvance.",
-        "- T114: logical 128x64 -> physical 240x135, 1.875 x 2.109375, Y_OFFSET=1, threshold 92.",
+        "- T114 current dense screens: actual embedded profile 0, 24px physical height; logical 128x64 -> physical 240x135, 1.875 x 2.109375, Y_OFFSET=1.",
+        "- T114 historical comparison/body-font illustrations: rerasterized models, threshold 92; not hardware screenshots.",
         "- OLED: 128x64, actual Utf8Cyrillic5x7 tables and five driver spacing styles.",
         "",
         "Stress cases: 0/1/350 contacts, 1/8/350 compact rows, 0/1/12 DM senders,",

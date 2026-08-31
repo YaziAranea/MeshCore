@@ -33,7 +33,7 @@ git switch smartui-ps17.2-dev
 | Wireless Paper WOOD | `Heltec_Wireless_Paper_companion_radio_ble_smartui_wood` | merged + update BIN |
 | Wireless Paper FULL | `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` | merged + update BIN |
 
-FakeTec, V4 TFT и обычный Heltec V3 в область этой ветки не входят.
+FakeTec, V4 TFT и обычный Heltec V3 не входят в набор релизных файлов. Отдельная compile-only матрица CI проверяет общие display-драйверы на `Heltec_v3_companion_radio_ble`, `RAK_4631_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_ble`; это не заявление поддержки этих плат в Release.
 
 ## Сборка UF2
 
@@ -76,12 +76,12 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
 
-Публичные stems hotfix `v2.1.0-dev.1`:
+Публичные stems `v2.1.0-dev.2`:
 
 ```text
-Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.1
-Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.1
-Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1
+Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2
+Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2
+Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2
 ```
 
 К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
@@ -93,13 +93,13 @@ Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.1
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-dev.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-dev.2.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-dev.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-dev.2.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -109,11 +109,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-dev.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-dev.2.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-dev.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-dev.2.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-dev.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -128,6 +128,14 @@ pio run -e ProMicro_ra62_companion_radio_ble
 Это проверяет компиляцию и линковку, но для GitHub Release всё равно создавайте UF2 через `-t create_uf2`.
 
 ## Генерация checksum-манифестов
+
+Готовые результаты всех шести сборок можно собрать одним действием. Укажите новую, ещё не существующую папку:
+
+```powershell
+python tools/package_smartui_release.py ../SmartUI-dev2-release
+```
+
+Скрипт берёт файлы из `.pio/build`, проверяет UF2 и пары BIN, создаёт оба SHA-256 манифеста и общий ZIP. Он не прошивает платы и не публикует ничего на GitHub. Существующую папку не перезаписывает.
 
 PowerShell:
 
@@ -203,7 +211,7 @@ python tools/generate_docs_assets.py
 
 При изменении UI проверьте не только отсутствие выхода за framebuffer, но и реальные фотографии платы. Симуляция — защита от регрессий, не замена железа.
 
-Локальный QA hotfix `v2.1.0-dev.1` от 2026-08-23: статический контракт `88 / 88`, core/T096/T114 `470 / 470`, V4.3 + ProMicro OLED `25 / 25`, Wireless Paper `180 / 180`, native core `69 / 69`, KISS modem `8 / 8`. PIN-экран проверен всеми пятью семействами плат и всеми публичными шрифтами; подсказка OLED 128×64 — «код в приложении».
+Проверки каждого выпуска фиксируйте отдельно в release notes и прикладывайте вывод текущего CI-run. Результаты `v2.1.0-dev.1` сохранены в [исторических примечаниях](../RELEASE_NOTES_v2.1.0-dev.1_RU.md) и не считаются проверкой нового исходного кода.
 
 ## Проверки перед релизом
 
@@ -217,20 +225,9 @@ python tools/generate_docs_assets.py
 8. `validate_release_uf2.py` и `validate_release_esp32.py` прошли без ошибок.
 9. Тег и Release создаются только после этих проверок и нужной аппаратной проверки.
 
-## Текущие размеры SmartUI 2.1.0-dev.1
+## Размеры текущего выпуска
 
-Финальная локальная сборка hotfix дала `6 / 6 SUCCESS`:
-
-| Цель | RAM | Flash |
-|---|---:|---:|
-| T096 FEM ON | 150100 / 235520 байт (63,7%) | 555404 / 712704 байт (77,9%) |
-| T114 | 151524 / 235520 байт (64,3%) | 558552 / 712704 байт (78,4%) |
-| ProMicro RA62 | 148004 / 235520 байт (62,8%) | 666040 / 712704 байт (93,4%) |
-| Heltec V4.3 OLED FEM ON | 176348 / 2097152 байт (8,4%) | 1503193 / 6553600 байт (22,9%) |
-| Wireless Paper WOOD | 174264 / 327680 байт (53,2%) | 1296761 / 3342336 байт (38,8%) |
-| Wireless Paper FULL | 174272 / 327680 байт (53,2%) | 1301789 / 3342336 байт (38,9%) |
-
-Дополнительно локально в Linux/WSL прошли native core `69 / 69` и KISS modem `8 / 8`; GitHub Actions повторяет эти тесты. Аппаратная проверка новых V4.3/Wireless Paper-профилей до стабильного Release всё ещё обязательна.
+Размеры `v2.1.0-dev.2` берите из [его release notes](../RELEASE_NOTES_v2.1.0-dev.2_RU.md) и финального отчёта линковщика. Число удалённых байт таблиц не равно автоматически изменению всего бинарника: код и выравнивание тоже меняются. История предыдущих размеров сохранена в примечаниях соответствующих версий.
 
 ## Стабильный baseline: размеры v2.0.0-rc1
 
