@@ -198,7 +198,7 @@ Heltec_Wireless_Paper_companion_radio_ble_smartui_full
 
 CI дополнительно проверяет общие display-драйверы через `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`. Эти дополнительные цели не входят в комплект готовых прошивок.
 
-Нерелизная BLE-конфигурация Heltec T1 этой ветки не помещается во flash; контрольная матрица использует её USB-вариант с тем же общим UI/display-бэкендом. RAK4631 не входит ни в Release, ни в обязательный beta-gate. Это не новая поддержка плат; [подробности](docs/BUILD_RU.md#целевые-сборки).
+Heltec T1 остаётся нерелизной контрольной платой. Матрица использует её USB-вариант с общим UI/display-бэкендом; обе companion-конфигурации T1 собираются с `-Os` и помещаются в штатную flash-разметку с ExtraFS. RAK4631 не входит ни в Release, ни в обязательный beta-gate. Это не новая поддержка плат; [подробности](docs/BUILD_RU.md#целевые-сборки).
 
 Точная симуляция учитывает:
 
