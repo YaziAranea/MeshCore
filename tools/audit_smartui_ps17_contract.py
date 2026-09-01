@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Static contract for the five-board SmartUI 2.1 development profile."""
+"""Static contract for the five-board SmartUI 2.1 beta profile.
+
+The assertions below intentionally describe behaviour and recovery boundaries,
+not one historical spelling of an implementation.  Native tests exercise the
+small policy helpers; this audit connects those helpers to the actual firmware
+entry points and to every published display profile.
+"""
 
 from __future__ import annotations
 
@@ -79,12 +85,41 @@ def check(label: str, condition: bool, detail: str) -> None:
 
 
 uitask = read("examples/companion_radio/ui-new/UITask.cpp")
+uitask_h = read("examples/companion_radio/ui-new/UITask.h")
 uitask_live = without_if_zero(uitask)
 mymesh = read("examples/companion_radio/MyMesh.cpp")
 mymesh_h = read("examples/companion_radio/MyMesh.h")
 meshcore_h = read("src/MeshCore.h")
 nodeprefs = read("examples/companion_radio/NodePrefs.h")
 datastore = read("examples/companion_radio/DataStore.cpp")
+battery_policy = read("examples/companion_radio/ui-new/BatteryShutdownPolicy.h")
+clock_uptime = read("examples/companion_radio/ui-new/ClockUptime.h")
+ui_timing = read("examples/companion_radio/ui-new/UiTiming.h")
+adc_ui_policy = read("examples/companion_radio/ui-new/AdcCalibrationUi.h")
+adc_calibration = read("src/helpers/AdcCalibration.h")
+config_serializer = read("src/helpers/ConfigSerializer.cpp") + read("src/helpers/ConfigSerializer.h")
+identity_store = read("src/helpers/IdentityStore.cpp") + read("src/helpers/IdentityStore.h")
+storage_transaction = read("src/helpers/StorageTransaction.h")
+main_source = read("examples/companion_radio/main.cpp")
+rtc_sources = (
+    meshcore_h
+    + read("src/helpers/RTCClockQuality.h")
+    + read("src/helpers/ArduinoHelpers.h")
+    + read("src/helpers/ESP32Board.h")
+    + read("src/helpers/AutoDiscoverRTCClock.h")
+    + read("src/helpers/AutoDiscoverRTCClock.cpp")
+    + read("src/helpers/BaseChatMesh.cpp")
+)
+frame_validation = read("examples/companion_radio/CompanionFrameValidation.h")
+channel_busy_policy = read("examples/companion_radio/ChannelBusyPolicy.h")
+native_policy_tests = (
+    read("test/test_ui_runtime_policy/test_ui_runtime_policy.cpp")
+    + read("test/test_battery_shutdown_policy/test_battery_shutdown_policy.cpp")
+    + read("test/test_storage_transaction/test_storage_transaction.cpp")
+    + read("test/test_config_serializer/test_config_serializer.cpp")
+    + read("test/test_companion_frame_validation/test_companion_frame_validation.cpp")
+    + read("test/test_contact_time_bootstrap/test_contact_time_bootstrap.cpp")
+)
 simulator = read("tools/simulate_smartui_ps17_qa.py")
 oled_simulator = read("tools/simulate_v4_3_oled_qa.py")
 adc_boards = {
@@ -152,7 +187,9 @@ check(
         (
             "BLE_PIN_PERSIST_RANDOM",
             "_prefs.ble_pin = _active_ble_pin;",
-            "_store->savePrefs(_prefs);",
+            "if (!_store->savePrefs(_prefs))",
+            "_prefs.ble_pin = 0;",
+            "_active_ble_pin = BLE_PIN_CODE;",
         ),
     ),
     "the PIN must be opened by the user, never hijack idle UI, and remain stable until erase/reset",
@@ -242,8 +279,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-dev.2" in block,
-        "every public profile must use DM-only unread and carry the 2.1 development marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-beta.1" in block,
+        "every public profile must use DM-only unread and carry the 2.1 beta marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -365,19 +402,52 @@ for name, source in adc_boards.items():
         "do not expose a calibration page whose Board setter always returns false",
     )
 
+adc_cancel = between(uitask, "void cancelAdcEdit()", "#endif")
+adc_setter = between(uitask, "bool UITask::setAdcMultiplier", "void UITask::toggleBuzzer")
+adc_factory_reset = between(uitask, "bool restoreAdcDefault", "bool isBlePinPage")
 check(
-    "ADC preview is finite, transactional and cancellable",
+    "ADC calibration is bounded, transactional, cancellable and explicitly resettable",
     has_all(
-        uitask,
+        adc_calibration,
         (
-            "!isfinite(multiplier)",
-            "void cancelAdcEdit()",
-            "_task->setAdcMultiplier(_node_prefs->adc_multiplier, false);",
-            "if (save) {\n    _node_prefs->adc_multiplier = multiplier;",
+            "board_default * 0.75f",
+            "board_default * 1.25f",
+            "!isfinite(requested)",
+            "requested == 0.0f",
+            "saturatingBatteryMilliVolts",
         ),
     )
-    and uitask.count("cancelAdcEdit();") >= 3,
-    "preview must not leak into persisted prefs or survive leaving the settings page",
+    and all("normalizeAdcMultiplier" in source and "saturatingBatteryMilliVolts" in source
+            for source in adc_boards.values())
+    and has_all(
+        adc_cancel,
+        (
+            "_task->setAdcMultiplier(_node_prefs->adc_multiplier, false)",
+            "_task->setAdcMultiplier(0.0f, false)",
+            "_adc_edit = false;",
+        ),
+    )
+    and has_all(
+        adc_setter,
+        (
+            "!isfinite(multiplier)",
+            "if (!_board->setAdcMultiplier(multiplier))",
+            "if (save)",
+            "_node_prefs->adc_multiplier = multiplier;",
+        ),
+    )
+    and has_all(
+        adc_ui_policy + adc_factory_reset + native_policy_tests,
+        (
+            "adcFactoryResetGesture",
+            "click_count == 2",
+            "_task->setAdcMultiplier(0.0f, true)",
+            "FactoryResetHasDistinctNonDestructiveGesture",
+            "AcceptsResetAndSaneBoardSpecificWindow",
+            "ConversionIsRoundedAndSaturating",
+        ),
+    ),
+    "preview/cancel must not persist, accepted calibration stays within +/-25%, and only the dedicated 2x gesture stores the board-default sentinel",
 )
 
 check(
@@ -391,10 +461,12 @@ check(
             "inline bool migrateLegacyNotifyPins",
             "prefs.notify_tone_pin == alert_pin",
             "prefs.notify_pin_fix_version = target_version;",
-            "if (notify_prefs_changed) _store->savePrefs(_prefs);",
+            "bool startup_prefs_repaired = adc_prefs_repaired;",
+            "startup_prefs_repaired = startup_prefs_repaired || notify_prefs_changed;",
+            "if (startup_prefs_repaired && !_store->savePrefs(_prefs))",
         ),
     ),
-    "repair the saved legacy tone pin once, then preserve an explicit shared alert/tone choice",
+    "repair the saved legacy tone pin once and commit it together with any independent ADC repair",
 )
 
 check(
@@ -426,19 +498,179 @@ check(
     "profiles without the sound group must not claim seven sections",
 )
 
+prefs_root_scan = between(datastore, "static bool prefsHasRootKey", "static bool readLegacySmartUiTail")
+prefs_loader = between(datastore, "void DataStore::loadPrefs", "bool DataStore::loadPrefsInt")
 check(
-    "SmartUI settings survive a stock PS17 JSON migration",
+    "SmartUI migration recognises only an exact root key and commits the legacy tail once",
     has_all(
-        datastore,
+        prefs_root_scan,
         (
-            "LEGACY_SMART_UI_PREFS_OFFSET = 140",
-            'prefsHasRootKey(file, "smart_ui")',
-            "readLegacySmartUiTail",
-            "prefs_ok && !has_smart_ui",
+            "bool in_string = false;",
+            "if (depth != 1)",
+            "strcmp(key, wanted) == 0",
+        ),
+    )
+    and has_all(
+        prefs_loader,
+        (
+            'const char* candidates[] = {target, scratch, backup};',
+            "NodePrefs candidate(prefs);",
+            'has_smart_ui = prefsHasRootKey(file, "smart_ui");',
+            "prefs_ok = candidate.loadSerial(file);",
+            "prefs = candidate;",
+            "if (!has_smart_ui && _fs->exists(\"/new_prefs\"))",
+            "NodePrefs migrated(prefs);",
+            "readLegacySmartUiTail(legacy, migrated)",
+            "prefs = migrated;",
             "savePrefs(prefs);",
         ),
+    )
+    and "LEGACY_SMART_UI_PREFS_OFFSET = 140" in datastore,
+    "nested/string occurrences must not suppress migration; malformed candidates must not partially mutate live prefs, and saving smart_ui is the durable one-time marker",
+)
+
+check(
+    "ConfigSerializer accepts exactly one complete root object for recovery",
+    has_all(
+        config_serializer,
+        (
+            "bool root_started = false;",
+            "bool root_closed = false;",
+            "if (sp != 0 || root_closed)",
+            "root_closed = true;",
+            "if (root_closed && context.success)",
+            "if (!is_whitespace((char)value))",
+            "!root_started || !root_closed || sp != 0 || next_tok == TOK_ERROR",
+            "return context.success;",
+        ),
+    )
+    and has_all(
+        native_policy_tests,
+        (
+            "LoadSerial_RejectsEmptyOrWhitespaceOnlyInput",
+            "LoadSerial_RejectsTrailingPartialData",
+            "LoadSerial_UnmatchedBraces",
+            "SaveSerial_ReportsMidStreamWriteFailure",
+        ),
     ),
-    "merge only the retained SmartUI tail once; never overwrite current JSON on every boot",
+    "empty, truncated, multiple/trailing or failed-write generations must be rejected so .tmp/.bak recovery is not suppressed",
+)
+
+prefs_saver = between(datastore, "bool DataStore::savePrefs", "void DataStore::loadContacts")
+contacts_storage = between(datastore, "void DataStore::loadContacts", "void DataStore::loadChannels")
+channels_storage = between(datastore, "void DataStore::loadChannels", "#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)")
+check(
+    "Preferences, contacts and channels publish verified tmp generations with bak recovery",
+    has_all(
+        prefs_saver,
+        (
+            'scratch = "/prefs.json.tmp"',
+            'backup = "/prefs.json.bak"',
+            "_prefs.saveSerial(file)",
+            "verification.loadSerial(verify_file)",
+            "commitScratch(_fs, target, scratch, backup,",
+            "prefsFileValid(_fs, target, _prefs)",
+        ),
+    )
+    and has_all(
+        contacts_storage,
+        (
+            '"/contacts3.tmp"',
+            '"/contacts3.bak"',
+            "chooseContactCandidate",
+            "commitScratch(",
+            'fs, "/contacts3", "/contacts3.tmp", "/contacts3.bak",',
+            'contactRecordFileValid(fs, "/contacts3")',
+            "digestFile",
+        ),
+    )
+    and has_all(
+        channels_storage,
+        (
+            '"/channels2.tmp"',
+            '"/channels2.bak"',
+            "chooseChannelCandidate",
+            "commitScratch(",
+            'fs, "/channels2", "/channels2.tmp", "/channels2.bak",',
+            'channelRecordFileValid(fs, "/channels2")',
+            "digestFile",
+        ),
+    )
+    and has_all(
+        storage_transaction + native_policy_tests,
+        (
+            "chooseRecoveryCandidate",
+            "RecoveryCandidate::TEMPORARY",
+            "RecoveryCandidate::BACKUP",
+            "RecoversValidatedTemporaryAfterRotationInterruption",
+            "FallsBackToBackupWhenNewGenerationIsIncomplete",
+            "Crc32MatchesStandardVectorAndStreamingUpdates",
+        ),
+    ),
+    "a power loss at any publish step must leave a complete primary, verified temporary or backup generation",
+)
+
+migration_storage = between(datastore, "static bool copyFileTransactional", "}  // namespace") + between(
+    datastore, "void DataStore::migrateToSecondaryFS", "bool DataStore::putBlobByKey"
+)
+check(
+    "Secondary-filesystem migration verifies size and CRC before deleting either source",
+    has_all(
+        migration_storage,
+        (
+            "copyFileTransactional",
+            "filesMatch(source_fs, source, dest_fs, scratch)",
+            "filesMatch(source_fs, source, dest_fs, dest)",
+            "safe_to_remove_source",
+            "if (safe_to_remove_source)",
+            "_fs->remove(path)",
+            "_fsExtra->remove(path)",
+        ),
+    )
+    and has_all(storage_transaction, ("class Crc32", "0xEDB88320u")),
+    "cross-filesystem copy must be byte-for-byte verified and preserve both copies on ambiguity or interruption",
+)
+
+check(
+    "Identity corruption and filesystem mount failure stop before radio/BLE startup",
+    has_all(
+        identity_store,
+        (
+            "IdentityLoadStatus",
+            "identityIsCoherent",
+            "chooseIdentityCandidate",
+            "CORRUPT_OR_IO",
+            "NOT_FOUND",
+            "commitIdentityScratch",
+            'makeSiblingPath(filename, ".tmp"',
+            'makeSiblingPath(filename, ".bak"',
+        ),
+    )
+    and has_all(
+        mymesh,
+        (
+            "loadMainIdentityStatus",
+            "IdentityLoadStatus::CORRUPT_OR_IO",
+            "IdentityLoadStatus::NOT_FOUND",
+            "saveMainIdentity(self_id)",
+        ),
+    )
+    and has_all(
+        main_source,
+        (
+            "storage_ready = InternalFS.begin();",
+            "storage_ready = LittleFS.begin();",
+            "storage_ready = SPIFFS.begin(false);",
+            "if (!storage_ready)",
+            'showFatalStorageError(disp, "STORAGE ERROR"',
+            "if (!mesh_started)",
+            'showFatalStorageError(disp, "IDENTITY ERROR"',
+            "halt();",
+            "bluetooth_interface.begin",
+        ),
+    )
+    and main_source.index("if (!mesh_started)") < main_source.index("bluetooth_interface.begin"),
+    "mount failure must never auto-format, and a corrupt existing identity must never be silently replaced or advertised",
 )
 
 check(
@@ -456,6 +688,139 @@ check(
         ),
     ),
     "phone time must be sane, while enabled targets may move the RTC backward",
+)
+
+check(
+    "RTC source quality is explicit: estimates remain untrusted and never become retained truth",
+    has_all(
+        rtc_sources,
+        (
+            "virtual bool isTimeTrusted()",
+            "virtual void setEstimatedTime(uint32_t time)",
+            "meshRtcTimestampPlausible",
+            "CLOCK_MAGIC_NUM        0xAA55CC34",
+            "RTC_BACKUP_MAGIC  0xAA55CC34",
+            "time_trusted = false;",
+            "_time_trusted = false;",
+            "_hardware_time_trusted = false;",
+            "rtc->setEstimatedTime(estimate);",
+        ),
+    )
+    and "base_time = 1772323200" not in rtc_sources
+    and "tv.tv_sec = 1772323200" not in rtc_sources
+    and has_all(
+        uitask + native_policy_tests,
+        (
+            "rtc_clock.isTimeTrusted()",
+            "meshRtcTimestampPlausible(rtc_clock.getCurrentTime())",
+            "if (!hasTrustedTime() || rtc_now < UI_RTC_VALID_MIN) return;",
+            "PlausibilityDoesNotAcceptBootSeedsOrAbsurdDates",
+            "SelectsOnlyTheNewestPlausibleContactTimestamp",
+            "ProducesAOneSecondEstimateWithoutOverflow",
+        ),
+    ),
+    "contact timestamps may improve packet ordering, but only BLE/GPS or plausible hardware/retained RTC may enable clocks and scheduled night mode",
+)
+
+timezone_picker_input = between(
+    uitask,
+    "if (_page == HomePage::TIMEZONE_PICKER)",
+    "#endif\n#if UI_APPEARANCE_MENU",
+)
+check(
+    "Timezone is persisted in minutes and saved only by explicit picker confirmation",
+    has_all(
+        nodeprefs + mymesh,
+        (
+            "int16_t timezone_offset_minutes = 360;",
+            'def("tz_min", _parent->timezone_offset_minutes);',
+            "timezone_offset_minutes = other.timezone_offset_minutes;",
+            "normalizeTimezoneOffsetMinutes",
+            "value < -720 || value > 840 || value % 30 != 0",
+        ),
+    )
+    and has_all(
+        uitask,
+        (
+            "static const int16_t TIMEZONE_MINUTES_MIN = -720;",
+            "static const int16_t TIMEZONE_MINUTES_MAX = 840;",
+            "static const int16_t TIMEZONE_MINUTES_STEP = 30;",
+            "(TIMEZONE_MINUTES_MAX - TIMEZONE_MINUTES_MIN) / TIMEZONE_MINUTES_STEP + 1;",
+            "return (int16_t)(TIMEZONE_MINUTES_MIN + index * TIMEZONE_MINUTES_STEP);",
+            'snprintf(out, out_len, "UTC%c%02d:%02d"',
+            "bool changed = selected != _task->getTimezoneOffsetMinutes();",
+            "if (changed) _task->setTimezoneOffsetMinutes(selected, true);",
+            "return uiApplyTimezoneOffset(utc_time, getTimezoneOffsetSeconds());",
+        ),
+    )
+    and has_all(
+        timezone_picker_input,
+        (
+            "if (c == KEY_LEFT || c == KEY_PREV)",
+            "if (c == KEY_NEXT || c == KEY_RIGHT)",
+            "if (c != KEY_ENTER) return false;",
+            "if (_timezone_picker_cursor < TIMEZONE_CHOICE_COUNT)",
+            "_page = HomePage::SETTINGS;",
+        ),
+    )
+    and "the_mesh.savePrefs" not in between(
+        timezone_picker_input, "if (c == KEY_LEFT", "if (c != KEY_ENTER)"
+    ),
+    "the civil range is UTC-12:00..UTC+14:00 in 30-minute steps; scrolling or Cancel must not write flash",
+)
+
+clock_uptime_renderer = between(
+    uitask, "static bool drawClockUptimeBetween", "#if UI_BLE_PIN_PAGE"
+)
+paper_idle_clock = between(
+    uitask, "static int renderPaperIdleClock", "class PaperIdleClockScreen"
+)
+check(
+    "Uptime exists only as collision-aware secondary text on every clock layout",
+    has_all(
+        clock_uptime,
+        (
+            "formatClockUptime",
+            '"U %lum"',
+            '"U %luh"',
+            '"U %lud"',
+            '"U 999+d"',
+            "clockUptimeRightEdge",
+            "if (left < (int32_t)left_used + gap) return -1;",
+        ),
+    )
+    and has_all(
+        clock_uptime_renderer,
+        (
+            "display.getTextWidth(text)",
+            "clockUptimeRightEdge",
+            "if (right < 0) return false;",
+            "display.drawTextRightAlign(right, y, text);",
+        ),
+    )
+    and uitask.count("drawClockUptimeBetween(display, _task") >= 6
+    and has_all(
+        paper_idle_clock,
+        (
+            "formatClockUptime",
+            "display.getTextWidth(uptime_text)",
+            "int node_width = uptime_left - 8;",
+            "display.drawTextRightAlign(uptime_right, 4, uptime_text);",
+        ),
+    )
+    and has_all(
+        uitask_h + uitask + native_policy_tests,
+        (
+            "uint64_t _uptime_accumulated_ms;",
+            "_uptime_accumulated_ms += (uint32_t)(now - _uptime_last_millis);",
+            "updateUptime((uint32_t)millis());",
+            "UsesCompactLowChurnUnits",
+            "PlacementUsesMeasuredWidthAndNeverOverlapsNeighbours",
+        ),
+    )
+    and "HomePage::UPTIME" not in uitask
+    and '"Аптайм"' not in uitask,
+    "T096/T114/ProMicro/V4 and both Wireless Paper clock paths must reserve real-font space; uptime must not consume a carousel/menu page",
 )
 
 check(
@@ -510,6 +875,87 @@ check(
     "old PHONE prefs and command 44 stay disabled; both Phone GPS fields remain gated inside the bounded writer",
 )
 
+companion_handler = between(mymesh, "void MyMesh::handleCmdFrame", "void MyMesh::checkCLIRescueCmd")
+serial_reader = between(mymesh, "void MyMesh::checkSerialInterface", "void MyMesh::loop")
+check(
+    "Companion frames are shape-checked before any command field is read",
+    has_all(
+        frame_validation,
+        (
+            "class FrameReader",
+            "minimumCommandFrameLength",
+            "validateCommandFrame",
+            "kFrameTooShort",
+            "kFrameInvalidPath",
+            "kFrameInvalidShape",
+            "encodedPathByteLength",
+            "length > capacity",
+        ),
+    )
+    and has_all(
+        companion_handler,
+        (
+            "companion::validateCommandFrame(",
+            "if (frame_status != companion::kFrameValid)",
+            "writeErrFrame(ERR_CODE_ILLEGAL_ARG);",
+            "return;",
+        ),
+    )
+    and companion_handler.index("validateCommandFrame") < companion_handler.index("cmd_frame[0]")
+    and has_all(serial_reader, ("memset(cmd_frame, 0, sizeof(cmd_frame));",
+                                "_serial->checkRecvFrame(cmd_frame)"))
+    and has_all(
+        native_policy_tests,
+        (
+            "NeverAdvancesPastTheProvidedFrame",
+            "EveryCommandAndInRangeLengthHasABoundedResult",
+            "DestructiveAndScopeCommandsRequireCompleteShapes",
+            "OversizeFramesAreRejectedBeforeParsing",
+        ),
+    ),
+    "short/truncated/path-invalid commands must fail at the transport boundary and a new frame must never inherit stale bytes from the previous command",
+)
+
+check(
+    "Channel-busy accounting is sampled, wrap-safe and rebased after sleep gaps",
+    has_all(
+        channel_busy_policy + mymesh,
+        (
+            "channelBusySampleDue",
+            "static_cast<uint32_t>(now - previous)",
+            "elapsed > interval_ms * 2U",
+            "static const uint32_t SAMPLE_INTERVAL_MS = 100;",
+            "channelBusyElapsedToAccount",
+            "_radio->isReceiving()",
+        ),
+    )
+    and has_all(
+        native_policy_tests,
+        (
+            "PollsOnlyAtTheConfiguredWrapSafeInterval",
+            "AccountsShortSamplesButNotSleepSizedGaps",
+        ),
+    ),
+    "SPI radio-state polling must not run in the hot loop, and an instantaneous RX state after sleep must not be charged to the whole sleep interval",
+)
+
+mention_handler = between(mymesh, "bool MyMesh::textMentionsNodeName", "#ifndef UI_FONT_PREF_MAX")
+check(
+    "Mention disambiguation computes one network snapshot outside the loop-task stack",
+    has_all(
+        mymesh_h + mention_handler,
+        (
+            "NetworkStatusEntry mention_status_scratch[NETWORK_STATUS_TABLE_SIZE];",
+            "int recent_count = -1;",
+            "if (recent_count < 0)",
+            "getRecentNetworkStatus(mention_status_scratch",
+            "const NetworkStatusEntry& entry = mention_status_scratch[i];",
+        ),
+    )
+    and "NetworkStatusEntry recent[NETWORK_STATUS_TABLE_SIZE]" not in mention_handler,
+    "a channel mention must not allocate about 1 KB per callback or recompute the same network table for every ambiguous token",
+)
+
 notify_handler = between(uitask, "bool handleCompactSettingsInput(char c)", "bool isSettingsItem")
 notify_picker_input = between(notify_handler, "if (_page == HomePage::NOTIFY_PICKER)",
                               "#if UI_APPEARANCE_MENU")
@@ -558,7 +1004,7 @@ battery_getter = between(uitask, "uint16_t UITask::getLowBatteryShutdownThreshol
                          "void UITask::toggleLowBatteryShutdown")
 battery_toggle = between(uitask, "void UITask::toggleLowBatteryShutdown()", "uint8_t UITask::getUiFontCount")
 check(
-    "Battery shutdown uses the selected threshold and resets confirmation on mode change",
+    "Battery shutdown uses an independent raw safety path with explicit validity",
     has_all(battery_getter, (
         "#if defined(AUTO_SHUTDOWN_MILLIVOLTS)",
         "smartui::batteryShutdownThreshold(isLowBatteryShutdownEnabled(),",
@@ -568,11 +1014,59 @@ check(
     and "_low_batt_strikes = 0;" in battery_toggle
     and has_all(uitask, (
         "const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();",
+        "const smartui::BatteryReading reading = readSafetyBattery();",
         "_low_batt_strikes = smartui::nextLowBatteryStrikeCount(_low_batt_strikes,",
-        "milliVolts, shutdownThreshold, LOW_BATTERY_VALID_MIN_MILLIVOLTS,",
-        "LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);",
-    )),
-    "the actual shutdown loop must use the tested normal/emergency policy without changing valid-reading rules",
+        "reading, shutdownThreshold, LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);",
+        "smartui::deadlineDueOrImmediate",
+        "LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT",
+    ))
+    and has_all(
+        battery_policy,
+        (
+            "struct BatteryReading",
+            "millivolts != 0",
+            "if (!reading.valid) return strikes",
+            "if (reading.millivolts >= threshold) return 0;",
+            "medianBatteryReading",
+        ),
+    )
+    and has_all(
+        between(uitask, "smartui::BatteryReading UITask::readSafetyBattery", "bool UITask::hasTrustedTime"),
+        (
+            "_board->getBattMilliVolts()",
+            "medianBatteryReading(a, b, c)",
+        ),
+    )
+    and uitask.count("_board->getBattMilliVolts();") >= 4
+    and has_all(
+        native_policy_tests,
+        (
+            "SevereUndervoltageNeverFailsOpen",
+            "AbsentReadingDoesNotCountOrEraseEvidence",
+            "SafetyMedianIgnoresAbsentSamples",
+            "DeadlineComparisonSurvivesMillisWrap",
+        ),
+    ),
+    "0 alone means unavailable; every nonzero undervoltage must count, display EMA must not feed shutdown, and the 3.2/2.7 V policy must survive millis rollover",
+)
+
+check(
+    "Every beta profile defaults to 3.2 V protection with a non-disableable 2.7 V floor",
+    all(
+        has_all(block, ("AUTO_SHUTDOWN_MILLIVOLTS=3200",
+                        "LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS=2700"))
+        and "DISABLE_LOW_BATTERY_SHUTDOWN=1" not in block
+        for block in effective.values()
+    )
+    and has_all(
+        mymesh + nodeprefs + battery_policy,
+        (
+            "LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED",
+            "_prefs.low_battery_shutdown_enabled = LOW_BATTERY_SHUTDOWN_DEFAULT_ENABLED ? 1 : 0;",
+            "return enabled ? normal : floor;",
+        ),
+    ),
+    "the UI toggle may select the emergency floor, but it must never remove undervoltage protection entirely",
 )
 
 check(
@@ -805,19 +1299,26 @@ check(
 )
 
 check(
-    "Targeted send keeps 16-bit indexes and filters repeaters",
+    "Targeted send snapshots immutable channel/contact identity before confirmation",
     has_all(
         uitask + mymesh + mymesh_h,
         (
             "uint16_t quickTargetItemCount() const",
             "uint16_t quickTargetTotalCount() const",
-            "bool MyMesh::getQuickReplyContact(uint16_t list_idx",
+            "bool MyMesh::getQuickReplyContact(uint16_t list_idx, ContactInfo& contact)",
             "candidate.type != ADV_TYPE_CHAT",
             "recipient == NULL || recipient->type != ADV_TYPE_CHAT",
-            "sendQuickReplyToContact(_quick_target_cursor, _quick_keyboard_text)",
+            "captureQuickTargetIdentity()",
+            "memcpy(_quick_target_contact_pubkey, contact.id.pub_key",
+            "sendQuickReplyToChannelId(_quick_target_channel_id, _quick_keyboard_text)",
+            "sendQuickReplyToContactPubKey(_quick_target_contact_pubkey, _quick_keyboard_text)",
+            "lookupContactByPubKey(pub_key, PUB_KEY_SIZE)",
+            "uint8_t recipient_pub_key[PUB_KEY_SIZE];",
+            "memcpy(entry.recipient_pub_key, recipient_pub_key, PUB_KEY_SIZE);",
+            "lookupContactByPubKey(expected_ack_table[i].recipient_pub_key, PUB_KEY_SIZE)",
         ),
     ),
-    "350-contact stress requires uint16_t navigation and companion-only contact filtering",
+    "a mutable sorted list must not redirect a confirmation to a different row; 350-contact navigation remains 16-bit and repeaters stay filtered",
 )
 
 check(

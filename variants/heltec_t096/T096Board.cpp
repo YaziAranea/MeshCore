@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <helpers/AdcCalibration.h>
 
 #ifdef NRF52_POWER_MANAGEMENT
 // Static configuration for power management
@@ -93,11 +94,13 @@ uint16_t T096Board::getBattMilliVolts() {
     adcvalue = analogRead(PIN_VBAT_READ);
     digitalWrite(PIN_BAT_CTL, 0);
 
-    return (uint16_t)((float)adcvalue * MV_LSB * adc_mult);
+    return mesh::saturatingBatteryMilliVolts((float)adcvalue * MV_LSB * adc_mult);
 }
 
 bool T096Board::setAdcMultiplier(float multiplier) {
-    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
 }
 

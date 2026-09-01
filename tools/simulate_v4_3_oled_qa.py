@@ -17,18 +17,75 @@ from simulate_oled_128x64 import H, SCALE, STYLES, W, Oled, font
 
 
 SCENES = ("GPS OFF + mute", "GPS ON + mute", "GPS ON", "ADC calibration", "BLE PIN")
-STATUS_ICON_SIZE = 10
+UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 12 * 3600, 3 * 86400, 2000 * 86400)
+STATUS_ICON_SIZE = 8
 BATTERY_ICON_X = W - 18 - 2
 
 
-def clock_scene(style: tuple[str, int, bool], gps_label: str, muted: bool) -> tuple[Image.Image, list[str]]:
+def format_clock_uptime(seconds: int) -> str:
+    """Exact host equivalent of smartui::formatClockUptime()."""
+    if seconds < 3600:
+        return f"U {seconds // 60}m"
+    if seconds < 86400:
+        return f"U {seconds // 3600}h"
+    days = seconds // 86400
+    return "U 999+d" if days > 999 else f"U {days}d"
+
+
+def clock_uptime_placement(
+    oled: Oled, left_used: int, right_used: int, seconds: int
+) -> tuple[str, int, int, int] | None:
+    """Mirror drawClockUptimeBetween(), including its no-space fallback."""
+    full = format_clock_uptime(seconds)
+    for text, gap in ((full, 3), (full.replace(" ", "", 1), 2)):
+        width = oled.text_width(text)
+        right = right_used - gap
+        left = right - width
+        if left >= left_used + gap:
+            return text, left, right, gap
+    return None
+
+
+def draw_firmware_battery(oled: Oled, milli_volts: int = 4090) -> int:
+    """Generic HomeScreen battery geometry used by V4.3 and ProMicro."""
+    icon_w, icon_h = 18, 10
+    icon_x, icon_y = W - icon_w - 2, 2
+    voltage = f"{milli_volts // 1000}.{(milli_volts % 1000) // 10:02d}V"
+    voltage_x = icon_x - oled.text_width(voltage) - 3
+    oled.text(voltage_x, 0, voltage)
+    oled.draw.rectangle((icon_x, icon_y, icon_x + icon_w - 1, icon_y + icon_h - 1), outline=1)
+    oled.draw.rectangle((icon_x + icon_w, icon_y + 3, icon_x + icon_w + 1,
+                         icon_y + icon_h - 4), fill=1)
+    fill_w = ((icon_w - 4) * 91 + 50) // 100
+    oled.draw.rectangle((icon_x + 2, icon_y + 2, icon_x + 1 + fill_w,
+                         icon_y + icon_h - 3), fill=1)
+    return voltage_x
+
+
+def draw_firmware_mute(oled: Oled, x: int, y: int, size: int = STATUS_ICON_SIZE) -> None:
+    """Exact procedural uiIconDrawMute() raster."""
+    grid = 12
+    for gx, gy, gw, gh in ((1, 5, 3, 3), (4, 4, 2, 5)):
+        x1 = x + (gx * size) // grid
+        y1 = y + (gy * size) // grid
+        x2 = x + ((gx + gw) * size + grid - 1) // grid
+        y2 = y + ((gy + gh) * size + grid - 1) // grid
+        oled.draw.rectangle((x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)), fill=1)
+    diag_size = size - 2
+    for index in range(diag_size):
+        oled.draw.point((x + 1 + index, y + 1 + diag_size - 1 - index), fill=1)
+
+
+def clock_scene(
+    style: tuple[str, int, bool], gps_label: str, muted: bool,
+    uptime_seconds: int = 12 * 3600,
+) -> tuple[Image.Image, list[str]]:
     oled = Oled(style)
-    voltage = "4.09V"
-    voltage_width = oled.text_width(voltage)
-    voltage_x = BATTERY_ICON_X - voltage_width - 3
+    voltage_x = BATTERY_ICON_X - oled.text_width("4.09V") - 3
     name_right = voltage_x - 2
     gps_right = oled.text_width(gps_label)
     mute_x = gps_right + 3
+    status_right = gps_right
 
     if gps_right > name_right:
         oled.overflows.append(f"{style[0]}: {gps_label} reaches battery group at {gps_right}>{name_right}")
@@ -39,9 +96,31 @@ def clock_scene(style: tuple[str, int, bool], gps_label: str, muted: bool) -> tu
 
     oled.text(0, 0, gps_label)
     if muted and mute_x + STATUS_ICON_SIZE <= name_right:
-        oled.mute(mute_x, 0)
-    oled.text(BATTERY_ICON_X - 3, 0, voltage, right=True)
-    oled.battery(W - 16, 1, 82)
+        draw_firmware_mute(oled, mute_x, 1)
+        status_right = mute_x + STATUS_ICON_SIZE
+    placement = clock_uptime_placement(oled, status_right, name_right, uptime_seconds)
+    if placement is not None:
+        uptime, uptime_left, uptime_right, gap = placement
+        if uptime_left < status_right + gap:
+            oled.overflows.append(
+                f"{style[0]}: uptime starts at {uptime_left}, status ends at {status_right}, gap={gap}"
+            )
+        if uptime_right > name_right - gap:
+            oled.overflows.append(
+                f"{style[0]}: uptime ends at {uptime_right}, battery starts at {name_right}, gap={gap}"
+            )
+        oled.text(uptime_right, 0, uptime, right=True)
+    else:
+        # Hiding is valid only if both exact firmware candidates really do not fit.
+        full = format_clock_uptime(uptime_seconds)
+        if (name_right - 3 - oled.text_width(full) >= status_right + 3 or
+                name_right - 2 - oled.text_width(full.replace(" ", "", 1)) >= status_right + 2):
+            oled.overflows.append(f"{style[0]}: uptime hidden despite available room")
+    actual_battery_left = draw_firmware_battery(oled)
+    if actual_battery_left != voltage_x:
+        oled.overflows.append(
+            f"{style[0]}: battery metric drift {actual_battery_left}!={voltage_x}"
+        )
 
     for index, x in enumerate((39, 49, 59, 69, 79, 89)):
         if index == 1:
@@ -101,6 +180,47 @@ def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, 
     return adc_scene(style)
 
 
+def validate_uptime_sweep() -> tuple[int, list[str]]:
+    """Exercise every compact value against V4.3 and GPS-less ProMicro chrome."""
+    checks = 0
+    failures: list[str] = []
+    for style in STYLES:
+        for board, cases in (
+            ("V4.3", (("GPS OFF", True), ("GPS ON", True), ("GPS ON", False))),
+            ("ProMicro", (("", True), ("", False))),
+        ):
+            for gps_label, muted in cases:
+                oled = Oled(style)
+                battery_left = BATTERY_ICON_X - oled.text_width("4.09V") - 3
+                right_used = battery_left - 2
+                gps_right = oled.text_width(gps_label)
+                status_right = gps_right
+                if muted:
+                    mute_x = gps_right + (3 if gps_label else 0)
+                    if mute_x + STATUS_ICON_SIZE <= right_used:
+                        status_right = mute_x + STATUS_ICON_SIZE
+                for seconds in UPTIME_SAMPLES:
+                    placement = clock_uptime_placement(oled, status_right, right_used, seconds)
+                    checks += 1
+                    if placement is None:
+                        full = format_clock_uptime(seconds)
+                        full_fits = right_used - 3 - oled.text_width(full) >= status_right + 3
+                        compact = full.replace(" ", "", 1)
+                        compact_fits = right_used - 2 - oled.text_width(compact) >= status_right + 2
+                        if full_fits or compact_fits:
+                            failures.append(
+                                f"{board} / {style[0]} / {seconds}s: hidden though a candidate fits"
+                            )
+                        continue
+                    text, left, right, gap = placement
+                    if left < status_right + gap or right > right_used - gap:
+                        failures.append(
+                            f"{board} / {style[0]} / {seconds}s: {text} at {left}..{right} "
+                            f"escapes {status_right}..{right_used} with gap {gap}"
+                        )
+    return checks, failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -146,8 +266,15 @@ def main() -> int:
     canonical.resize((W * 4, H * 4), Image.Resampling.NEAREST).save(
         args.out_dir / "V4_3_OLED_CLOCK_GPS_MUTE.png"
     )
+    uptime_canonical, uptime_errors = clock_scene(STYLES[0], "GPS ON", False)
+    failures.extend(f"uptime canonical: {error}" for error in uptime_errors)
+    uptime_canonical.resize((W * 4, H * 4), Image.Resampling.NEAREST).save(
+        args.out_dir / "V4_3_OLED_CLOCK_UPTIME.png"
+    )
 
-    checks = len(STYLES) * len(SCENES)
+    sweep_checks, sweep_failures = validate_uptime_sweep()
+    failures.extend(sweep_failures)
+    checks = len(STYLES) * len(SCENES) + sweep_checks
     if failures:
         for failure in failures:
             print(f"[FAIL] {failure}")

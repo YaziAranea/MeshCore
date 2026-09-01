@@ -8,6 +8,8 @@
 void ArduinoSerialInterface::enable() { 
   _isEnabled = true;
   _state = RECV_STATE_IDLE;
+  _frame_len = 0;
+  rx_len = 0;
 }
 void ArduinoSerialInterface::disable() {
   _isEnabled = false;
@@ -66,10 +68,16 @@ size_t ArduinoSerialInterface::checkRecvFrame(uint8_t dest[]) {
         }
         rx_len++;
         if (rx_len >= _frame_len) {  // received a complete frame?
-          if (_frame_len > MAX_FRAME_SIZE) _frame_len = MAX_FRAME_SIZE;    // truncate
-          memcpy(dest, rx_buf, _frame_len);
+          const uint16_t completed_len = _frame_len;
           _state = RECV_STATE_IDLE;  // reset state, for next frame
-          return _frame_len;
+          _frame_len = 0;
+          rx_len = 0;
+          // Never turn an oversized wire frame into a valid command by
+          // dispatching its truncated prefix (which could itself be a reboot
+          // or factory-reset command). The payload has already been drained.
+          if (completed_len > MAX_FRAME_SIZE) return 0;
+          memcpy(dest, rx_buf, completed_len);
+          return completed_len;
         }
     }
   }

@@ -68,6 +68,19 @@ public:
     const uint8_t* getBytes() const { return _buf; }
 };
 
+class FailAfterStream : public MockPrintStream {
+    size_t remaining;
+public:
+    explicit FailAfterStream(size_t bytes_before_failure)
+        : remaining(bytes_before_failure) { }
+
+    size_t write(uint8_t b) override {
+        if (remaining == 0) return 0;
+        --remaining;
+        return MockPrintStream::write(b);
+    }
+};
+
 class TestStruct : public ConfigSerializer {
   protected:
     void structure() override {
@@ -122,6 +135,16 @@ TEST(ConfigSerializer, SaveSerial_EscChars) {
     EXPECT_TRUE(match);
 }
 
+TEST(ConfigSerializer, SaveSerial_ReportsMidStreamWriteFailure) {
+    FailAfterStream s(10);
+    TestStruct data;
+    data.age = TEST_INT;
+    data.flags = TEST_INT;
+    strcpy(data.name, "Scott");
+
+    EXPECT_FALSE(data.saveSerial(s));
+}
+
 // ── loadSerial: basic ───────────────────────────────────────────────────────
 
 TEST(ConfigSerializer, LoadSerial_Basic) {
@@ -167,6 +190,24 @@ TEST(ConfigSerializer, LoadSerial_UnmatchedBraces) {
 
     bool success = data.loadSerial(s);
     EXPECT_FALSE(success);
+}
+
+TEST(ConfigSerializer, LoadSerial_RejectsEmptyOrWhitespaceOnlyInput) {
+    TestStruct data;
+    MockInputStream empty("");
+    MockInputStream whitespace(" \t\r\n ");
+
+    EXPECT_FALSE(data.loadSerial(empty));
+    EXPECT_FALSE(data.loadSerial(whitespace));
+}
+
+TEST(ConfigSerializer, LoadSerial_RejectsTrailingPartialData) {
+    TestStruct data;
+    MockInputStream text("{age:" TEST_INT_S "}truncated");
+    MockInputStream comma("{age:" TEST_INT_S "},");
+
+    EXPECT_FALSE(data.loadSerial(text));
+    EXPECT_FALSE(data.loadSerial(comma));
 }
 
 TEST(ConfigSerializer, LoadSerial_MissingCommas) {

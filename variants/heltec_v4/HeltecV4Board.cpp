@@ -52,7 +52,7 @@ void HeltecV4Board::begin() {
 
     digitalWrite(PIN_ADC_CTRL, LOW);
 
-    return (adc_mult * (3.3 / 1024.0) * raw) * 1000;
+    return mesh::saturatingBatteryMilliVolts((adc_mult * (3.3f / 1024.0f) * raw) * 1000.0f);
   }
 
   const char* HeltecV4Board::getManufacturerName() const {

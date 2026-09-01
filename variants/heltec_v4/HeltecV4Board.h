@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
+#include <helpers/AdcCalibration.h>
 #include "LoRaFEMControl.h"
 
 #ifndef ADC_MULTIPLIER
@@ -28,11 +29,9 @@ public:
   bool isLoRaFemLnaEnabled() const override;
   uint16_t getBattMilliVolts() override;
   bool setAdcMultiplier(float multiplier) override {
-    if (multiplier == 0.0f) {
-      adc_mult = ADC_MULTIPLIER;
-    } else {
-      adc_mult = multiplier;
-    }
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
   }
   float getAdcMultiplier() const override { return adc_mult; }

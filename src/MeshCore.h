@@ -112,6 +112,19 @@ public:
   virtual void setCurrentTime(uint32_t time) = 0;
 
   /**
+   * Whether the current wall clock came from a source suitable for user-visible
+   * time, timestamp correction and scheduled UI actions.  Uptime-derived and
+   * contact-derived estimates deliberately remain untrusted.
+   */
+  virtual bool isTimeTrusted() { return false; }
+
+  /**
+   * Supply a best-effort time estimate without promoting it to trusted time.
+   * Concrete retained/hardware clocks override this to preserve source quality.
+   */
+  virtual void setEstimatedTime(uint32_t time) { setCurrentTime(time); }
+
+  /**
    * Apply an explicit clock correction and rebase the monotonic timestamp
    * floor.  This is required when a trusted source repairs an RTC that was
    * accidentally set in the future; otherwise getCurrentTimeUnique() keeps

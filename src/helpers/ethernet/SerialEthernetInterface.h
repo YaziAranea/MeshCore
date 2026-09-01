@@ -13,6 +13,7 @@ class SerialEthernetInterface : public BaseSerialInterface {
   uint8_t _state;
   uint16_t _frame_len;
   uint16_t _rx_len;
+  bool _rx_overflow;
   uint8_t _rx_buf[MAX_FRAME_SIZE];
 
   struct Frame {
@@ -29,6 +30,7 @@ class SerialEthernetInterface : public BaseSerialInterface {
     _state = 0;
     _frame_len = 0;
     _rx_len = 0;
+    _rx_overflow = false;
   }
 
   protected:
@@ -41,6 +43,7 @@ class SerialEthernetInterface : public BaseSerialInterface {
         _state = 0;
         _frame_len = 0;
         _rx_len = 0;
+        _rx_overflow = false;
     }
     bool begin();
 
@@ -51,7 +54,7 @@ class SerialEthernetInterface : public BaseSerialInterface {
     void disable() override;
     bool isEnabled() const override { return _isEnabled; }
 
-    bool isConnected() const override;
+    bool isConnected() const override = 0;
     bool isWriteBusy() const override;
 
     size_t writeFrame(const uint8_t src[], size_t len) override;

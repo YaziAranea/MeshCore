@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include "DataStore.h"
+#include <helpers/AdvertDataHelpers.h>
+#include <helpers/StorageTransaction.h>
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -53,10 +55,10 @@ void DataStore::begin() {
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   _ContactsChannelsTotalBlocks = _getContactsChannelsFS()->_getFS()->cfg->block_count;
-  checkAdvBlobFile();
   #if defined(EXTRAFS) || defined(QSPIFLASH)
   migrateToSecondaryFS();
   #endif
+  checkAdvBlobFile();
 #else
   // init 'blob store' support
   _fs->mkdir("/bl");
@@ -182,12 +184,271 @@ bool DataStore::formatFileSystem() {
 }
 
 bool DataStore::loadMainIdentity(mesh::LocalIdentity &identity) {
-  return identity_store.load("_main", identity);
+  return loadMainIdentityStatus(identity) == IdentityLoadStatus::LOADED;
+}
+
+IdentityLoadStatus DataStore::loadMainIdentityStatus(mesh::LocalIdentity &identity) {
+  return identity_store.loadWithStatus("_main", identity);
 }
 
 bool DataStore::saveMainIdentity(const mesh::LocalIdentity &identity) {
   return identity_store.save("_main", identity);
 }
+
+namespace {
+
+struct FileDigest {
+  uint32_t size = 0;
+  uint32_t crc32 = 0;
+};
+
+static bool makeSiblingPath(const char* filename, const char* suffix,
+                            char* dest, size_t dest_size) {
+  const int n = snprintf(dest, dest_size, "%s%s", filename, suffix);
+  return n > 0 && (size_t)n < dest_size;
+}
+
+// Only the scratch file is removed before opening.  The currently committed
+// generation is never truncated in place.
+static bool prepareScratch(FILESYSTEM* fs, const char* filename) {
+  return !fs->exists(filename) || fs->remove(filename);
+}
+
+static File openScratch(FILESYSTEM* fs, const char* filename) {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  return fs->open(filename, FILE_O_WRITE);
+#elif defined(RP2040_PLATFORM)
+  return fs->open(filename, "w");
+#else
+  return fs->open(filename, "w", true);
+#endif
+}
+
+static File openStorageRead(FILESYSTEM* fs, const char* filename) {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  return fs->open(filename, FILE_O_READ);
+#elif defined(RP2040_PLATFORM)
+  return fs->open(filename, "r");
+#else
+  return fs->open(filename, "r", false);
+#endif
+}
+
+static bool digestFile(FILESYSTEM* fs, const char* filename, FileDigest& digest) {
+  if (!fs->exists(filename)) return false;
+  File file = openStorageRead(fs, filename);
+  if (!file) return false;
+
+  mesh::storage::Crc32 crc;
+  uint8_t buffer[64];
+  uint32_t total = 0;
+  bool success = true;
+  while (true) {
+    const int n = file.read(buffer, sizeof(buffer));
+    if (n < 0) {
+      success = false;
+      break;
+    }
+    if (n == 0) break;
+    crc.update(buffer, (size_t)n);
+    total += (uint32_t)n;
+  }
+  const uint32_t reported_size = (uint32_t)file.size();
+  file.close();
+  if (!success || total != reported_size) return false;
+  digest.size = total;
+  digest.crc32 = crc.value();
+  return true;
+}
+
+static bool filesMatch(FILESYSTEM* first_fs, const char* first,
+                       FILESYSTEM* second_fs, const char* second) {
+  FileDigest a;
+  FileDigest b;
+  return digestFile(first_fs, first, a) && digestFile(second_fs, second, b) &&
+         a.size == b.size && a.crc32 == b.crc32;
+}
+
+// Publish an already-written and validated .tmp generation.  The previous
+// generation remains as .bak, so every interruption point leaves at least one
+// complete candidate for the next boot.
+static bool commitScratch(FILESYSTEM* fs, const char* target,
+                          const char* scratch, const char* backup,
+                          bool target_valid = true) {
+  const bool had_target = fs->exists(target);
+  bool rotated_target = false;
+  if (had_target && target_valid) {
+    if (fs->exists(backup) && !fs->remove(backup)) return false;
+    if (!fs->rename(target, backup)) return false;
+    rotated_target = true;
+  } else if (had_target) {
+    // Never rotate a known-bad primary over the last good backup.  Remove the
+    // corrupt generation and leave .bak intact until the new file is live.
+    if (!fs->remove(target)) return false;
+  }
+
+  if (fs->rename(scratch, target)) return true;
+
+  // Best-effort rollback.  A failure still leaves the complete backup and
+  // scratch files for recovery on the next boot.
+  if (rotated_target && !fs->exists(target) && fs->exists(backup)) {
+    fs->rename(backup, target);
+  }
+  return false;
+}
+
+static bool prefsFileValid(FILESYSTEM* fs, const char* filename,
+                           const NodePrefs& defaults) {
+  if (!fs->exists(filename)) return false;
+  File file = openStorageRead(fs, filename);
+  if (!file) return false;
+  NodePrefs candidate(defaults);
+  const bool valid = candidate.loadSerial(file);
+  file.close();
+  return valid;
+}
+
+static bool fixedRecordFileValid(FILESYSTEM* fs, const char* filename,
+                                 uint32_t record_size) {
+  if (!fs->exists(filename) || record_size == 0) return false;
+  FileDigest digest;
+  return digestFile(fs, filename, digest) && (digest.size % record_size) == 0;
+}
+
+static bool encodedPathLenValid(uint8_t path_len) {
+  if (path_len == OUT_PATH_UNKNOWN) return true;
+  const uint8_t hash_count = path_len & 63;
+  const uint8_t hash_size = (path_len >> 6) + 1;
+  return hash_size != 4 && (uint16_t)hash_count * hash_size <= MAX_PATH_SIZE;
+}
+
+static bool contactRecordFileValid(FILESYSTEM* fs, const char* filename) {
+  static const uint32_t RECORD_SIZE = 152;
+  if (!fixedRecordFileValid(fs, filename, RECORD_SIZE)) return false;
+  File file = openStorageRead(fs, filename);
+  if (!file) return false;
+  uint8_t record[RECORD_SIZE];
+  bool valid = true;
+  while (file.available() > 0) {
+    if (file.read(record, sizeof(record)) != (int)sizeof(record)) {
+      valid = false;
+      break;
+    }
+    // Layout: pubkey[32], name[32], type, flags, reserved,
+    // sync_since[4], out_path_len, ...
+    const bool terminated_name = memchr(record + 32, 0, 32) != nullptr;
+    const uint8_t type = record[64];
+    const uint8_t path_len = record[71];
+    if (!terminated_name || type < ADV_TYPE_CHAT || type > ADV_TYPE_SENSOR ||
+        !encodedPathLenValid(path_len)) {
+      valid = false;
+      break;
+    }
+  }
+  file.close();
+  return valid;
+}
+
+static bool channelRecordFileValid(FILESYSTEM* fs, const char* filename) {
+  static const uint32_t RECORD_SIZE = 68;
+  if (!fixedRecordFileValid(fs, filename, RECORD_SIZE)) return false;
+  File file = openStorageRead(fs, filename);
+  if (!file) return false;
+  uint8_t record[RECORD_SIZE];
+  bool valid = true;
+  while (file.available() > 0) {
+    if (file.read(record, sizeof(record)) != (int)sizeof(record) ||
+        memchr(record + 4, 0, 32) == nullptr) {
+      valid = false;
+      break;
+    }
+  }
+  file.close();
+  return valid;
+}
+
+static mesh::storage::RecoveryCandidate chooseContactCandidate(
+    FILESYSTEM* fs, const char* target, const char* scratch,
+    const char* backup) {
+  return mesh::storage::chooseRecoveryCandidate(
+      contactRecordFileValid(fs, target),
+      contactRecordFileValid(fs, scratch),
+      contactRecordFileValid(fs, backup));
+}
+
+static mesh::storage::RecoveryCandidate chooseChannelCandidate(
+    FILESYSTEM* fs, const char* target, const char* scratch,
+    const char* backup) {
+  return mesh::storage::chooseRecoveryCandidate(
+      channelRecordFileValid(fs, target),
+      channelRecordFileValid(fs, scratch),
+      channelRecordFileValid(fs, backup));
+}
+
+static const char* candidatePath(mesh::storage::RecoveryCandidate candidate,
+                                 const char* target, const char* scratch,
+                                 const char* backup) {
+  switch (candidate) {
+    case mesh::storage::RecoveryCandidate::PRIMARY: return target;
+    case mesh::storage::RecoveryCandidate::TEMPORARY: return scratch;
+    case mesh::storage::RecoveryCandidate::BACKUP: return backup;
+    default: return nullptr;
+  }
+}
+
+// Cross-filesystem copy used by the EXTRAFS migration.  Source removal is the
+// caller's responsibility and is only allowed after this function has compared
+// both byte count and CRC.
+static bool copyFileTransactional(FILESYSTEM* source_fs, const char* source,
+                                  FILESYSTEM* dest_fs, const char* dest) {
+  char scratch[64];
+  char backup[64];
+  if (!makeSiblingPath(dest, ".tmp", scratch, sizeof(scratch)) ||
+      !makeSiblingPath(dest, ".bak", backup, sizeof(backup))) return false;
+
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  File input = source_fs->open(source, FILE_O_READ);
+#elif defined(RP2040_PLATFORM)
+  File input = source_fs->open(source, "r");
+#else
+  File input = source_fs->open(source, "r", false);
+#endif
+  if (!input) return false;
+  if (!prepareScratch(dest_fs, scratch)) {
+    input.close();
+    return false;
+  }
+  File output = openScratch(dest_fs, scratch);
+  if (!output) {
+    input.close();
+    return false;
+  }
+
+  uint8_t buffer[64];
+  bool success = true;
+  while (true) {
+    const int n = input.read(buffer, sizeof(buffer));
+    if (n < 0) {
+      success = false;
+      break;
+    }
+    if (n == 0) break;
+    if (output.write(buffer, (size_t)n) != (size_t)n) {
+      success = false;
+      break;
+    }
+  }
+  output.flush();
+  input.close();
+  output.close();
+
+  success = success && filesMatch(source_fs, source, dest_fs, scratch);
+  if (success) success = commitScratch(dest_fs, dest, scratch, backup);
+  if (!success && dest_fs->exists(scratch)) dest_fs->remove(scratch);
+  return success && filesMatch(source_fs, source, dest_fs, dest);
+}
+
+}  // namespace
 
 // PowerSaving-v16 wrote its fixed legacy fields through byte 139, then
 // appended the SmartUI extension.  Stock PowerSaving-v17 migrates only the
@@ -313,99 +574,161 @@ static bool readLegacySmartUiTail(File& file, NodePrefs& prefs) {
 }
 
 void DataStore::loadPrefs(NodePrefs& prefs) {
-  if (_fs->exists("/prefs.json")) {
-    File file = openRead(_fs, "/prefs.json");
-    if (file) {
-      bool has_smart_ui = prefsHasRootKey(file, "smart_ui");
-      file.seek(0);
-      bool prefs_ok = prefs.loadSerial(file);   // new Serial prefs
-      file.close();
+  static const char* target = "/prefs.json";
+  static const char* scratch = "/prefs.json.tmp";
+  static const char* backup = "/prefs.json.bak";
+  const char* candidates[] = {target, scratch, backup};
 
-      // A stock PS17 boot may already have created prefs.json without knowing
-      // about SmartUI.  Merge only the retained PS16 extension, once.  Saving
-      // adds the smart_ui root object, which is the durable migration marker.
-      if (prefs_ok && !has_smart_ui && _fs->exists("/new_prefs")) {
-        File legacy = openRead(_fs, "/new_prefs");
-        if (legacy && legacy.size() > LEGACY_SMART_UI_PREFS_OFFSET &&
-            legacy.seek(LEGACY_SMART_UI_PREFS_OFFSET) &&
-            readLegacySmartUiTail(legacy, prefs)) {
-          legacy.close();
-          savePrefs(prefs);
-        } else if (legacy) {
-          legacy.close();
-        }
+  bool prefs_ok = false;
+  bool has_smart_ui = false;
+  for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
+    if (!_fs->exists(candidates[i])) continue;
+    File file = openRead(_fs, candidates[i]);
+    if (!file) continue;
+
+    NodePrefs candidate(prefs);
+    has_smart_ui = prefsHasRootKey(file, "smart_ui");
+    file.seek(0);
+    prefs_ok = candidate.loadSerial(file);
+    file.close();
+    if (prefs_ok) {
+      // Parsing is transactional too: malformed/truncated JSON never leaves a
+      // half-updated live settings object.
+      prefs = candidate;
+      break;
+    }
+  }
+
+  if (prefs_ok) {
+    // A stock PS17 boot may already have created prefs.json without knowing
+    // about SmartUI.  Merge only the retained PS16 extension, once.  Saving
+    // adds the smart_ui root object, which is the durable migration marker.
+    if (!has_smart_ui && _fs->exists("/new_prefs")) {
+      File legacy = openRead(_fs, "/new_prefs");
+      NodePrefs migrated(prefs);
+      if (legacy && legacy.size() > LEGACY_SMART_UI_PREFS_OFFSET &&
+          legacy.seek(LEGACY_SMART_UI_PREFS_OFFSET) &&
+          readLegacySmartUiTail(legacy, migrated)) {
+        legacy.close();
+        prefs = migrated;
+        savePrefs(prefs);
+      } else if (legacy) {
+        legacy.close();
       }
     }
   } else if (_fs->exists("/new_prefs")) {
-    loadPrefsInt("/new_prefs", prefs);
-    if (savePrefs(prefs) ) {                // save to new format
-      //_fs->remove("/new_prefs"); // remove old
+    NodePrefs migrated(prefs);
+    if (loadPrefsInt("/new_prefs", migrated)) {
+      prefs = migrated;
+      savePrefs(prefs);  // keep /new_prefs as a final legacy recovery copy
     }
   }
 }
 
-void DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
+bool DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
   File file = openRead(_fs, filename);
-  if (file) {
+  if (file && file.size() >= LEGACY_SMART_UI_PREFS_OFFSET) {
+    NodePrefs candidate(_prefs);
     uint8_t pad[8];
+#define READ_REQUIRED(address, length)                                      \
+    do {                                                                    \
+      if (file.read((uint8_t *)(address), (length)) != (int)(length)) {      \
+        file.close();                                                       \
+        return false;                                                       \
+      }                                                                     \
+    } while (0)
 
-    file.read((uint8_t *)&_prefs.airtime_factor, sizeof(float));                           // 0
-    file.read((uint8_t *)_prefs.node_name, sizeof(_prefs.node_name));                      // 4
-    file.read(pad, 4);                                                                     // 36
-    file.read((uint8_t *)&_prefs.node_lat, sizeof(_prefs.node_lat));                       // 40
-    file.read((uint8_t *)&_prefs.node_lon, sizeof(_prefs.node_lon));                       // 48
-    file.read((uint8_t *)&_prefs.freq, sizeof(_prefs.freq));                               // 56
-    file.read((uint8_t *)&_prefs.sf, sizeof(_prefs.sf));                                   // 60
-    file.read((uint8_t *)&_prefs.cr, sizeof(_prefs.cr));                                   // 61
-    file.read((uint8_t *)&_prefs._client_repeat, sizeof(_prefs._client_repeat));             // 62
-    file.read((uint8_t *)&_prefs.manual_add_contacts, sizeof(_prefs.manual_add_contacts)); // 63
-    file.read((uint8_t *)&_prefs.bw, sizeof(_prefs.bw));                                   // 64
-    file.read((uint8_t *)&_prefs.tx_power_dbm, sizeof(_prefs.tx_power_dbm));               // 68
-    file.read((uint8_t *)&_prefs.telemetry_mode_base, sizeof(_prefs.telemetry_mode_base)); // 69
-    file.read((uint8_t *)&_prefs.telemetry_mode_loc, sizeof(_prefs.telemetry_mode_loc));   // 70
-    file.read((uint8_t *)&_prefs.telemetry_mode_env, sizeof(_prefs.telemetry_mode_env));   // 71
-    file.read((uint8_t *)&_prefs.rx_delay_base, sizeof(_prefs.rx_delay_base));             // 72
-    file.read((uint8_t *)&_prefs.advert_loc_policy, sizeof(_prefs.advert_loc_policy));     // 76
-    file.read((uint8_t *)&_prefs.multi_acks, sizeof(_prefs.multi_acks));                   // 77
-    file.read((uint8_t *)&_prefs.path_hash_mode, sizeof(_prefs.path_hash_mode));           // 78
-    file.read(pad, 1);                                                                     // 79
-    file.read((uint8_t *)&_prefs.ble_pin, sizeof(_prefs.ble_pin));                         // 80
-    file.read((uint8_t *)&_prefs.buzzer_quiet, sizeof(_prefs.buzzer_quiet));               // 84
-    file.read((uint8_t *)&_prefs.gps_enabled, sizeof(_prefs.gps_enabled));                 // 85
-    file.read((uint8_t *)&_prefs.gps_interval, sizeof(_prefs.gps_interval));               // 86
-    file.read((uint8_t *)&_prefs.autoadd_config, sizeof(_prefs.autoadd_config));           // 87
-    file.read((uint8_t *)&_prefs.autoadd_max_hops, sizeof(_prefs.autoadd_max_hops));       // 88
-    file.read((uint8_t *)&_prefs.rx_boosted_gain, sizeof(_prefs.rx_boosted_gain));         // 89
-    file.read((uint8_t *)_prefs.default_scope_name, sizeof(_prefs.default_scope_name));    // 90
-    file.read((uint8_t *)_prefs.default_scope_key, sizeof(_prefs.default_scope_key));     // 121
+    READ_REQUIRED(&candidate.airtime_factor, sizeof(candidate.airtime_factor));             // 0
+    READ_REQUIRED(candidate.node_name, sizeof(candidate.node_name));                         // 4
+    READ_REQUIRED(pad, 4);                                                                    // 36
+    READ_REQUIRED(&candidate.node_lat, sizeof(candidate.node_lat));                          // 40
+    READ_REQUIRED(&candidate.node_lon, sizeof(candidate.node_lon));                          // 48
+    READ_REQUIRED(&candidate.freq, sizeof(candidate.freq));                                  // 56
+    READ_REQUIRED(&candidate.sf, sizeof(candidate.sf));                                      // 60
+    READ_REQUIRED(&candidate.cr, sizeof(candidate.cr));                                      // 61
+    READ_REQUIRED(&candidate._client_repeat, sizeof(candidate._client_repeat));              // 62
+    READ_REQUIRED(&candidate.manual_add_contacts, sizeof(candidate.manual_add_contacts));    // 63
+    READ_REQUIRED(&candidate.bw, sizeof(candidate.bw));                                      // 64
+    READ_REQUIRED(&candidate.tx_power_dbm, sizeof(candidate.tx_power_dbm));                  // 68
+    READ_REQUIRED(&candidate.telemetry_mode_base, sizeof(candidate.telemetry_mode_base));    // 69
+    READ_REQUIRED(&candidate.telemetry_mode_loc, sizeof(candidate.telemetry_mode_loc));      // 70
+    READ_REQUIRED(&candidate.telemetry_mode_env, sizeof(candidate.telemetry_mode_env));      // 71
+    READ_REQUIRED(&candidate.rx_delay_base, sizeof(candidate.rx_delay_base));                // 72
+    READ_REQUIRED(&candidate.advert_loc_policy, sizeof(candidate.advert_loc_policy));        // 76
+    READ_REQUIRED(&candidate.multi_acks, sizeof(candidate.multi_acks));                      // 77
+    READ_REQUIRED(&candidate.path_hash_mode, sizeof(candidate.path_hash_mode));              // 78
+    READ_REQUIRED(pad, 1);                                                                    // 79
+    READ_REQUIRED(&candidate.ble_pin, sizeof(candidate.ble_pin));                            // 80
+    READ_REQUIRED(&candidate.buzzer_quiet, sizeof(candidate.buzzer_quiet));                  // 84
+    READ_REQUIRED(&candidate.gps_enabled, sizeof(candidate.gps_enabled));                    // 85
+    READ_REQUIRED(&candidate.gps_interval, sizeof(candidate.gps_interval));                  // 86
+    READ_REQUIRED(&candidate.autoadd_config, sizeof(candidate.autoadd_config));              // 87
+    READ_REQUIRED(&candidate.autoadd_max_hops, sizeof(candidate.autoadd_max_hops));          // 88
+    READ_REQUIRED(&candidate.rx_boosted_gain, sizeof(candidate.rx_boosted_gain));            // 89
+    READ_REQUIRED(candidate.default_scope_name, sizeof(candidate.default_scope_name));       // 90
+    READ_REQUIRED(candidate.default_scope_key, sizeof(candidate.default_scope_key));         // 121
+#undef READ_REQUIRED
+    candidate.node_name[sizeof(candidate.node_name) - 1] = 0;
+    candidate.default_scope_name[sizeof(candidate.default_scope_name) - 1] = 0;
 
     // SmartUI on PowerSaving-v16 appended its settings to /new_prefs.  Read
     // only a complete prefix so stock legacy files keep constructor defaults.
-    readLegacySmartUiTail(file, _prefs);
+    if (!file.seek(LEGACY_SMART_UI_PREFS_OFFSET)) {
+      file.close();
+      return false;
+    }
+    readLegacySmartUiTail(file, candidate);
 
     // migrate old fields
-    _prefs.setRepeatEn(_prefs._client_repeat != 0);
+    candidate.setRepeatEn(candidate._client_repeat != 0);
 
     file.close();
+    _prefs = candidate;
+    return true;
   }
-}
-
-bool DataStore::savePrefs(NodePrefs& _prefs) {
-  File file = openWrite(_fs, "/prefs.json");
-  if (file) {
-    bool success = _prefs.saveSerial(file);
-    file.close();
-    return success;
-  }
+  if (file) file.close();
   return false;
 }
 
+bool DataStore::savePrefs(NodePrefs& _prefs) {
+  static const char* target = "/prefs.json";
+  static const char* scratch = "/prefs.json.tmp";
+  static const char* backup = "/prefs.json.bak";
+
+  if (!prepareScratch(_fs, scratch)) return false;
+  File file = openScratch(_fs, scratch);
+  if (!file) return false;
+  bool success = _prefs.saveSerial(file);
+  file.flush();
+  file.close();
+
+  // Re-open and parse the exact bytes which will be published.  A short write
+  // or syntactically complete-but-unreadable file never replaces good prefs.
+  NodePrefs verification(_prefs);
+  File verify_file = openRead(_fs, scratch);
+  success = success && verify_file && verification.loadSerial(verify_file);
+  if (verify_file) verify_file.close();
+  if (success) {
+    success = commitScratch(_fs, target, scratch, backup,
+                            prefsFileValid(_fs, target, _prefs));
+  }
+  if (!success && _fs->exists(scratch)) _fs->remove(scratch);
+  return success;
+}
+
 void DataStore::loadContacts(DataStoreHost* host) {
-File file = openRead(_getContactsChannelsFS(), "/contacts3");
+    static const uint32_t CONTACT_RECORD_SIZE = 152;
+    FILESYSTEM* fs = _getContactsChannelsFS();
+    const char* selected = candidatePath(
+        chooseContactCandidate(fs, "/contacts3", "/contacts3.tmp",
+                               "/contacts3.bak"),
+        "/contacts3", "/contacts3.tmp", "/contacts3.bak");
+    if (!selected) return;
+    File file = openRead(fs, selected);
     if (file) {
       bool full = false;
       while (!full) {
-        ContactInfo c;
+        ContactInfo c = {};
         uint8_t pub_key[32];
         uint8_t unused;
 
@@ -424,6 +747,9 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
 
         if (!success) break; // EOF
 
+        c.name[sizeof(c.name) - 1] = 0;
+        if (c.type < ADV_TYPE_CHAT || c.type > ADV_TYPE_SENSOR ||
+            !encodedPathLenValid(c.out_path_len)) break;
         c.id = mesh::Identity(pub_key);
         if (!host->onContactLoaded(c)) full = true;
       }
@@ -431,19 +757,24 @@ File file = openRead(_getContactsChannelsFS(), "/contacts3");
     }
 }
 
-void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
-  File file = openWrite(_getContactsChannelsFS(), "/contacts3");
+bool DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
+  static const uint32_t CONTACT_RECORD_SIZE = 152;
+  FILESYSTEM* fs = _getContactsChannelsFS();
+  if (!prepareScratch(fs, "/contacts3.tmp")) return false;
+  File file = openScratch(fs, "/contacts3.tmp");
   if (file) {
     uint32_t idx = 0;
+    uint32_t records_written = 0;
     ContactInfo c;
     uint8_t unused = 0;
+    bool success = true;
 
     while (host->getContactForSave(idx, c)) {
       if (filter && !filter(c)) {
         idx++;  // advance to next contact
         continue;
       }
-      bool success = (file.write(c.id.pub_key, 32) == 32);
+      success = (file.write(c.id.pub_key, 32) == 32);
       success = success && (file.write((uint8_t *)&c.name, 32) == 32);
       success = success && (file.write(&c.type, 1) == 1);
       success = success && (file.write(&c.flags, 1) == 1);
@@ -458,19 +789,40 @@ void DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
 
       if (!success) break; // write failed
 
+      records_written++;
       idx++;  // advance to next contact
     }
+    file.flush();
     file.close();
+
+    FileDigest digest;
+    success = success && digestFile(fs, "/contacts3.tmp", digest) &&
+              digest.size == records_written * CONTACT_RECORD_SIZE;
+    if (success) {
+      success = commitScratch(
+          fs, "/contacts3", "/contacts3.tmp", "/contacts3.bak",
+          contactRecordFileValid(fs, "/contacts3"));
+    }
+    if (!success && fs->exists("/contacts3.tmp")) fs->remove("/contacts3.tmp");
+    return success;
   }
+  return false;
 }
 
 void DataStore::loadChannels(DataStoreHost* host) {
-    File file = openRead(_getContactsChannelsFS(), "/channels2");
+    static const uint32_t CHANNEL_RECORD_SIZE = 68;
+    FILESYSTEM* fs = _getContactsChannelsFS();
+    const char* selected = candidatePath(
+        chooseChannelCandidate(fs, "/channels2", "/channels2.tmp",
+                               "/channels2.bak"),
+        "/channels2", "/channels2.tmp", "/channels2.bak");
+    if (!selected) return;
+    File file = openRead(fs, selected);
     if (file) {
       bool full = false;
       uint8_t channel_idx = 0;
       while (!full) {
-        ChannelDetails ch;
+        ChannelDetails ch = {};
         uint8_t unused[4];
 
         bool success = (file.read(unused, 4) == 4);
@@ -479,6 +831,7 @@ void DataStore::loadChannels(DataStoreHost* host) {
 
         if (!success) break; // EOF
 
+        ch.name[sizeof(ch.name) - 1] = 0;
         if (host->onChannelLoaded(channel_idx, ch)) {
           channel_idx++;
         } else {
@@ -489,24 +842,43 @@ void DataStore::loadChannels(DataStoreHost* host) {
     }
 }
 
-void DataStore::saveChannels(DataStoreHost* host) {
-  File file = openWrite(_getContactsChannelsFS(), "/channels2");
+bool DataStore::saveChannels(DataStoreHost* host) {
+  static const uint32_t CHANNEL_RECORD_SIZE = 68;
+  FILESYSTEM* fs = _getContactsChannelsFS();
+  if (!prepareScratch(fs, "/channels2.tmp")) return false;
+  File file = openScratch(fs, "/channels2.tmp");
   if (file) {
     uint8_t channel_idx = 0;
+    uint32_t records_written = 0;
     ChannelDetails ch;
     uint8_t unused[4];
     memset(unused, 0, 4);
+    bool success = true;
 
     while (host->getChannelForSave(channel_idx, ch)) {
-      bool success = (file.write(unused, 4) == 4);
+      success = (file.write(unused, 4) == 4);
       success = success && (file.write((uint8_t *)ch.name, 32) == 32);
       success = success && (file.write((uint8_t *)ch.channel.secret, 32) == 32);
 
       if (!success) break; // write failed
+      records_written++;
       channel_idx++;
     }
+    file.flush();
     file.close();
+
+    FileDigest digest;
+    success = success && digestFile(fs, "/channels2.tmp", digest) &&
+              digest.size == records_written * CHANNEL_RECORD_SIZE;
+    if (success) {
+      success = commitScratch(
+          fs, "/channels2", "/channels2.tmp", "/channels2.bak",
+          channelRecordFileValid(fs, "/channels2"));
+    }
+    if (!success && fs->exists("/channels2.tmp")) fs->remove("/channels2.tmp");
+    return success;
   }
+  return false;
 }
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -535,122 +907,66 @@ void DataStore::checkAdvBlobFile() {
 }
 
 void DataStore::migrateToSecondaryFS() {
-  // migrate old adv_blobs, contacts3 and channels2 files to secondary FS if they don't already exist
-  if (!_fsExtra->exists("/adv_blobs")) {
-    if (_fs->exists("/adv_blobs")) {
-    File oldAdvBlobs = openRead(_fs, "/adv_blobs");
-    File newAdvBlobs = openWrite(_fsExtra, "/adv_blobs");
+  if (!_fsExtra) return;
 
-    if (oldAdvBlobs && newAdvBlobs) {
-      BlobRec rec;
-      size_t count = 0;
+  // Bulk data belongs on the secondary filesystem.  If both copies differ we
+  // retain both rather than guessing which generation is newer.
+  const char* secondary_files[] = {"/adv_blobs", "/contacts3", "/channels2"};
+  for (size_t i = 0; i < sizeof(secondary_files) / sizeof(secondary_files[0]); ++i) {
+    const char* path = secondary_files[i];
+    if (!_fs->exists(path)) continue;
 
-      // Copy 20 BlobRecs from old to new
-      while (count < 20 && oldAdvBlobs.read((uint8_t *)&rec, sizeof(rec)) == sizeof(rec)) {
-        newAdvBlobs.seek(count * sizeof(BlobRec));
-        newAdvBlobs.write((uint8_t *)&rec, sizeof(rec));
-        count++;
-      }
+    bool safe_to_remove_source = false;
+    if (_fsExtra->exists(path)) {
+      safe_to_remove_source = filesMatch(_fs, path, _fsExtra, path);
+    } else {
+      safe_to_remove_source = copyFileTransactional(_fs, path, _fsExtra, path);
     }
-    if (oldAdvBlobs) oldAdvBlobs.close();
-    if (newAdvBlobs) newAdvBlobs.close();
-    _fs->remove("/adv_blobs");
-    }
-  }
-  if (!_fsExtra->exists("/contacts3")) {
-    if (_fs->exists("/contacts3")) {
-      File oldFile = openRead(_fs, "/contacts3");
-      File newFile = openWrite(_fsExtra, "/contacts3");
-
-      if (oldFile && newFile) {
-        uint8_t buf[64];
-        int n;
-        while ((n = oldFile.read(buf, sizeof(buf))) > 0) {
-          newFile.write(buf, n);
-        }
-      }
-      if (oldFile) oldFile.close();
-      if (newFile) newFile.close();
-      _fs->remove("/contacts3");
+    if (safe_to_remove_source) {
+      _fs->remove(path);
+    } else {
+      MESH_DEBUG_PRINTLN("DataStore migration retained primary %s (copy not verified)", path);
     }
   }
-  if (!_fsExtra->exists("/channels2")) {
-    if (_fs->exists("/channels2")) {
-      File oldFile = openRead(_fs, "/channels2");
-      File newFile = openWrite(_fsExtra, "/channels2");
 
-      if (oldFile && newFile) {
-        uint8_t buf[64];
-        int n;
-        while ((n = oldFile.read(buf, sizeof(buf))) > 0) {
-          newFile.write(buf, n);
-        }
+  // Identity and legacy preferences belong on the primary filesystem.  These
+  // test-era secondary copies are removed only after the destination bytes
+  // have been re-read and matched by size and CRC.
+  const char* primary_files[] = {"/_main.id", "/new_prefs"};
+  for (size_t i = 0; i < sizeof(primary_files) / sizeof(primary_files[0]); ++i) {
+    const char* path = primary_files[i];
+    if (!_fsExtra->exists(path)) continue;
+    if (_fs->exists(path)) {
+      if (filesMatch(_fsExtra, path, _fs, path)) {
+        _fsExtra->remove(path);
+      } else {
+        // The primary identity/preferences are authoritative once present.
+        // Keep the differing secondary copy for manual recovery instead of
+        // silently replacing the node identity or legacy configuration.
+        MESH_DEBUG_PRINTLN("DataStore migration conflict retained both copies of %s", path);
       }
-      if (oldFile) oldFile.close();
-      if (newFile) newFile.close();
-      _fs->remove("/channels2");
+      continue;
     }
-  }
-  // cleanup nodes which have been testing the extra fs, copy _main.id and new_prefs back to primary
-  if (_fsExtra->exists("/_main.id")) {
-      if (_fs->exists("/_main.id")) {_fs->remove("/_main.id");}
-      File oldFile = openRead(_fsExtra, "/_main.id");
-      File newFile = openWrite(_fs, "/_main.id");
-
-      if (oldFile && newFile) {
-        uint8_t buf[64];
-        int n;
-        while ((n = oldFile.read(buf, sizeof(buf))) > 0) {
-          newFile.write(buf, n);
-        }
-      }
-      if (oldFile) oldFile.close();
-      if (newFile) newFile.close();
-      _fsExtra->remove("/_main.id");
-  }
-  if (_fsExtra->exists("/new_prefs")) {
-    if (_fs->exists("/new_prefs")) {_fs->remove("/new_prefs");}
-      File oldFile = openRead(_fsExtra, "/new_prefs");
-      File newFile = openWrite(_fs, "/new_prefs");
-
-      if (oldFile && newFile) {
-        uint8_t buf[64];
-        int n;
-        while ((n = oldFile.read(buf, sizeof(buf))) > 0) {
-          newFile.write(buf, n);
-        }
-      }
-      if (oldFile) oldFile.close();
-      if (newFile) newFile.close();
-      _fsExtra->remove("/new_prefs");
-  }
-  // remove files from where they should not be anymore
-  if (_fs->exists("/adv_blobs")) {
-    _fs->remove("/adv_blobs");
-  }
-  if (_fs->exists("/contacts3")) {
-    _fs->remove("/contacts3");
-  }
-  if (_fs->exists("/channels2")) {
-    _fs->remove("/channels2");
-  }
-  if (_fsExtra->exists("/_main.id")) {
-    _fsExtra->remove("/_main.id");
-  }
-  if (_fsExtra->exists("/new_prefs")) {
-    _fsExtra->remove("/new_prefs");
+    if (copyFileTransactional(_fsExtra, path, _fs, path)) {
+      _fsExtra->remove(path);
+    } else {
+      MESH_DEBUG_PRINTLN("DataStore migration retained secondary %s (copy not verified)", path);
+    }
   }
 }
 
 uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) {
+  if (key == NULL || dest_buf == NULL || key_len < 7) return 0;
   File file = openRead(_getContactsChannelsFS(), "/adv_blobs");
   uint8_t len = 0;  // 0 = not found
   if (file) {
     BlobRec tmp;
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
       if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // only match by 7 byte prefix
-        len = tmp.len;
-        memcpy(dest_buf, tmp.data, len);
+        if (tmp.len <= sizeof(tmp.data)) {
+          len = tmp.len;
+          memcpy(dest_buf, tmp.data, len);
+        }
         break;
       }
     }
@@ -660,7 +976,8 @@ uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_b
 }
 
 bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len) {
-  if (len < PUB_KEY_SIZE+4+SIGNATURE_SIZE || len > MAX_ADVERT_PKT_LEN) return false;
+  if (key == NULL || src_buf == NULL || key_len < 7 ||
+      len < PUB_KEY_SIZE+4+SIGNATURE_SIZE || len > MAX_ADVERT_PKT_LEN) return false;
   checkAdvBlobFile();
   File file = _getContactsChannelsFS()->open("/adv_blobs", FILE_O_WRITE);
   if (file) {
@@ -668,7 +985,7 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
     uint32_t min_timestamp = 0xFFFFFFFF;
 
     // search for matching key OR evict by oldest timestamp
-    BlobRec tmp;
+    BlobRec tmp = {};
     file.seek(0);
     while (file.read((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp)) {
       if (memcmp(key, tmp.key, sizeof(tmp.key)) == 0) {  // only match by 7 byte prefix
@@ -689,10 +1006,11 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
     tmp.timestamp = _clock->getCurrentTime();
 
     file.seek(found_pos);
-    file.write((uint8_t *) &tmp, sizeof(tmp));
+    const bool written = file.write((uint8_t *) &tmp, sizeof(tmp)) == sizeof(tmp);
+    file.flush();
 
     file.close();
-    return true;
+    return written;
   }
   return false; // error
 }
@@ -704,10 +1022,11 @@ inline void makeBlobPath(const uint8_t key[], int key_len, char* path, size_t pa
   char fname[18];
   if (key_len > 8) key_len = 8; // just use first 8 bytes (prefix)
   mesh::Utils::toHex(fname, key, key_len);
-  sprintf(path, "/bl/%s", fname);
+  snprintf(path, path_size, "/bl/%s", fname);
 }
 
 uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) {
+  if (key == NULL || dest_buf == NULL || key_len <= 0) return 0;
   char path[64];
   makeBlobPath(key, key_len, path, sizeof(path));
 
@@ -723,6 +1042,7 @@ uint8_t DataStore::getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_b
 }
 
 bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len) {
+  if (key == NULL || src_buf == NULL || key_len <= 0) return false;
   char path[64];
   makeBlobPath(key, key_len, path, sizeof(path));
 
@@ -738,6 +1058,7 @@ bool DataStore::putBlobByKey(const uint8_t key[], int key_len, const uint8_t src
 }
 
 bool DataStore::deleteBlobByKey(const uint8_t key[], int key_len) {
+  if (key == NULL || key_len <= 0) return false;
   char path[64];
   makeBlobPath(key, key_len, path, sizeof(path));
 

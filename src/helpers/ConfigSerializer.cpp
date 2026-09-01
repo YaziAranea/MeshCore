@@ -3,10 +3,10 @@
 bool ConfigSerializer::saveSerial(Stream& s) {
   Context context(&s, OP::WRITE);
   _context = &context;  // set the context for structure() call
-  s.print("{");   // root object
+  context.putText("{");   // root object
   _first = true;
   structure();
-  if (s.print("}") != 1) context.success = false;  // failure detect
+  context.putText("}");
   _context = NULL;
   return context.success;
 }
@@ -104,16 +104,36 @@ bool ConfigSerializer::loadSerial(Stream& s) {
   Context context(&s, OP::READ);
   _context = &context;  // set the context for structure() call
   uint8_t sp = 0;   // object nesting stack pointer
-  int next_tok;
+  int next_tok = TOK_EOF;
+  bool root_started = false;
+  bool root_closed = false;
 
   // parse the Json file
   while ((next_tok = context.readNext()) > TOK_EOF) {
     if (next_tok == TOK_KEY) {
+      if (!root_started || root_closed) {
+        context.success = false;
+        break;
+      }
       context.setKey(sp, context.getToken());
     } else if (next_tok == TOK_VALUE) {
+      if (!root_started || root_closed) {
+        context.success = false;
+        break;
+      }
       _depth = 1;  // re-run the structure() hierarchy again (looking for specific key, at specific depth)
       structure();
     } else if (next_tok == TOK_START_OBJ) {
+      if (!root_started) {
+        if (sp != 0 || root_closed) {
+          context.success = false;
+          break;
+        }
+        root_started = true;
+      } else if (root_closed || sp == 0) {
+        context.success = false;
+        break;
+      }
       if (sp < CONFIG_MAX_DEPTH - 1) {
         sp++;
       } else {
@@ -124,6 +144,10 @@ bool ConfigSerializer::loadSerial(Stream& s) {
     } else if (next_tok == TOK_END_OBJ) {
       if (sp > 0) {
         sp--;
+        if (sp == 0) {
+          root_closed = true;
+          break;
+        }
       } else {
         //Serial.printf("Error: too many closing '}'"); // TODO: debug logging
         context.success = false;
@@ -131,7 +155,23 @@ bool ConfigSerializer::loadSerial(Stream& s) {
       }
     }
   }
-  if (sp != 0 || next_tok == TOK_ERROR) {
+
+  // Once the one root object is closed, only whitespace is legal.  Without
+  // this check an empty file, "{}garbage" or an interrupted trailing token
+  // could be reported as a valid preferences generation and suppress .bak
+  // recovery.
+  if (root_closed && context.success) {
+    while (s.available() > 0) {
+      int value = s.read();
+      if (value < 0) break;
+      if (!is_whitespace((char)value)) {
+        context.success = false;
+        break;
+      }
+    }
+  }
+
+  if (!root_started || !root_closed || sp != 0 || next_tok == TOK_ERROR) {
     context.success = false;   // unmatched { }, or other parse error
   }
   _context = NULL;
@@ -142,7 +182,7 @@ void ConfigSerializer::writeComma() {
   if (_first) {
     _first = false;
   } else {
-    _context->file()->print(",");  // comma separated properties
+    _context->putText(",");  // comma separated properties
   }
 }
 
@@ -151,10 +191,15 @@ void ConfigSerializer::writeComma() {
 void ConfigSerializer::def(const char* key, void* value, size_t len) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":\"");
-    mesh::Utils::printHex(*_context->file(), (uint8_t*) value, len);
-    _context->file()->print("\"");
+    _context->putText(key);
+    _context->putText(":\"");
+    static const char HEX_CHARS[] = "0123456789abcdef";
+    const uint8_t* bytes = (const uint8_t*)value;
+    for (size_t i = 0; i < len; ++i) {
+      _context->putChar(HEX_CHARS[bytes[i] >> 4]);
+      _context->putChar(HEX_CHARS[bytes[i] & 0x0F]);
+    }
+    _context->putText("\"");
   } else {
     if (_context->keyMatch(_depth, key)) {
       memset(value, 0, len);
@@ -166,23 +211,23 @@ void ConfigSerializer::def(const char* key, void* value, size_t len) {
 void ConfigSerializer::def(const char* key, char* value, size_t max_len) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":\"");
+    _context->putText(key);
+    _context->putText(":\"");
     char c;
     while ((c = *value++) != 0) {  // TODO: handle UTF-8 encoding
       if (c == '"') {
-        _context->file()->print("\\\"");
+        _context->putText("\\\"");
       } else if (c == '\\') {
-        _context->file()->print("\\\\");
+        _context->putText("\\\\");
       } else if (c == '\n') {
-        _context->file()->print("\\n");
+        _context->putText("\\n");
       } else if (c == '\r') {
-        _context->file()->print("\\r");
+        _context->putText("\\r");
       } else {
-        _context->file()->print(c);
+        _context->putChar(c);
       }
     }
-    _context->file()->print("\"");
+    _context->putText("\"");
   } else {
     if (_context->keyMatch(_depth, key)) {
       strncpy(value, _context->getToken(), max_len - 1);
@@ -194,9 +239,9 @@ void ConfigSerializer::def(const char* key, char* value, size_t max_len) {
 void ConfigSerializer::def(const char* key, int32_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print(value);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue(value);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atol(_context->getToken());
@@ -207,9 +252,9 @@ void ConfigSerializer::def(const char* key, int32_t& value) {
 void ConfigSerializer::def(const char* key, uint32_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print(value);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue(value);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atol(_context->getToken());
@@ -220,9 +265,9 @@ void ConfigSerializer::def(const char* key, uint32_t& value) {
 void ConfigSerializer::def(const char* key, int16_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print((int32_t) value, 10);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue((int32_t)value, 10);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atol(_context->getToken());
@@ -233,9 +278,9 @@ void ConfigSerializer::def(const char* key, int16_t& value) {
 void ConfigSerializer::def(const char* key, uint16_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print((uint32_t) value, 10);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue((uint32_t)value, 10);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atoi(_context->getToken());
@@ -246,9 +291,9 @@ void ConfigSerializer::def(const char* key, uint16_t& value) {
 void ConfigSerializer::def(const char* key, uint8_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print((uint32_t) value, 10);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue((uint32_t)value, 10);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atoi(_context->getToken());
@@ -259,9 +304,9 @@ void ConfigSerializer::def(const char* key, uint8_t& value) {
 void ConfigSerializer::def(const char* key, int8_t& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print((int32_t) value, 10);
+    _context->putText(key);
+    _context->putText(":");
+    _context->putValue((int32_t)value, 10);
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = atoi(_context->getToken());
@@ -272,9 +317,9 @@ void ConfigSerializer::def(const char* key, int8_t& value) {
 void ConfigSerializer::def(const char* key, bool& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
-    _context->file()->print(value ? "true" : "false");
+    _context->putText(key);
+    _context->putText(":");
+    _context->putText(value ? "true" : "false");
   } else {
     if (_context->keyMatch(_depth, key)) {
       value = strcmp(_context->getToken(), "true") == 0 || atoi(_context->getToken()) != 0;  // 'true' or a non-zero number
@@ -285,12 +330,12 @@ void ConfigSerializer::def(const char* key, bool& value) {
 void ConfigSerializer::def(const char* key, double& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
+    _context->putText(key);
+    _context->putText(":");
     if (value == 0.0) {
-      _context->file()->print("0");  // shorter encoding
+      _context->putText("0");  // shorter encoding
     } else {
-      _context->file()->print(value, 6);  // REVISIT: how many dec places?
+      _context->putValue(value, 6);  // REVISIT: how many dec places?
     }
   } else {
     if (_context->keyMatch(_depth, key)) {
@@ -302,12 +347,12 @@ void ConfigSerializer::def(const char* key, double& value) {
 void ConfigSerializer::def(const char* key, float& value) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":");
+    _context->putText(key);
+    _context->putText(":");
     if (value == 0.0f) {
-      _context->file()->print("0");  // shorter encoding
+      _context->putText("0");  // shorter encoding
     } else {
-      _context->file()->print(value, 4);  // REVISIT: how many dec places?
+      _context->putValue(value, 4);  // REVISIT: how many dec places?
     }
   } else {
     if (_context->keyMatch(_depth, key)) {
@@ -319,12 +364,12 @@ void ConfigSerializer::def(const char* key, float& value) {
 void ConfigSerializer::def(const char* key, ConfigSerializer& sub_obj) {
   if (_context->op() == OP::WRITE) {
     writeComma();
-    _context->file()->print(key);
-    _context->file()->print(":{");
+    _context->putText(key);
+    _context->putText(":{");
     sub_obj._context = _context;  // inherit the Context
     sub_obj._first = true;
     sub_obj.structure();   // recurse into sub object
-    if (_context->file()->print("}") != 1) _context->success = false;  // failure detect
+    _context->putText("}");
   } else {
     if (_context->keyMatch(_depth, key)) {
       sub_obj._context = _context;  // inherit the Context

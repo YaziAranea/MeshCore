@@ -3,6 +3,7 @@
 #include <MeshCore.h>
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
+#include <helpers/AdcCalibration.h>
 
 // built-ins
 #define  PIN_VBAT_READ    4
@@ -41,11 +42,13 @@ public:
     adcvalue = analogRead(PIN_VBAT_READ);
     digitalWrite(PIN_BAT_CTL, LOW);
 
-    return (uint16_t)((float)adcvalue * MV_LSB * adc_mult);
+    return mesh::saturatingBatteryMilliVolts((float)adcvalue * MV_LSB * adc_mult);
   }
 
   bool setAdcMultiplier(float multiplier) override {
-    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
   }
 

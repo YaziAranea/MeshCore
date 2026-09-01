@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FONT_HEADER = ROOT / "src/helpers/ui/Utf8Cyrillic5x7.h"
 DEFAULT_OUT = ROOT / "qa_outputs" / "wireless_paper_ps17"
 W, H = 250, 122
+UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 12 * 3600, 3 * 86400, 2000 * 86400)
 
 PROFILES = {
     "Стандарт": (6, 3, 0, False),
@@ -76,6 +77,24 @@ class Canvas:
         self.owner = [[""] * W for _ in range(H)]
         self.collisions: Counter[tuple[str, str]] = Counter()
         self.clipped = 0
+        self.layout_checks = 0
+        self.layout_failures: list[str] = []
+
+    def assert_gap(self, left_name: str, left_right: int, right_name: str,
+                   right_left: int, minimum: int) -> None:
+        """Assert exclusive horizontal bounds using logical, not ink, metrics."""
+        self.layout_checks += 1
+        actual = right_left - left_right
+        if actual < minimum:
+            self.layout_failures.append(
+                f"{left_name}..{right_name}: gap={actual}, expected>={minimum} "
+                f"({left_right}..{right_left})"
+            )
+
+    def assert_span(self, name: str, left: int, right: int) -> None:
+        self.layout_checks += 1
+        if left < 0 or right < left or right > W:
+            self.layout_failures.append(f"{name}: span {left}..{right} outside 0..{W}")
 
     def pixel(self, x: int, y: int, ink: bool = True, layer: str = "ui") -> None:
         if not (0 <= x < W and 0 <= y < H):
@@ -185,7 +204,48 @@ class Canvas:
             "ink_bbox": [min(xs), min(ys), max(xs), max(ys)] if xs else None,
             "clipped_pixel_attempts": self.clipped,
             "overlap_pixels": {" + ".join(k): v for k, v in sorted(self.collisions.items())},
+            "layout_checks": self.layout_checks,
+            "layout_failures": list(self.layout_failures),
         }
+
+
+def format_clock_uptime(seconds: int) -> str:
+    """Exact host equivalent of smartui::formatClockUptime()."""
+    if seconds < 3600:
+        return f"U {seconds // 60}m"
+    if seconds < 86400:
+        return f"U {seconds // 3600}h"
+    days = seconds // 86400
+    return "U 999+d" if days > 999 else f"U {days}d"
+
+
+def clock_uptime_placement(c: Canvas, profile: str, left_used: int,
+                           right_used: int, seconds: int) -> tuple[str, int, int, int] | None:
+    """Mirror drawClockUptimeBetween(), including the compact fallback."""
+    full = format_clock_uptime(seconds)
+    for text, gap in ((full, 3), (full.replace(" ", "", 1), 2)):
+        width = c.text_width(text, profile)
+        right = right_used - gap
+        left = right - width
+        if left >= left_used + gap:
+            return text, left, right, gap
+    return None
+
+
+def draw_clock_uptime_between(c: Canvas, profile: str, left_used: int,
+                              right_used: int, y: int, seconds: int) -> None:
+    placement = clock_uptime_placement(c, profile, left_used, right_used, seconds)
+    c.layout_checks += 1
+    if placement is None:
+        c.layout_failures.append(
+            f"uptime {format_clock_uptime(seconds)} does not fit {left_used}..{right_used}"
+        )
+        return
+    text, left, right, gap = placement
+    c.assert_span("uptime", left, right)
+    c.assert_gap("left chrome", left_used, "uptime", left, gap)
+    c.assert_gap("uptime", right, "battery", right_used, gap)
+    c.right(right, y, text, profile=profile, layer="uptime")
 
 
 def pine(c: Canvas, x: int, base_y: int, height: int) -> None:
@@ -240,18 +300,26 @@ def forest(c: Canvas, seed: int = 17) -> None:
         pine(c, x, 30, 20 + ((x + seed) % 8))
 
 
-def battery(c: Canvas, mv: int = 3870) -> None:
+def paper_battery_left_edge(c: Canvas, profile: str, mv: int = 3870) -> int:
     label = f"{mv // 1000}.{(mv % 1000) // 10:02d}V"
-    c.right(W - 26, 4, label, layer="battery_text")
+    return (W - 26) - c.text_width(label, profile)
+
+
+def battery(c: Canvas, profile: str = "Стандарт", mv: int = 3870) -> int:
+    label = f"{mv // 1000}.{(mv % 1000) // 10:02d}V"
+    label_right = W - 26
+    label_left = paper_battery_left_edge(c, profile, mv)
+    c.right(label_right, 4, label, profile=profile, layer="battery_text")
     x, y = W - 24, 3
     c.rect(x, y, 21, 10, layer="battery_icon")
     c.fill(x + 21, y + 3, 2, 4, layer="battery_icon")
     bars = 5 if mv >= 4100 else 4 if mv >= 3950 else 3 if mv >= 3800 else 2 if mv >= 3650 else 1 if mv >= 3450 else 0
     for i in range(bars):
         c.fill(x + 2 + i * 3, y + 2, 2, 6, layer="battery_icon")
+    return label_left
 
 
-def main_battery(c: Canvas, profile: str, mv: int = 3870) -> None:
+def main_battery(c: Canvas, profile: str, mv: int = 3870) -> int:
     """Generic HomeScreen::renderBatteryIndicator geometry (non-T096)."""
     icon_w, icon_h = 18, 10
     icon_x, icon_y = W - icon_w - 2, 2
@@ -265,21 +333,35 @@ def main_battery(c: Canvas, profile: str, mv: int = 3870) -> None:
     fill_w = ((icon_w - 4) * pct + 50) // 100
     if fill_w:
         c.fill(icon_x + 2, icon_y + 2, fill_w, icon_h - 4, layer="battery_icon")
+    return label_x if label_x > 0 else icon_x
 
 
-def render_wood(profile: str = "Стандарт") -> Canvas:
+def render_wood(profile: str = "Стандарт", uptime_seconds: int = 12 * 3600) -> Canvas:
     c = Canvas("wood_clock")
     forest(c)
-    title = c.ellipsize("Мешкор Омск", W - 72, profile=profile)
+    uptime = format_clock_uptime(uptime_seconds)
+    battery_left = paper_battery_left_edge(c, profile)
+    uptime_right = battery_left - 3
+    uptime_left = uptime_right - c.text_width(uptime, profile)
+    title = c.ellipsize("Мешкор Омск", max(24, uptime_left - 8), profile=profile)
     c.text(4, 4, title, profile=profile, layer="header")
-    battery(c)
+    rendered_battery_left = battery(c, profile)
+    if rendered_battery_left != battery_left:
+        c.layout_failures.append(
+            f"battery metric drift {rendered_battery_left}!={battery_left}"
+        )
+    header_right = 4 + c.text_width(title, profile)
+    c.assert_span("uptime", uptime_left, uptime_right)
+    c.assert_gap("header", header_right, "uptime", uptime_left, 4)
+    c.assert_gap("uptime", uptime_right, "battery", battery_left, 3)
+    c.right(uptime_right, 4, uptime, profile=profile, layer="uptime")
     c.centered(W // 2, 39, "23:47", profile=profile, size=4, bold=True, layer="time")
     c.centered(W // 2, 78, "22.08.2026", profile=profile, size=2, layer="date")
     c.centered(W // 2, 101, "Непроч: 12", profile=profile, layer="unread")
     return c
 
 
-def render_wood_safe(profile: str = "Стандарт") -> Canvas:
+def render_wood_safe(profile: str = "Стандарт", uptime_seconds: int = 12 * 3600) -> Canvas:
     """Minimal collision-free variant proposed by the QA pass.
 
     The artwork remains unchanged; two paper-white quiet zones are restored
@@ -287,21 +369,45 @@ def render_wood_safe(profile: str = "Стандарт") -> Canvas:
     """
     c = Canvas("wood_clock_final")
     forest(c)
+    uptime = format_clock_uptime(uptime_seconds)
+    battery_left = paper_battery_left_edge(c, profile)
+    uptime_right = battery_left - 3
+    uptime_width = c.text_width(uptime, profile)
+    uptime_left = uptime_right - uptime_width
     c.fill(45, 34, 161, 64, ink=False, layer="quiet_zone")
     c.fill(190, 0, 60, 15, ink=False, layer="quiet_zone")
-    title = c.ellipsize("Лесная нода Омск", W - 72, profile=profile)
+    c.fill(uptime_left - 2, 0, uptime_width + 4, 15, ink=False, layer="quiet_zone")
+    title = c.ellipsize("Лесная нода Омск", max(24, uptime_left - 8), profile=profile)
     c.text(4, 4, title, profile=profile, layer="header")
-    battery(c)
+    rendered_battery_left = battery(c, profile)
+    if rendered_battery_left != battery_left:
+        c.layout_failures.append(
+            f"battery metric drift {rendered_battery_left}!={battery_left}"
+        )
+    header_right = 4 + c.text_width(title, profile)
+    c.assert_span("uptime", uptime_left, uptime_right)
+    c.assert_gap("header", header_right, "uptime", uptime_left, 4)
+    c.assert_gap("uptime", uptime_right, "battery", battery_left, 3)
+    c.right(uptime_right, 4, uptime, profile=profile, layer="uptime")
     c.centered(W // 2, 39, "23:47", profile=profile, size=4, bold=True, layer="time")
     c.centered(W // 2, 78, "22.08.2026", profile=profile, size=2, layer="date")
     c.centered(W // 2, 101, "Непроч: 12", profile=profile, layer="unread")
     return c
 
 
-def render_main_clock(profile: str = "Стандарт") -> Canvas:
+def render_main_clock(profile: str = "Стандарт", uptime_seconds: int = 12 * 3600) -> Canvas:
     c = Canvas("main_clock")
-    c.text(4, 4, c.ellipsize("Heltec WP SmartUI", W - 82, profile=profile), profile=profile, layer="header")
-    main_battery(c, profile)
+    node_right = W // 2
+    title = c.ellipsize("Heltec WP SmartUI", node_right - 8, profile=profile)
+    c.text(4, 4, title, profile=profile, layer="header")
+    battery_left = main_battery(c, profile)
+    placement = clock_uptime_placement(c, profile, node_right, battery_left, uptime_seconds)
+    draw_clock_uptime_between(c, profile, node_right, battery_left, 4, uptime_seconds)
+    header_right = 4 + c.text_width(title, profile)
+    c.assert_gap("header", header_right, "uptime lane", node_right, 4)
+    if placement is not None:
+        _text, uptime_left, _right, _gap = placement
+        c.assert_gap("header", header_right, "uptime", uptime_left, 4)
     c.centered(W // 2, 25, "23:47", profile=profile, size=4, bold=True, layer="time")
     c.centered(W // 2, 61, "22.08.2026", profile=profile, size=2, layer="date")
     c.centered(W // 2, 86, "ChUtil 12.3%  Air 0.42%", profile=profile, layer="channel")
@@ -545,13 +651,25 @@ def main() -> None:
             stat["profile"] = profile
             profile_matrix.append(stat)
 
+    # Uptime changes unit and maximum width over the lifetime of a node.  Run
+    # every representation on both clock implementations for every real font.
+    uptime_matrix = []
+    for profile in PROFILES:
+        for seconds in UPTIME_SAMPLES:
+            for renderer in (render_wood_safe, render_main_clock):
+                canvas = renderer(profile, seconds)
+                stat = canvas.stats()
+                stat["profile"] = profile
+                stat["uptime_seconds"] = seconds
+                uptime_matrix.append(stat)
+
     allowed_overlaps = {
         "scroll_thumb + scroll_track",
         "scroll_track + selection",
     }
     checks_total = 0
     failures: list[str] = []
-    for stat in profile_matrix:
+    for stat in profile_matrix + uptime_matrix:
         label = f"{stat['profile']} / {stat['name']}"
 
         checks_total += 1
@@ -575,12 +693,19 @@ def main() -> None:
         if stat["ink_pixels"] <= 0:
             failures.append(f"{label}: empty framebuffer")
 
+        checks_total += 1
+        if stat["layout_failures"]:
+            failures.append(f"{label}: layout {stat['layout_failures']}")
+        if stat["name"] in ("wood_clock_final", "main_clock") and stat["layout_checks"] <= 0:
+            failures.append(f"{label}: no clock chrome layout assertions executed")
+
     report = {
         "display": [W, H],
         "renderer": "E213 profile fonts / Utf8Cyrillic5x7.h",
         "profiles": PROFILES,
         "screens": [c.stats() for c in canvases],
         "profile_matrix": profile_matrix,
+        "uptime_matrix": uptime_matrix,
         "summary": {
             "checks": checks_total,
             "passed": checks_total - len(failures),

@@ -48,6 +48,7 @@ void SerialEthernetInterface::onClientConnected() {
   _state = RECV_STATE_IDLE;
   _frame_len = 0;
   _rx_len = 0;
+  _rx_overflow = false;
 }
 
 size_t SerialEthernetInterface::checkRecvFrame(uint8_t dest[]) {
@@ -60,8 +61,9 @@ size_t SerialEthernetInterface::checkRecvFrame(uint8_t dest[]) {
 
 #if ETHERNET_RAW_LINE
       ETHERNET_DEBUG_PRINTLN("TX line len=%d", len);
-      client.write(send_queue[0].buf, len);
-      client.write("\r\n", 2);
+      write(send_queue[0].buf, len);
+      const uint8_t delimiter[] = {'\r', '\n'};
+      write(delimiter, sizeof(delimiter));
 #else
       uint8_t pkt[3+len]; // use same header as serial interface so client can delimit frames
       pkt[0] = '>';
@@ -85,11 +87,15 @@ size_t SerialEthernetInterface::checkRecvFrame(uint8_t dest[]) {
 
 #if ETHERNET_RAW_LINE
         if (c == '\r' || c == '\n') {
-          if (_rx_len == 0) {
+          if (_rx_len == 0 && !_rx_overflow) {
             continue;
           }
-          uint16_t out_len = _rx_len;
-          if (out_len > MAX_FRAME_SIZE) out_len = MAX_FRAME_SIZE;
+          if (_rx_overflow) {
+            _rx_len = 0;
+            _rx_overflow = false;
+            return 0;
+          }
+          const uint16_t out_len = _rx_len;
           memcpy(dest, _rx_buf, out_len);
           _rx_len = 0;
           return out_len;
@@ -97,6 +103,8 @@ size_t SerialEthernetInterface::checkRecvFrame(uint8_t dest[]) {
         if (_rx_len < MAX_FRAME_SIZE) {
           _rx_buf[_rx_len] = (uint8_t)c;
           _rx_len++;
+        } else {
+          _rx_overflow = true;
         }
 #else
         switch (_state) {
@@ -120,15 +128,19 @@ size_t SerialEthernetInterface::checkRecvFrame(uint8_t dest[]) {
             }
             _rx_len++;
             if (_rx_len >= _frame_len) {
-              if (_frame_len > MAX_FRAME_SIZE) {
-                _frame_len = MAX_FRAME_SIZE;
-              }
-              #if ETHERNET_DEBUG_LOGGING && ARDUINO
-              ETHERNET_DEBUG_PRINTLN("RX frame len=%d", _frame_len);
-              #endif
-              memcpy(dest, _rx_buf, _frame_len);
+              const uint16_t completed_len = _frame_len;
               _state = RECV_STATE_IDLE;
-              return _frame_len;
+              _frame_len = 0;
+              _rx_len = 0;
+              // The entire oversized payload has been consumed. Drop it
+              // instead of treating its MAX_FRAME_SIZE-byte prefix as a
+              // complete command.
+              if (completed_len > MAX_FRAME_SIZE) return 0;
+              #if ETHERNET_DEBUG_LOGGING && ARDUINO
+              ETHERNET_DEBUG_PRINTLN("RX frame len=%d", completed_len);
+              #endif
+              memcpy(dest, _rx_buf, completed_len);
+              return completed_len;
             }
         }
 #endif

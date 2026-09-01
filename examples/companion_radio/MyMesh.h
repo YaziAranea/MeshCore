@@ -166,7 +166,9 @@ class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
 
-  void begin(bool has_display);
+  // Returns false when persistent identity cannot be loaded or durably created.
+  // Callers must fail-stop before enabling companion/radio traffic in that case.
+  bool begin(bool has_display);
   void startInterface(BaseSerialInterface &serial);
 
   const char *getNodeName();
@@ -197,6 +199,11 @@ public:
   int getQuickReplyContactCount();
   bool getQuickReplyChannel(uint16_t list_idx, uint8_t& channel_idx, ChannelDetails& channel);
   bool getQuickReplyContact(uint16_t list_idx, ContactInfo& contact);
+  // Stable target APIs.  UI code should resolve the list selection once and
+  // retain these immutable identifiers while the picker is open.
+  bool sendQuickReplyToChannelId(uint8_t channel_idx, const char* text);
+  bool sendQuickReplyToContactPubKey(const uint8_t pub_key[PUB_KEY_SIZE], const char* text);
+  // Compatibility wrappers for older UI implementations that still use list ordinals.
   bool sendQuickReplyToChannel(uint16_t list_idx, const char* text);
   bool sendQuickReplyToContact(uint16_t list_idx, const char* text);
   void enterCLIRescue();
@@ -272,10 +279,10 @@ protected:
   }
 
 public:
-  void savePrefs() {
+  bool savePrefs() {
     _prefs.node_lat = isPhoneGpsEnabled() ? 0.0 : sensors.node_lat;
     _prefs.node_lon = isPhoneGpsEnabled() ? 0.0 : sensors.node_lon;
-    _store->savePrefs(_prefs);
+    return _store->savePrefs(_prefs);
   }
 
   bool areBoardLedsEnabled() const { return _prefs.board_leds_enabled != 0; }
@@ -328,7 +335,7 @@ private:
   void writeErrFrame(uint8_t err_code);
   void writeDisabledFrame();
   void writeContactRespFrame(uint8_t code, const ContactInfo &contact);
-  void updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, int len);
+  bool updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, size_t len);
   void addToOfflineQueue(const uint8_t frame[], int len);
   int getFromOfflineQueue(uint8_t frame[]);
   int getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) override { 
@@ -345,12 +352,13 @@ private:
   void noteNetworkStatus(const ContactInfo& contact, uint8_t path_len);
   void noteTrafficStatus(const char* name, uint8_t slot, uint8_t path_len, uint8_t flags);
   void noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text);
+  bool textMentionsNodeName(const char* text, const char* node_name);
   void sampleChannelBusy();
   void updateAutoAdvertTimer();
 
   // helpers, short-cuts
-  void saveChannels() { _store->saveChannels(this); }
-  void saveContacts();
+  bool saveChannels() { return _store->saveChannels(this); }
+  bool saveContacts();
 
   DataStore* _store;
   NodePrefs _prefs;
@@ -393,15 +401,20 @@ private:
   struct AckTableEntry {
     unsigned long msg_sent;
     uint32_t ack;
-    ContactInfo* contact;
+    uint8_t recipient_pub_key[PUB_KEY_SIZE];
   };
   #define EXPECTED_ACK_TABLE_SIZE 8
   AckTableEntry expected_ack_table[EXPECTED_ACK_TABLE_SIZE]; // circular table
   int next_ack_idx;
 
+  void recordExpectedAck(uint32_t expected_ack, const uint8_t recipient_pub_key[PUB_KEY_SIZE]);
+
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
   NetworkStatusEntry network_status[NETWORK_STATUS_TABLE_SIZE];
+  // Mention disambiguation needs a stable per-message network snapshot. Keep
+  // it in the long-lived mesh object instead of consuming ~1 KB of loop-task stack.
+  NetworkStatusEntry mention_status_scratch[NETWORK_STATUS_TABLE_SIZE];
   RecentChatEntry recent_chat[RECENT_CHAT_TABLE_SIZE];
   LinkTestStatus link_test;
   int8_t last_rx_snr_q4;

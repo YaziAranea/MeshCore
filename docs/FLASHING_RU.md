@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-`v2.1.0-dev.2` — текущий GitHub Release для пяти плат. Предыдущий `v2.1.0-dev.1` сохранён для отката. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
+`v2.1.0-beta.1` — текущий предварительный GitHub Release для пяти плат. `v2.1.0-dev.2` сохранён для быстрого отката. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
 
 ## Перед началом
 
@@ -15,17 +15,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-dev.2.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-dev.2.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-beta.1.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-beta.1.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2-update.bin` |
-| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1-update.bin` |
+| Wireless Paper WOOD | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1-update.bin` |
+| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -81,7 +81,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо текущий `2.1.0-dev.2`.
+- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо текущий `2.1.0-beta.1`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

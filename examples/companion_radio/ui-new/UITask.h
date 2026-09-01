@@ -8,6 +8,7 @@
 #include <helpers/BoardLedControl.h>
 #include <Arduino.h>
 #include <helpers/sensors/LPPDataHelpers.h>
+#include "BatteryShutdownPolicy.h"
 
 #ifndef LED_STATE_ON
   #define LED_STATE_ON 1
@@ -126,15 +127,16 @@ class UITask : public AbstractUITask {
   unsigned long _hourly_last_rx_air_ms;
   unsigned long _hourly_last_busy_ms;
   unsigned long ui_started_at, next_batt_chck;
+  uint64_t _uptime_accumulated_ms;
+  uint32_t _uptime_last_millis;
   uint8_t _low_batt_strikes;
   mutable uint16_t _battery_milli_volts;
-  mutable uint16_t _battery_display_milli_volts;
   mutable unsigned long _battery_next_sample;
   mutable bool _battery_sample_valid;
-  int next_backlight_btn_check = 0;
+  uint32_t next_backlight_btn_check = 0;
 #ifdef PIN_STATUS_LED
   int led_state = 0;
-  int next_led_change = 0;
+  uint32_t next_led_change = 0;
   int last_led_increment = 0;
 #endif
 #ifdef PIN_MSG_ALERT
@@ -201,10 +203,12 @@ class UITask : public AbstractUITask {
 
   void userLedHandler();
   void updateHourlyMessageWindow();
+  void updateUptime(uint32_t now);
   void resetHourlyStats(unsigned long now);
   void updateHourlyStats();
   void addHourlyMessage();
   void invalidateBatteryCache();
+  smartui::BatteryReading readSafetyBattery() const;
   void markDisplayWake(bool reset_to_clock);
   void scheduleDisplayRecover(bool reset_to_clock, unsigned long now);
   void displayRecoverHandler();
@@ -275,9 +279,10 @@ public:
     _hourly_last_rx_air_ms = 0;
     _hourly_last_busy_ms = 0;
     ui_started_at = 0;
+    _uptime_accumulated_ms = 0;
+    _uptime_last_millis = 0;
     _low_batt_strikes = 0;
     _battery_milli_volts = 0;
-    _battery_display_milli_volts = 0;
     _battery_next_sample = 0;
     _battery_sample_valid = false;
     _last_activity_ms = 0;
@@ -437,6 +442,12 @@ public:
   float getAdcMultiplier() const;
   bool setAdcMultiplier(float multiplier, bool save);
   uint16_t getBattMilliVolts() const override;
+  uint64_t getUptimeSeconds() const { return _uptime_accumulated_ms / 1000ULL; }
+  bool hasTrustedTime() const;
+  int16_t getTimezoneOffsetMinutes() const;
+  bool setTimezoneOffsetMinutes(int16_t minutes, bool save);
+  int32_t getTimezoneOffsetSeconds() const;
+  uint32_t getLocalClockTime(uint32_t utc_time) const;
 
 
   // from AbstractUITask
@@ -447,5 +458,5 @@ public:
   void notify(UIEventType t = UIEventType::none) override;
   void loop() override;
 
-  void shutdown(bool restart = false);
+  void shutdown(bool restart = false, bool preserve_eink_frame = false);
 };

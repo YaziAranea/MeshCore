@@ -72,6 +72,7 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   saved.notify_tone_dm_id = 12;
   saved.notify_tone_mention_id = 12;
   saved.notify_tone_system_id = 12;
+  saved.timezone_offset_minutes = -210;
 
   CaptureStream output;
   ASSERT_TRUE(saved.saveSerial(output));
@@ -79,6 +80,7 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   EXPECT_NE(std::string::npos, output.text().find("tone_pin:31"));
   EXPECT_NE(std::string::npos, output.text().find("bridge:1"));
   EXPECT_NE(std::string::npos, output.text().find("pin_fix:1"));
+  EXPECT_NE(std::string::npos, output.text().find("tz_min:-210"));
 
   ReplayStream input(output.text().c_str());
   NodePrefs loaded;
@@ -98,6 +100,34 @@ TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip)
   EXPECT_EQ(saved.notify_tone_dm_id, loaded.notify_tone_dm_id);
   EXPECT_EQ(saved.notify_tone_mention_id, loaded.notify_tone_mention_id);
   EXPECT_EQ(saved.notify_tone_system_id, loaded.notify_tone_system_id);
+  EXPECT_EQ(saved.timezone_offset_minutes, loaded.timezone_offset_minutes);
+}
+
+TEST(CompanionNodePrefs, TimezoneDefaultsToOmskAndCopiesWithoutRebindingSerializers) {
+  NodePrefs defaults;
+  EXPECT_EQ(360, defaults.timezone_offset_minutes);
+
+  NodePrefs source;
+  source.timezone_offset_minutes = 840;
+  NodePrefs copied(source);
+  EXPECT_EQ(840, copied.timezone_offset_minutes);
+
+  NodePrefs assigned;
+  assigned = source;
+  EXPECT_EQ(840, assigned.timezone_offset_minutes);
+
+  CaptureStream output;
+  ASSERT_TRUE(assigned.saveSerial(output));
+  EXPECT_NE(std::string::npos, output.text().find("tz_min:840"));
+}
+
+TEST(CompanionNodePrefs, TimezoneRejectsCorruptOrUnsupportedPersistedValues) {
+  EXPECT_EQ(-720, normalizeTimezoneOffsetMinutes(-720));
+  EXPECT_EQ(330, normalizeTimezoneOffsetMinutes(330));
+  EXPECT_EQ(840, normalizeTimezoneOffsetMinutes(840));
+  EXPECT_EQ(360, normalizeTimezoneOffsetMinutes(-721));
+  EXPECT_EQ(360, normalizeTimezoneOffsetMinutes(841));
+  EXPECT_EQ(360, normalizeTimezoneOffsetMinutes(361));
 }
 
 TEST(CompanionNodePrefs, LegacyBuzzerRepairRunsOnce) {

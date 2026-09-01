@@ -63,9 +63,28 @@ def main():
         rows = [f"{digest(path)}  {path.name}" for path in sorted(output.glob("*" + suffix))]
         (output / manifest).write_text("\n".join(rows) + "\n", encoding="ascii", newline="\n")
 
-    names = sorted(path.name for path in output.iterdir())
     first_name = next(iter(uf2.EXPECTED))
     version = first_name.split("_SmartUI_", 1)[1].removesuffix(".uf2")
+    notes_source = ROOT / f"RELEASE_NOTES_v{version}_RU.md"
+    if notes_source.is_file():
+        shutil.copy2(notes_source, output / notes_source.name)
+
+    manifest_payloads = sorted(output.iterdir())
+    manifest = {
+        "version": version,
+        "files": [
+            {"name": path.name, "bytes": path.stat().st_size, "sha256": digest(path)}
+            for path in manifest_payloads
+        ],
+    }
+    manifest_path = output / "RELEASE-MANIFEST.json"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    names = sorted(path.name for path in output.iterdir())
     archive = output / f"MeshCore_SmartUI_{version}_all-five-boards.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for name in names:

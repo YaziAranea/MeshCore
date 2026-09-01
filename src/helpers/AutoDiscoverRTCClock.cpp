@@ -20,6 +20,10 @@ static bool rtc_8130_success = false;
 #define PCF8563_ADDRESS  0x51
 #define RX8130CE_ADDRESS 0x32
 
+bool AutoDiscoverRTCClock::hasHardwareRTC() const {
+  return ds3231_success || rv3028_success || rtc_8563_success || rtc_8130_success;
+}
+
 bool AutoDiscoverRTCClock::i2c_probe(TwoWire& wire, uint8_t addr) {
   wire.beginTransmission(addr);
   uint8_t error = wire.endTransmission();
@@ -52,9 +56,12 @@ void AutoDiscoverRTCClock::begin(TwoWire& wire) {
     rtc_8130_success = true;
     MESH_DEBUG_PRINTLN("RX8130CE: Initialized");
   }
+
+  _hardware_time_trusted = hasHardwareRTC() &&
+                           meshRtcTimestampPlausible(readHardwareTime());
 }
 
-uint32_t AutoDiscoverRTCClock::getCurrentTime() {
+uint32_t AutoDiscoverRTCClock::readHardwareTime() {
   if (ds3231_success) {
     return rtc_3231.now().unixtime();
   }
@@ -79,7 +86,16 @@ uint32_t AutoDiscoverRTCClock::getCurrentTime() {
     return rtc_8130.now().unixtime();
   }
 
-  return _fallback->getCurrentTime();
+  return 0;
+}
+
+uint32_t AutoDiscoverRTCClock::getCurrentTime() {
+  if (_hardware_time_trusted && hasHardwareRTC()) {
+    uint32_t hardware_time = readHardwareTime();
+    if (meshRtcTimestampPlausible(hardware_time)) return hardware_time;
+    _hardware_time_trusted = false;
+  }
+  return _fallback != NULL ? _fallback->getCurrentTime() : 0;
 }
 
 void AutoDiscoverRTCClock::setCurrentTime(uint32_t time) { 
@@ -94,7 +110,32 @@ void AutoDiscoverRTCClock::setCurrentTime(uint32_t time) {
   } else if (rtc_8130_success) {
     MESH_DEBUG_PRINTLN("RX8130CE: Setting time");
     rtc_8130.adjust(DateTime(time));
-  } else {
-    _fallback->setCurrentTime(time);
   }
+  // Mirror explicit fixes into the software clock as a safe fallback if the
+  // external RTC later stops responding or loses validity.
+  if (_fallback != NULL) _fallback->setCurrentTime(time);
+  if (hasHardwareRTC()) {
+    _hardware_time_trusted = meshRtcTimestampPlausible(time);
+  }
+}
+
+bool AutoDiscoverRTCClock::isTimeTrusted() {
+  if (_hardware_time_trusted && hasHardwareRTC()) {
+    if (meshRtcTimestampPlausible(readHardwareTime())) return true;
+    _hardware_time_trusted = false;
+  }
+  return _fallback != NULL && _fallback->isTimeTrusted();
+}
+
+void AutoDiscoverRTCClock::setEstimatedTime(uint32_t time) {
+  if (isTimeTrusted()) return;
+
+  if (_fallback != NULL) {
+    _fallback->setEstimatedTime(time);
+  }
+
+  // Never write an estimate to a battery-backed chip: after reboot there is no
+  // durable source-quality bit with which to distinguish it from a real RTC
+  // fix.  The fallback keeps the estimate for packet ordering only.
+  _hardware_time_trusted = false;
 }

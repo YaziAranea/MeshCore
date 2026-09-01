@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - smartui-ps17.2-dev
+      - smartui-2.1-beta.1
+    tags:
+      - v2.1.0-beta.1
   pull_request:
   workflow_dispatch:
 
@@ -29,15 +32,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-dev.2.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-beta.1.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-dev.2.uf2
+            uf2_name: T114_SmartUI_2.1.0-beta.1.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-dev.2.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2
 
     steps:
       - name: Check out source
@@ -134,15 +137,15 @@ jobs:
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-dev.2
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1
           - board: Heltec Wireless Paper WOOD
             artifact_id: wireless-paper-wood
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_wood
-            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-dev.2
+            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-dev.2
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1
 
     steps:
       - name: Check out source
@@ -239,7 +242,6 @@ jobs:
       matrix:
         environment:
           - Heltec_v3_companion_radio_ble
-          - RAK_4631_companion_radio_usb
           - Xiao_S3_WIO_companion_radio_ble
           - Heltec_t1_companion_radio_usb
 
@@ -285,6 +287,7 @@ jobs:
         environment:
           - native
           - native_kiss_modem
+          - native_serial_raw_line
 
     steps:
       - name: Check out source
@@ -361,3 +364,146 @@ jobs:
           path: qa_outputs
           if-no-files-found: error
           retention-days: 14
+
+  release-gate:
+    name: Required beta release gate
+    needs:
+      - validate-uf2
+      - validate-esp32
+      - build-display-compatibility
+      - native-tests
+      - ui-qa
+    runs-on: ubuntu-latest
+    steps:
+      - name: Confirm every required job succeeded
+        run: echo "All supported builds, native tests and framebuffer checks passed."
+
+  publish-beta-release:
+    name: Publish or update beta release
+    if: github.ref == 'refs/tags/v2.1.0-beta.1'
+    needs: release-gate
+    runs-on: ubuntu-latest
+    concurrency:
+      group: publish-beta-release-v2.1.0-beta.1
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Download validated UF2 bundle
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-ps17-validated-uf2
+          path: release
+
+      - name: Download validated ESP32-S3 bundle
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-ps17-validated-esp32-bin
+          path: release
+
+      - name: Build the all-five-boards archive and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp RELEASE_NOTES_v2.1.0-beta.1_RU.md release/
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import zipfile
+
+          root = Path("release")
+          payloads = sorted(
+              p for p in root.iterdir()
+              if p.suffix in {".uf2", ".bin", ".txt", ".md"}
+          )
+          manifest = {
+              "tag": "${{ github.ref_name }}",
+              "commit": "${{ github.sha }}",
+              "files": [
+                  {
+                      "name": p.name,
+                      "bytes": p.stat().st_size,
+                      "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
+                  }
+                  for p in payloads
+              ],
+          }
+          manifest_path = root / "RELEASE-MANIFEST.json"
+          manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+          archive = root / "MeshCore_SmartUI_2.1.0-beta.1_all-five-boards.zip"
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+              for path in payloads + [manifest_path]:
+                  zf.write(path, path.name)
+          with zipfile.ZipFile(archive) as zf:
+              assert zf.testzip() is None
+          PY
+
+      - name: Create or update the single beta release page
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          title="MeshCore SmartUI v2.1.0-beta.1"
+          notes="RELEASE_NOTES_v2.1.0-beta.1_RU.md"
+          release_json="$(mktemp)"
+          trap 'rm -f "$release_json"' EXIT
+          status="$({
+            curl --silent --show-error --location \
+              --output "$release_json" \
+              --write-out '%{http_code}' \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer ${GH_TOKEN}" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          })"
+
+          case "$status" in
+            200)
+              # Keep the same release page for this tag and explicitly retain
+              # its published prerelease state before replacing its assets.
+              gh release edit "$tag" \
+                --title "$title" \
+                --notes-file "$notes" \
+                --prerelease \
+                --draft=false \
+                --verify-tag \
+                --repo "$GITHUB_REPOSITORY"
+
+              release_id="$(python -c \
+                'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["id"])' \
+                "$release_json")"
+              old_asset_ids="$(gh api --paginate \
+                "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+                --jq '.[].id')"
+              if [[ -n "$old_asset_ids" ]]; then
+                while IFS= read -r asset_id; do
+                  gh api --method DELETE \
+                    "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+                done <<< "$old_asset_ids"
+              fi
+
+              gh release upload "$tag" release/* \
+                --repo "$GITHUB_REPOSITORY"
+              ;;
+            404)
+              gh release create "$tag" release/* \
+                --title "$title" \
+                --notes-file "$notes" \
+                --prerelease \
+                --verify-tag \
+                --repo "$GITHUB_REPOSITORY"
+              ;;
+            *)
+              echo "GitHub release lookup failed with HTTP ${status}" >&2
+              cat "$release_json" >&2
+              exit 1
+              ;;
+          esac

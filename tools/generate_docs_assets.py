@@ -66,6 +66,49 @@ from simulate_t114_fonts import (  # noqa: E402
 OUT = ROOT / "docs" / "assets" / "ui"
 QA_OUT = ROOT / "docs" / "assets" / "qa"
 LABEL_FONT_PATH = TOOLS / "font_sources" / "noto_sans_2_015" / "NotoSans-CondensedMedium.ttf"
+UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 12 * 3600, 3 * 86400, 2000 * 86400)
+
+
+def format_clock_uptime(seconds: int) -> str:
+    """Exact host equivalent of smartui::formatClockUptime()."""
+    if seconds < 3600:
+        return f"U {seconds // 60}m"
+    if seconds < 86400:
+        return f"U {seconds // 3600}h"
+    days = seconds // 86400
+    return "U 999+d" if days > 999 else f"U {days}d"
+
+
+def clock_uptime_placement(width_fn, left_used: int, right_used: int,
+                           seconds: int) -> tuple[str, int, int, int] | None:
+    """Mirror drawClockUptimeBetween(), including its no-space fallback."""
+    full = format_clock_uptime(seconds)
+    for text, gap in ((full, 3), (full.replace(" ", "", 1), 2)):
+        width = width_fn(text)
+        right = right_used - gap
+        left = right - width
+        if left >= left_used + gap:
+            return text, left, right, gap
+    return None
+
+
+def draw_frame_clock_uptime(frame: Frame, left_used: int, right_used: int,
+                            y: int, seconds: int) -> tuple[str, int, int, int] | None:
+    placement = clock_uptime_placement(frame.font.width, left_used, right_used, seconds)
+    if placement is None:
+        frame.facts["clock_uptime"] = "hidden-no-room"
+        return None
+    text, left, right, gap = placement
+    if left < left_used + gap or right > right_used - gap:
+        frame.violations.append(
+            f"uptime {text} at {left}..{right} escapes {left_used}..{right_used} gap={gap}"
+        )
+    frame.text(right, y, text, "light", right=True, max_w=frame.font.width(text), tag="uptime")
+    frame.facts["clock_uptime"] = {
+        "text": text, "left": left, "right": right, "gap": gap,
+        "left_used": left_used, "right_used": right_used,
+    }
+    return placement
 
 
 def generate_esp32_docs_assets() -> None:
@@ -87,7 +130,7 @@ def generate_esp32_docs_assets() -> None:
         )
 
         copies = {
-            v4_dir / "V4_3_OLED_CLOCK_GPS_MUTE.png": OUT / "v4-3-oled-clock.png",
+            v4_dir / "V4_3_OLED_CLOCK_UPTIME.png": OUT / "v4-3-oled-clock.png",
             v4_dir / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png":
                 QA_OUT / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png",
             paper_dir / "wood_clock_final.png": OUT / "wireless-paper-wood-clock.png",
@@ -135,9 +178,10 @@ def draw_mute(frame: Frame, x: int, y: int, size: int) -> None:
 
 
 def draw_battery(frame: Frame, x: int, y: int, w: int, h: int, pct: int = 82) -> None:
-    frame.rect(x, y, w - 2, h, "green", outline=True, tag="battery")
-    frame.rect(x + w - 2, y + h // 3, 2, max(2, h // 3), "green", tag="battery nub")
-    fill_w = max(1, ((w - 5) * pct) // 100)
+    """Exact drawUiBatteryIcon(): ``w`` is the body, nub extends two pixels."""
+    frame.rect(x, y, w, h, "green", outline=True, tag="battery")
+    frame.rect(x + w, y + 3, 2, max(1, h - 6), "green", tag="battery nub")
+    fill_w = max(1, ((w - 4) * pct + 50) // 100)
     frame.rect(x + 2, y + 2, fill_w, max(1, h - 4), "green", tag="battery fill")
 
 
@@ -214,23 +258,31 @@ def render_status(profile: BoardProfile, *, gps: bool, fem: bool) -> Frame:
         ("GPS ВКЛ  FEM " + ("ВКЛ" if fem else "НЕТ")) if gps
         else ("FEM ВКЛ" if fem else "Радио SX1262"),
     ]
-    if h > 64:
-        lines.append("Работа 12ч 34м")
     for index, line in enumerate(lines):
         frame.text(1, y + row_h * index, line, "light", max_w=w - 2,
                    tag=f"status line {index}")
     return frame
 
 
-def render_clock_t096(profile: BoardProfile) -> Frame:
+def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
+                      muted: bool = True) -> Frame:
     frame = Frame(profile, "T096 clock", True)
     w = profile.logical_w
     gps = "GPS ON"
     frame.text(1, 1, gps, "green", max_w=58, tag="gps")
     gps_right = 1 + frame.font.width(gps)
-    draw_mute(frame, gps_right + 4, 1, 16)
-    draw_battery(frame, 140, 2, 18, 10)
-    frame.text(136, 1, "4.09V", "green", right=True, max_w=40, tag="voltage")
+    icon_x, icon_y, icon_w, icon_h = w - 22 - 4, 1, 22, 13
+    voltage = "4.09V"
+    voltage_x = icon_x - frame.font.width(voltage) - 3
+    frame.text(voltage_x, 0, voltage, "green", max_w=frame.font.width(voltage), tag="voltage")
+    draw_battery(frame, icon_x, icon_y, icon_w, icon_h)
+    status_right = gps_right
+    if muted:
+        mute_x = gps_right + 4
+        if mute_x + 16 <= voltage_x - 3:
+            draw_mute(frame, mute_x, 1, 16)
+            status_right = mute_x + 16
+    draw_frame_clock_uptime(frame, status_right, voltage_x, 1, uptime_seconds)
 
     clock_font = T096ExactFont("Roboto clock", load_font(DEFAULT_PROFILE, "L"))
     time = "17:08"
@@ -248,15 +300,29 @@ def render_clock_t096(profile: BoardProfile) -> Frame:
     return frame
 
 
-def render_clock_t114(profile: BoardProfile) -> Frame:
-    frame = Frame(profile, "T114 clock", True)
+def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
+                      muted: bool = True) -> Frame:
+    # Chrome remains in the selected T114 font; it is not the forced compact
+    # menu font.  This distinction is why the active-profile sweep is needed.
+    frame = Frame(profile, "T114 clock", False)
     w = profile.logical_w
     gps = "GPS ON"
     frame.text(0, 0, gps, "green", max_w=48, tag="gps")
     gps_right = frame.font.width(gps)
-    draw_mute(frame, gps_right + 3, 1, 10)
-    draw_battery(frame, 112, 1, 14, 8)
-    frame.text(109, 0, "4.09V", "green", right=True, max_w=35, tag="voltage")
+    icon_x, icon_y, icon_w, icon_h = w - 18 - 2, 2, 18, 10
+    voltage = "4.09V"
+    voltage_x = icon_x - frame.font.width(voltage) - 3
+    frame.text(voltage_x, 0, voltage, "green", max_w=frame.font.width(voltage), tag="voltage")
+    draw_battery(frame, icon_x, icon_y, icon_w, icon_h)
+    name_right = voltage_x - 2
+    status_right = gps_right
+    if muted:
+        icon_size = min(12, max(9, frame.font.logical_height - 1))
+        mute_x = gps_right + 3
+        if mute_x + icon_size <= name_right:
+            draw_mute(frame, mute_x, 1, icon_size)
+            status_right = mute_x + icon_size
+    draw_frame_clock_uptime(frame, status_right, name_right, 0, uptime_seconds)
     draw_page_dots(frame)
 
     raw_clock = FirmwareT114Font("Roboto", 28, 36, 30, 6)
@@ -271,13 +337,67 @@ def render_clock_t114(profile: BoardProfile) -> Frame:
     return frame
 
 
-def render_clock_oled() -> Image.Image:
-    oled = Oled(OLED_STYLES[0])
+def draw_oled_mute(oled: Oled, x: int, y: int, size: int = 8) -> None:
+    """Procedural uiIconDrawMute() raster at the firmware's actual size."""
+    grid = 12
+    for gx, gy, gw, gh in ((1, 5, 3, 3), (4, 4, 2, 5)):
+        x1 = x + (gx * size) // grid
+        y1 = y + (gy * size) // grid
+        x2 = x + ((gx + gw) * size + grid - 1) // grid
+        y2 = y + ((gy + gh) * size + grid - 1) // grid
+        oled.draw.rectangle((x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)), fill=1)
+    diag_size = size - 2
+    for index in range(diag_size):
+        oled.draw.point((x + 1 + index, y + 1 + diag_size - 1 - index), fill=1)
+
+
+def draw_oled_battery(oled: Oled, milli_volts: int = 4090) -> int:
+    icon_w, icon_h = 18, 10
+    icon_x, icon_y = 128 - icon_w - 2, 2
+    voltage = f"{milli_volts // 1000}.{(milli_volts % 1000) // 10:02d}V"
+    voltage_x = icon_x - oled.text_width(voltage) - 3
+    oled.text(voltage_x, 0, voltage)
+    oled.draw.rectangle((icon_x, icon_y, icon_x + icon_w - 1, icon_y + icon_h - 1), outline=1)
+    oled.draw.rectangle((icon_x + icon_w, icon_y + 3, icon_x + icon_w + 1,
+                         icon_y + icon_h - 4), fill=1)
+    fill_w = ((icon_w - 4) * 91 + 50) // 100
+    oled.draw.rectangle((icon_x + 2, icon_y + 2, icon_x + 1 + fill_w,
+                         icon_y + icon_h - 3), fill=1)
+    return voltage_x
+
+
+def render_clock_oled(style: tuple[str, int, bool] = OLED_STYLES[0],
+                      uptime_seconds: int = 12 * 3600,
+                      muted: bool = True,
+                      errors: list[str] | None = None) -> Image.Image:
+    oled = Oled(style)
     # Final GPS-less contract: no permanent GPS OFF badge. Quiet-mode status
     # stays useful and therefore occupies the left edge of clock chrome.
-    oled.mute(0, 0)
-    oled.text(109, 0, "4.09V", right=True)
-    oled.battery(112, 0, 82)
+    status_right = -3
+    if muted:
+        draw_oled_mute(oled, 0, 1)
+        status_right = 8
+    battery_left = 108 - oled.text_width("4.09V") - 3
+    name_right = battery_left - 2
+    placement = clock_uptime_placement(oled.text_width, status_right, name_right, uptime_seconds)
+    if placement is not None:
+        uptime, left, right, gap = placement
+        if left < status_right + gap or right > name_right - gap:
+            oled.overflows.append(
+                f"{style[0]}: uptime {uptime} at {left}..{right} escapes "
+                f"{status_right}..{name_right} gap={gap}"
+            )
+        oled.text(right, 0, uptime, right=True)
+    else:
+        full = format_clock_uptime(uptime_seconds)
+        if (name_right - 3 - oled.text_width(full) >= status_right + 3 or
+                name_right - 2 - oled.text_width(full.replace(" ", "", 1)) >= status_right + 2):
+            oled.overflows.append(f"{style[0]}: uptime hidden despite available room")
+    actual_battery_left = draw_oled_battery(oled)
+    if actual_battery_left != battery_left:
+        oled.overflows.append(
+            f"{style[0]}: battery metric drift {actual_battery_left}!={battery_left}"
+        )
     for index, x in enumerate((39, 49, 59, 69, 79, 89)):
         if index == 1:
             oled.draw.rectangle((x - 1, 13, x + 1, 15), fill=1)
@@ -287,6 +407,8 @@ def render_clock_oled() -> Image.Image:
     oled.text(0, 45, "CH1.2% A0.03%", max_width=128)
     oled.text(0, 55, "MSG/h 5", max_width=76)
     oled.text(127, 55, "29C", right=True)
+    if errors is not None:
+        errors.extend(oled.overflows)
     return oled.img.convert("RGB")
 
 
@@ -383,8 +505,75 @@ def make_overview(items: dict[str, list[tuple[str, Image.Image]]]) -> Image.Imag
     return sheet
 
 
+def validate_clock_asset_layouts() -> int:
+    """Real-font chrome sweep for every non-e-paper documentation target."""
+    failures: list[str] = []
+    checks = 0
+
+    def chrome_violations(frame: Frame) -> list[str]:
+        prefixes = ("uptime:", "gps:", "voltage:", "battery", "mute")
+        return [item for item in frame.violations if item.startswith(prefixes)]
+
+    for profile in make_profiles()["T096"]:
+        for seconds in UPTIME_SAMPLES:
+            for muted in (False, True):
+                frame = render_clock_t096(profile, seconds, muted)
+                checks += 1
+                failures.extend(
+                    f"T096 / {profile.profile} / {seconds}s / mute={muted}: {item}"
+                    for item in chrome_violations(frame)
+                )
+                if (seconds == 12 * 3600 and not muted and
+                        frame.facts.get("clock_uptime") == "hidden-no-room"):
+                    failures.append(f"T096 / {profile.profile}: representative uptime is hidden")
+
+    for profile in make_t114_active_profiles():
+        for seconds in UPTIME_SAMPLES:
+            for muted in (False, True):
+                frame = render_clock_t114(profile, seconds, muted)
+                checks += 1
+                failures.extend(
+                    f"T114 / {profile.profile} / {seconds}s / mute={muted}: {item}"
+                    for item in chrome_violations(frame)
+                )
+                if (seconds == 12 * 3600 and not muted and
+                        frame.facts.get("clock_uptime") == "hidden-no-room"):
+                    failures.append(f"T114 / {profile.profile}: representative uptime is hidden")
+
+    for style in OLED_STYLES:
+        for seconds in UPTIME_SAMPLES:
+            for muted in (False, True):
+                errors: list[str] = []
+                render_clock_oled(style, seconds, muted, errors)
+                checks += 1
+                failures.extend(
+                    f"ProMicro / {style[0]} / {seconds}s / mute={muted}: {item}"
+                    for item in errors
+                )
+
+    # DEVICE_STATUS is now telemetry only.  Uptime belongs exclusively to the
+    # clock page, so stale documentation text must fail generation.
+    status_profiles = (
+        (make_profiles()["T096"][0], True, True),
+        (make_t114_active_profiles()[0], True, False),
+        (make_profiles()["OLED"][0], False, False),
+    )
+    for profile, gps, fem in status_profiles:
+        frame = render_status(profile, gps=gps, fem=fem)
+        checks += 1
+        shown = " ".join(element.shown for element in frame.elements)
+        if "Аптайм" in shown or "Работа 12" in shown or "U 12h" in shown:
+            failures.append(f"{profile.board} status: stale uptime text remains")
+
+    if failures:
+        raise RuntimeError("clock asset QA failed:\n" + "\n".join(failures))
+    print(f"Documentation clock chrome QA: {checks} passed, 0 failed")
+    return checks
+
+
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
+    validate_clock_asset_layouts()
     profiles = make_profiles()
     t096 = profiles["T096"][0]
     t114 = make_t114_active_profiles()[0]

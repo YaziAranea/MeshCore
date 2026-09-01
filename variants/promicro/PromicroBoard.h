@@ -3,6 +3,7 @@
 #include <MeshCore.h>
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
+#include <helpers/AdcCalibration.h>
 
 #define  PIN_VBAT_READ 17
 #define  ADC_MULTIPLIER   (1.815f) // dependent on voltage divider resistors. TODO: more accurate battery tracking
@@ -26,15 +27,13 @@ public:
       raw += analogRead(PIN_VBAT_READ);
     }
     raw = raw / BATTERY_SAMPLES;
-    return (adc_mult * raw);
+    return mesh::saturatingBatteryMilliVolts(adc_mult * raw);
   }
 
   bool setAdcMultiplier(float multiplier) override {
-    if (multiplier == 0.0f) {
-      adc_mult = ADC_MULTIPLIER;}
-    else {
-      adc_mult = multiplier;
-    }
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
   }
   float getAdcMultiplier() const override {

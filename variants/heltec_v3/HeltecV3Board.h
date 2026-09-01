@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
+#include <helpers/AdcCalibration.h>
 
 // built-ins
 #ifndef PIN_VBAT_READ              // set in platformio.ini for boards like Heltec Wireless Paper (20)
@@ -64,11 +65,13 @@ public:
 
     digitalWrite(PIN_ADC_CTRL, !adc_active_state);
 
-    return (adc_mult * (3.3 / 1024.0) * raw) * 1000;
+    return mesh::saturatingBatteryMilliVolts((adc_mult * (3.3f / 1024.0f) * raw) * 1000.0f);
   }
 
   bool setAdcMultiplier(float multiplier) override {
-    adc_mult = multiplier == 0.0f ? ADC_MULTIPLIER : multiplier;
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
   }
 

@@ -1,4 +1,5 @@
 #include <helpers/BaseChatMesh.h>
+#include <helpers/ContactTimeBootstrap.h>
 #include <Utils.h>
 
 #ifndef SERVER_RESPONSE_DELAY
@@ -56,14 +57,18 @@ void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, u
 }
 
 void BaseChatMesh::bootstrapRTCfromContacts() {
+  mesh::RTCClock* rtc = getRTCClock();
+  if (rtc->isTimeTrusted()) return;
+
   uint32_t latest = 0;
   for (int i = 0; i < num_contacts; i++) {
-    if (contacts[i].lastmod > latest) {
-      latest = contacts[i].lastmod;
-    }
+    latest = selectContactTimeBootstrapCandidate(latest, contacts[i].lastmod);
   }
-  if (latest != 0) {
-    getRTCClock()->setCurrentTime(latest + 1);
+  uint32_t estimate = 0;
+  if (makeContactTimeEstimate(latest, estimate)) {
+    // A contact timestamp is only a best-effort estimate. Concrete clocks do
+    // not persist it or let it overwrite a trusted retained/hardware value.
+    rtc->setEstimatedTime(estimate);
   }
 }
 
@@ -484,16 +489,19 @@ int  BaseChatMesh::sendCommandData(const ContactInfo& recipient, uint32_t timest
   return rc;
 }
 
-bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, int text_len) {
+bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& channel, const char* sender_name, const char* text, size_t text_len) {
+  if (sender_name == NULL || text == NULL) return false;
+
   uint8_t temp[5+MAX_TEXT_LEN+32];
   memcpy(temp, &timestamp, 4);   // mostly an extra blob to help make packet_hash unique
   temp[4] = 0;  // TXT_TYPE_PLAIN
 
-  sprintf((char *) &temp[5], "%s: ", sender_name);  // <sender>: <msg>
+  snprintf((char *) &temp[5], sizeof(temp) - 5, "%s: ", sender_name);  // <sender>: <msg>
   char *ep = strchr((char *) &temp[5], 0);
-  int prefix_len = ep - (char *) &temp[5];
+  size_t prefix_len = ep - (char *) &temp[5];
 
-  if (text_len + prefix_len > MAX_TEXT_LEN) text_len = MAX_TEXT_LEN - prefix_len;
+  if (prefix_len > MAX_TEXT_LEN) return false;
+  if (text_len > MAX_TEXT_LEN - prefix_len) text_len = MAX_TEXT_LEN - prefix_len;
   memcpy(ep, text, text_len);
   ep[text_len] = 0;  // null terminator
 

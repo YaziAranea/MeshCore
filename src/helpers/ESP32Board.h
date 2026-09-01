@@ -1,6 +1,7 @@
 #pragma once
 
 #include <MeshCore.h>
+#include "RTCClockQuality.h"
 #include <Arduino.h>
 
 #ifndef USER_BTN_PRESSED
@@ -199,24 +200,29 @@ public:
 
 static RTC_NOINIT_ATTR uint32_t _rtc_backup_time;
 static RTC_NOINIT_ATTR uint32_t _rtc_backup_magic;
-#define RTC_BACKUP_MAGIC  0xAA55CC33
-#define RTC_TIME_MIN      1772323200  // 1 Mar 2026
+// New magic invalidates backups produced from the former hardcoded 2026 seed.
+#define RTC_BACKUP_MAGIC  0xAA55CC34
 
 class ESP32RTCClock : public mesh::RTCClock {
+  bool _time_trusted = false;
 public:
   ESP32RTCClock() { }
   void begin() {
     esp_reset_reason_t reason = esp_reset_reason();
     if (reason == ESP_RST_DEEPSLEEP) {
+      _time_trusted = _rtc_backup_magic == RTC_BACKUP_MAGIC &&
+                      meshRtcTimestampPlausible(_rtc_backup_time);
       return;  // ESP-IDF preserves system time across deep sleep
     }
     // All other resets (power-on, crash, WDT, brownout) lose system time.
-    // Restore from RTC backup if valid, otherwise use hardcoded seed.
+    // Restore only a trusted RTC backup; otherwise start explicitly untrusted.
     struct timeval tv;
-    if (_rtc_backup_magic == RTC_BACKUP_MAGIC && _rtc_backup_time > RTC_TIME_MIN) {
+    if (_rtc_backup_magic == RTC_BACKUP_MAGIC && meshRtcTimestampPlausible(_rtc_backup_time)) {
       tv.tv_sec = _rtc_backup_time;
+      _time_trusted = true;
     } else {
-      tv.tv_sec = RTC_TIME_MIN;
+      tv.tv_sec = 0;
+      _time_trusted = false;
     }
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
@@ -226,18 +232,38 @@ public:
     time(&_now);
     return _now;
   }
+  bool isTimeTrusted() override {
+    return _time_trusted && meshRtcTimestampPlausible(getCurrentTime());
+  }
   void setCurrentTime(uint32_t time) override {
     struct timeval tv;
     tv.tv_sec = time;
     tv.tv_usec = 0;
     settimeofday(&tv, NULL);
-    _rtc_backup_time = time;
-    _rtc_backup_magic = RTC_BACKUP_MAGIC;
+    _time_trusted = meshRtcTimestampPlausible(time);
+    if (_time_trusted) {
+      _rtc_backup_time = time;
+      _rtc_backup_magic = RTC_BACKUP_MAGIC;
+    } else {
+      _rtc_backup_time = 0;
+      _rtc_backup_magic = 0;
+    }
+  }
+  void setEstimatedTime(uint32_t time) override {
+    if (isTimeTrusted()) return;
+    struct timeval tv;
+    tv.tv_sec = time;
+    tv.tv_usec = 0;
+    settimeofday(&tv, NULL);
+    _time_trusted = false;
+    _rtc_backup_time = 0;
+    _rtc_backup_magic = 0;
   }
   void tick() override {
     time_t now;
     time(&now);
-    if (now > RTC_TIME_MIN && (uint32_t)now != _rtc_backup_time) {
+    if (_time_trusted && meshRtcTimestampPlausible((uint32_t)now) &&
+        (uint32_t)now != _rtc_backup_time) {
       _rtc_backup_time = (uint32_t)now;
       _rtc_backup_magic = RTC_BACKUP_MAGIC;
     }

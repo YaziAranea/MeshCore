@@ -1,8 +1,12 @@
 #include "UITask.h"
 #include "BatteryShutdownPolicy.h"
+#include "UiTiming.h"
+#include "ClockUptime.h"
+#include "AdcCalibrationUi.h"
 #include "ConfirmedChoice.h"
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
+#include <helpers/RTCClockQuality.h>
 #include <helpers/ui/Utf8Cyrillic5x7.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -581,6 +585,15 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
   #define UI_TIMEZONE_OFFSET_SECONDS (6 * 60 * 60)
 #endif
 
+// Integration hook for a persisted preference.  A NodePrefs owner can define,
+// for example, `UI_TIMEZONE_OFFSET_FROM_PREFS(p) ((p)->timezone_offset_minutes * 60)`
+// without coupling this UI module to a particular prefs schema revision.
+#ifndef UI_TIMEZONE_OFFSET_FROM_PREFS
+  #define UI_TIMEZONE_OFFSET_FROM_PREFS(PREFS_PTR) \
+      ((PREFS_PTR) != NULL ? (int32_t)(PREFS_PTR)->timezone_offset_minutes * 60L \
+                           : (int32_t)UI_TIMEZONE_OFFSET_SECONDS)
+#endif
+
 #ifndef UI_RTC_VALID_MIN
   #define UI_RTC_VALID_MIN 1704067200UL
 #endif
@@ -620,10 +633,6 @@ static void uiButtonWakeIrqHandler() {
 
 #ifndef LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT
   #define LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT 3
-#endif
-
-#ifndef LOW_BATTERY_VALID_MIN_MILLIVOLTS
-  #define LOW_BATTERY_VALID_MIN_MILLIVOLTS 2500
 #endif
 
 #ifndef USER_BUTTON_LONG_PRESS_POWEROFF
@@ -1139,7 +1148,8 @@ static void importantNotifyPixelsHandler(bool allow_visual) {
     return;
   }
   unsigned long now = millis();
-  if (important_notify_pixels_next != 0 && (long)(now - important_notify_pixels_next) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)now,
+                                       (uint32_t)important_notify_pixels_next)) return;
 
   importantNotifyPixelsBegin();
   important_notify_pixels.clear();
@@ -1255,6 +1265,10 @@ static const char* uiSemanticColorName(uint8_t idx) {
   #define UI_ADC_MULTIPLIER_PAGE 0
 #endif
 
+#ifndef UI_TIMEZONE_PAGE
+  #define UI_TIMEZONE_PAGE UI_COMPACT_SETTINGS_MENU
+#endif
+
 #ifndef UI_CLIENT_REPEAT_PAGE
   #define UI_CLIENT_REPEAT_PAGE 0
 #endif
@@ -1285,6 +1299,22 @@ static const char* uiSemanticColorName(uint8_t idx) {
 
 #ifndef UI_ADC_MULTIPLIER_FINE_STEP
   #define UI_ADC_MULTIPLIER_FINE_STEP 0.005f
+#endif
+
+#ifndef UI_ADC_MULTIPLIER_MIN
+  #ifdef ADC_MULTIPLIER
+    #define UI_ADC_MULTIPLIER_MIN ((float)(ADC_MULTIPLIER) * 0.75f)
+  #else
+    #define UI_ADC_MULTIPLIER_MIN 0.1f
+  #endif
+#endif
+
+#ifndef UI_ADC_MULTIPLIER_MAX
+  #ifdef ADC_MULTIPLIER
+    #define UI_ADC_MULTIPLIER_MAX ((float)(ADC_MULTIPLIER) * 1.25f)
+  #else
+    #define UI_ADC_MULTIPLIER_MAX 10.0f
+  #endif
 #endif
 
 #if UI_HAS_JOYSTICK
@@ -3205,12 +3235,32 @@ static void drawPreviewTextEllipsized(DisplayDriver& display, int x, int y, int 
 #endif
 }
 
-static uint32_t uiLocalClockTime(uint32_t now) {
-#if UI_TIMEZONE_OFFSET_SECONDS >= 0
-  return now + (uint32_t)UI_TIMEZONE_OFFSET_SECONDS;
-#else
-  return now - (uint32_t)(-UI_TIMEZONE_OFFSET_SECONDS);
-#endif
+static uint32_t uiApplyTimezoneOffset(uint32_t now, int32_t offset_seconds) {
+  int64_t adjusted = (int64_t)now + offset_seconds;
+  if (adjusted <= 0) return 0;
+  if (adjusted >= UINT32_MAX) return UINT32_MAX;
+  return (uint32_t)adjusted;
+}
+
+static bool drawClockUptimeBetween(DisplayDriver& display, const UITask* task,
+                                   int left_used, int right_used, int y) {
+  char text[12];
+  smartui::formatClockUptime(text, sizeof(text), task->getUptimeSeconds());
+  int text_width = display.getTextWidth(text);
+  int right = smartui::clockUptimeRightEdge((int16_t)left_used,
+                                             (int16_t)right_used,
+                                             (int16_t)text_width);
+  if (right < 0 && text[0] == 'U' && text[1] == ' ') {
+    memmove(&text[1], &text[2], strlen(&text[2]) + 1);
+    text_width = display.getTextWidth(text);
+    right = smartui::clockUptimeRightEdge((int16_t)left_used,
+                                           (int16_t)right_used,
+                                           (int16_t)text_width,
+                                           2);
+  }
+  if (right < 0) return false;
+  display.drawTextRightAlign(right, y, text);
+  return true;
 }
 
 #if UI_BLE_PIN_PAGE
@@ -3382,6 +3432,13 @@ static void drawPaperForestBackdrop(DisplayDriver& display, uint8_t seed) {
   }
 }
 
+static int paperBatteryLeftEdge(DisplayDriver& display, uint16_t milli_volts) {
+  char tmp[12];
+  snprintf(tmp, sizeof(tmp), "%u.%02uV", milli_volts / 1000, (milli_volts % 1000) / 10);
+  display.setTextSize(1);
+  return (display.width() - 26) - display.getTextWidth(tmp);
+}
+
 static void drawPaperBatteryIndicator(DisplayDriver& display, uint16_t milli_volts) {
   char tmp[12];
   snprintf(tmp, sizeof(tmp), "%u.%02uV", milli_volts / 1000, (milli_volts % 1000) / 10);
@@ -3405,8 +3462,17 @@ static void drawPaperBatteryIndicator(DisplayDriver& display, uint16_t milli_vol
 
 static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCClock* rtc, bool with_backdrop) {
   uint32_t rtc_now = rtc->getCurrentTime();
-  bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
-  DateTime dt(time_valid ? uiLocalClockTime(rtc_now) : 0);
+  bool time_valid = task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
+  DateTime dt(time_valid ? task->getLocalClockTime(rtc_now) : 0);
+  display.setTextSize(1);
+  char uptime_text[12];
+  smartui::formatClockUptime(uptime_text, sizeof(uptime_text), task->getUptimeSeconds());
+  const uint16_t battery_mv = task->getBattMilliVolts();
+  const int battery_left = paperBatteryLeftEdge(display, battery_mv);
+  const int uptime_right = battery_left - 3;
+  const int uptime_width = display.getTextWidth(uptime_text);
+  const int uptime_left = uptime_right - uptime_width;
+
   if (with_backdrop) {
     // Keep the decorative pixels stable.  Only the clock/date/status should
     // change between minute refreshes on an e-paper panel.
@@ -3417,6 +3483,7 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
       display.setColor(DisplayDriver::DARK);
       display.fillRect(45, 34, 161, 64);
       display.fillRect(display.width() - 60, 0, 60, 15);
+      display.fillRect(uptime_left - 2, 0, uptime_width + 4, 15);
     }
   }
 
@@ -3424,8 +3491,11 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
   display.setColor(DisplayDriver::LIGHT);
   display.setBold(false);
   display.setTextSize(1);
-  drawRichTextEllipsized(display, 4, 4, display.width() - 72, task->getNodeName());
-  drawPaperBatteryIndicator(display, task->getBattMilliVolts());
+  int node_width = uptime_left - 8;
+  if (node_width < 24) node_width = 24;
+  drawRichTextEllipsized(display, 4, 4, node_width, task->getNodeName());
+  display.drawTextRightAlign(uptime_right, 4, uptime_text);
+  drawPaperBatteryIndicator(display, battery_mv);
 
   display.setBold(true);
   display.setTextSize(4);
@@ -3441,7 +3511,7 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
   if (time_valid) {
     snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
   } else {
-    strcpy(tmp, "нет BLE");
+    strcpy(tmp, "нет времени");
   }
   display.drawTextCentered(display.width() / 2, 78, tmp);
 
@@ -3534,7 +3604,7 @@ public:
   }
 
   void poll() override {
-    if (millis() >= dismiss_after) {
+    if (smartui::deadlineReached((uint32_t)millis(), (uint32_t)dismiss_after)) {
       _task->gotoHomeScreen();
     }
   }
@@ -3644,6 +3714,9 @@ class HomeScreen : public UIScreen {
 #if UI_ADC_MULTIPLIER_PAGE == 1
     ADC,
 #endif
+#if UI_TIMEZONE_PAGE == 1
+    TIMEZONE,
+#endif
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     LOW_BATT_SHUTDOWN,
 #endif
@@ -3661,6 +3734,9 @@ class HomeScreen : public UIScreen {
     SETTINGS,
 #if UI_COMPACT_SETTINGS_MENU == 1
     NOTIFY_PICKER,
+#if UI_TIMEZONE_PAGE == 1
+    TIMEZONE_PICKER,
+#endif
 #endif
     SHUTDOWN,
     Count    // keep as last
@@ -3682,6 +3758,12 @@ class HomeScreen : public UIScreen {
   uint16_t _quick_target_cursor;
   uint8_t _quick_last_target_mode = QR_TARGET_CLOSED;
   uint16_t _quick_last_target_cursor = 0;
+  bool _quick_target_identity_valid;
+  uint8_t _quick_target_identity_mode;
+  uint16_t _quick_target_identity_cursor;
+  uint8_t _quick_target_channel_id;
+  uint8_t _quick_target_contact_pubkey[PUB_KEY_SIZE];
+  char _quick_target_identity_label[32];
   char _quick_keyboard_text[UI_QUICK_REPLY_KEYBOARD_TEXT_MAX];
 #endif
 #if UI_COMPACT_SETTINGS_MENU == 1
@@ -3690,6 +3772,9 @@ class HomeScreen : public UIScreen {
   uint8_t _compact_settings_cursor;
   smartui::ConfirmedChoice _notify_picker;
   uint8_t _notify_picker_page = SETTINGS;
+#if UI_TIMEZONE_PAGE == 1
+  uint8_t _timezone_picker_cursor;
+#endif
 #if UI_APPEARANCE_MENU
   uint8_t _font_picker_cursor;
   uint8_t _theme_picker_cursor;
@@ -3760,11 +3845,7 @@ class HomeScreen : public UIScreen {
   }
 
   uint32_t localClockTime(uint32_t now) const {
-#if UI_TIMEZONE_OFFSET_SECONDS >= 0
-    return now + (uint32_t)UI_TIMEZONE_OFFSET_SECONDS;
-#else
-    return now - (uint32_t)(-UI_TIMEZONE_OFFSET_SECONDS);
-#endif
+    return _task->getLocalClockTime(now);
   }
 
   void formatPercentTenths(char* out, size_t out_len, uint32_t pct10) const {
@@ -4073,7 +4154,7 @@ class HomeScreen : public UIScreen {
 
     if (max_scroll <= 0) return;
     unsigned long now = millis();
-    if ((long)(now - _chat_pause_until) < 0) return;
+    if (smartui::deadlinePending((uint32_t)now, (uint32_t)_chat_pause_until)) return;
 
     _chat_scroll_px += _chat_scroll_dir * UI_CHAT_SCROLL_STEP_PX;
     if (_chat_scroll_px <= 0) {
@@ -4164,8 +4245,8 @@ class HomeScreen : public UIScreen {
   }
 
   float clampAdcMultiplier(float value) const {
-    if (value < 0.05f) return 0.05f;
-    if (value > 20000.0f) return 20000.0f;
+    if (value < UI_ADC_MULTIPLIER_MIN) return UI_ADC_MULTIPLIER_MIN;
+    if (value > UI_ADC_MULTIPLIER_MAX) return UI_ADC_MULTIPLIER_MAX;
     return value;
   }
 
@@ -4184,7 +4265,9 @@ class HomeScreen : public UIScreen {
 
   void cancelAdcEdit() {
     if (_adc_edit) {
-      _task->setAdcMultiplier(_node_prefs->adc_multiplier, false);
+      if (!_task->setAdcMultiplier(_node_prefs->adc_multiplier, false)) {
+        _task->setAdcMultiplier(0.0f, false);
+      }
     }
     _adc_edit = false;
     _adc_draft = 0.0f;
@@ -4405,6 +4488,9 @@ class HomeScreen : public UIScreen {
     };
     static const uint8_t system_pages[] = {
       HomePage::BLUETOOTH,
+#if UI_TIMEZONE_PAGE == 1
+      HomePage::TIMEZONE,
+#endif
 #if UI_BOARD_LEDS_PAGE == 1
       HomePage::BOARD_LEDS,
 #endif
@@ -4578,6 +4664,9 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
       case HomePage::ADC: return "Калибр. АКБ";
+#endif
+#if UI_TIMEZONE_PAGE == 1
+      case HomePage::TIMEZONE: return "Часовой пояс";
 #endif
       case HomePage::BLUETOOTH: return "Bluetooth";
 #if UI_BOARD_LEDS_PAGE == 1
@@ -4760,6 +4849,15 @@ class HomeScreen : public UIScreen {
       case HomePage::ADC:
         formatAdcMultiplier(out, out_len, _task->getAdcMultiplier());
         break;
+#endif
+#if UI_TIMEZONE_PAGE == 1
+      case HomePage::TIMEZONE: {
+        int minutes = _task->getTimezoneOffsetMinutes();
+        char sign = minutes < 0 ? '-' : '+';
+        int magnitude = minutes < 0 ? -minutes : minutes;
+        snprintf(out, out_len, "UTC%c%02d:%02d", sign, magnitude / 60, magnitude % 60);
+        break;
+      }
 #endif
       case HomePage::BLUETOOTH:
         snprintf(out, out_len, "%s", _task->isBluetoothEnabled() ? "ВКЛ" : "ВЫКЛ");
@@ -5222,6 +5320,88 @@ class HomeScreen : public UIScreen {
     uiPopFont(display, saved_font);
   }
 
+#if UI_TIMEZONE_PAGE == 1
+  static const int16_t TIMEZONE_MINUTES_MIN = -720;
+  static const int16_t TIMEZONE_MINUTES_MAX = 840;
+  static const int16_t TIMEZONE_MINUTES_STEP = 30;
+  static const uint8_t TIMEZONE_CHOICE_COUNT =
+      (TIMEZONE_MINUTES_MAX - TIMEZONE_MINUTES_MIN) / TIMEZONE_MINUTES_STEP + 1;
+
+  int16_t timezoneMinutesAt(uint8_t index) const {
+    if (index >= TIMEZONE_CHOICE_COUNT) return _task->getTimezoneOffsetMinutes();
+    return (int16_t)(TIMEZONE_MINUTES_MIN + index * TIMEZONE_MINUTES_STEP);
+  }
+
+  void formatTimezone(char* out, size_t out_len, int16_t minutes) const {
+    char sign = minutes < 0 ? '-' : '+';
+    int magnitude = minutes < 0 ? -(int)minutes : (int)minutes;
+    snprintf(out, out_len, "UTC%c%02d:%02d", sign, magnitude / 60, magnitude % 60);
+  }
+
+  void renderTimezonePicker(DisplayDriver& display) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    int line_h = display.getTextLineHeight();
+    if (line_h < 8) line_h = 8;
+    const uint8_t item_count = TIMEZONE_CHOICE_COUNT + 1;  // final row is Cancel
+    uint8_t cursor = _timezone_picker_cursor;
+    if (cursor >= item_count) cursor = item_count - 1;
+    int row_y = 14 + line_h + 1;
+    if (display.height() <= 64 && row_y < 28) row_y = 28;
+    int row_h = line_h > 12 ? line_h : 12;
+    int available_rows = (display.height() - row_y) / row_h;
+    uint8_t visible_rows = available_rows < 1 ? 1 : available_rows;
+    if (visible_rows > UI_COMPACT_SETTINGS_MAX_ROWS) visible_rows = UI_COMPACT_SETTINGS_MAX_ROWS;
+    uint8_t start = cursor >= visible_rows ? cursor - visible_rows + 1 : 0;
+    if (item_count > visible_rows && start + visible_rows > item_count) start = item_count - visible_rows;
+    const bool has_scrollbar = item_count > visible_rows;
+
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, "Часовой пояс");
+    display.setColor(DisplayDriver::LIGHT);
+    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+
+    const int16_t active_minutes = _task->getTimezoneOffsetMinutes();
+    for (uint8_t row = 0; row < visible_rows && start + row < item_count; row++) {
+      uint8_t index = start + row;
+      bool selected = index == cursor;
+      int y = row_y + row * row_h;
+      if (selected) {
+        display.setColor(DisplayDriver::YELLOW);
+        display.fillRect(0, y, display.width() - (has_scrollbar ? 3 : 0), row_h);
+      }
+      display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+      display.setBold(selected);
+      char label[20];
+      bool active = false;
+      if (index < TIMEZONE_CHOICE_COUNT) {
+        int16_t minutes = timezoneMinutesAt(index);
+        formatTimezone(label, sizeof(label), minutes);
+        active = minutes == active_minutes;
+      } else {
+        strcpy(label, "Отмена");
+      }
+      int right_guard = has_scrollbar ? 5 : 3;
+      int marker_width = active ? display.getTextWidth("OK") + 4 : 0;
+      drawRichTextStaticEllipsized(display, 3, y,
+          display.width() - 3 - right_guard - marker_width, label);
+      if (active) display.drawTextRightAlign(display.width() - right_guard, y, "OK");
+      display.setBold(false);
+    }
+
+    if (has_scrollbar) {
+      int track_h = visible_rows * row_h - 2;
+      int thumb_h = (track_h * visible_rows) / item_count;
+      if (thumb_h < 4) thumb_h = 4;
+      int thumb_y = row_y + ((track_h - thumb_h) * start) / (item_count - visible_rows);
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawRect(display.width() - 2, row_y, 2, track_h);
+      display.setColor(DisplayDriver::YELLOW);
+      display.fillRect(display.width() - 2, thumb_y, 2, thumb_h);
+    }
+    uiPopFont(display, saved_font);
+  }
+#endif
+
   void applyNotifyPickerChoice(int16_t value) {
     switch (_notify_picker_page) {
 #ifdef PIN_MSG_ALERT
@@ -5383,6 +5563,16 @@ class HomeScreen : public UIScreen {
         _page = HomePage::ADC;
         break;
 #endif
+#if UI_TIMEZONE_PAGE == 1
+      case HomePage::TIMEZONE: {
+        int minutes = _task->getTimezoneOffsetMinutes();
+        if (minutes < -720) minutes = -720;
+        if (minutes > 840) minutes = 840;
+        _timezone_picker_cursor = (uint8_t)((minutes + 720 + 15) / 30);
+        _page = HomePage::TIMEZONE_PICKER;
+        break;
+      }
+#endif
       case HomePage::BLUETOOTH:
         if (_task->isBluetoothEnabled()) _task->disableBluetooth();
         else _task->enableBluetooth();
@@ -5490,6 +5680,38 @@ class HomeScreen : public UIScreen {
         _page = HomePage::SETTINGS;
         return true;
       }
+#if UI_TIMEZONE_PAGE == 1
+      if (_page == HomePage::TIMEZONE_PICKER) {
+        const uint8_t item_count = TIMEZONE_CHOICE_COUNT + 1;
+        if (c == KEY_LEFT || c == KEY_PREV) {
+          _timezone_picker_cursor = (_timezone_picker_cursor + item_count - 1) % item_count;
+          return true;
+        }
+        if (c == KEY_NEXT || c == KEY_RIGHT) {
+          _timezone_picker_cursor = (_timezone_picker_cursor + 1) % item_count;
+          return true;
+        }
+        if (c != KEY_ENTER) return false;
+        if (_timezone_picker_cursor < TIMEZONE_CHOICE_COUNT) {
+#if UI_SMART_B11_EXTRAS == 1
+          NodePrefs before = *_node_prefs;
+#endif
+          int16_t selected = timezoneMinutesAt(_timezone_picker_cursor);
+          bool changed = selected != _task->getTimezoneOffsetMinutes();
+          if (changed) _task->setTimezoneOffsetMinutes(selected, true);
+#if UI_SMART_B11_EXTRAS == 1
+          if (changed) {
+            _compact_undo_prefs = before;
+            _compact_undo_valid = true;
+          }
+#else
+          (void)changed;
+#endif
+        }
+        _page = HomePage::SETTINGS;
+        return true;
+      }
+#endif
 #if UI_APPEARANCE_MENU
       if (_page == HomePage::FONT_PICKER || _page == HomePage::THEME_PICKER) {
         bool font_picker = _page == HomePage::FONT_PICKER;
@@ -5699,6 +5921,9 @@ class HomeScreen : public UIScreen {
 #if UI_ADC_MULTIPLIER_PAGE == 1
     if (page == HomePage::ADC) return true;
 #endif
+#if UI_TIMEZONE_PAGE == 1
+    if (page == HomePage::TIMEZONE) return true;
+#endif
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     if (page == HomePage::LOW_BATT_SHUTDOWN) return true;
 #endif
@@ -5723,6 +5948,9 @@ class HomeScreen : public UIScreen {
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
 #if UI_COMPACT_SETTINGS_MENU == 1
     if (page == HomePage::NOTIFY_PICKER) return false;  // Only entered through a setting.
+#if UI_TIMEZONE_PAGE == 1
+    if (page == HomePage::TIMEZONE_PICKER) return false;
+#endif
 #endif
 #if UI_NOTIFICATION_SETTINGS == 0
     if (page == HomePage::ALERTS || page == HomePage::IMPORTANT_NOTIFY) return false;
@@ -6014,12 +6242,51 @@ class HomeScreen : public UIScreen {
   }
 
 #if UI_QUICK_REPLY_KEYBOARD
+  void clearQuickTargetIdentity() {
+    _quick_target_identity_valid = false;
+    _quick_target_identity_mode = QR_TARGET_CLOSED;
+    _quick_target_identity_cursor = 0;
+    _quick_target_channel_id = 0;
+    memset(_quick_target_contact_pubkey, 0, sizeof(_quick_target_contact_pubkey));
+    _quick_target_identity_label[0] = 0;
+  }
+
+  bool quickTargetIdentityMatchesCursor() const {
+    return _quick_target_identity_valid &&
+           _quick_target_identity_mode == _quick_target_mode &&
+           _quick_target_identity_cursor == _quick_target_cursor;
+  }
+
+  bool captureQuickTargetIdentity() {
+    clearQuickTargetIdentity();
+    if (_quick_target_mode == QR_TARGET_CHANNEL) {
+      uint8_t channel_id = 0;
+      ChannelDetails channel;
+      if (!the_mesh.getQuickReplyChannel(_quick_target_cursor, channel_id, channel)) return false;
+      _quick_target_channel_id = channel_id;
+      snprintf(_quick_target_identity_label, sizeof(_quick_target_identity_label), "%s", channel.name);
+    } else if (_quick_target_mode == QR_TARGET_CONTACT) {
+      ContactInfo contact;
+      if (!the_mesh.getQuickReplyContact(_quick_target_cursor, contact)) return false;
+      memcpy(_quick_target_contact_pubkey, contact.id.pub_key,
+             sizeof(_quick_target_contact_pubkey));
+      snprintf(_quick_target_identity_label, sizeof(_quick_target_identity_label), "%s", contact.name);
+    } else {
+      return false;
+    }
+    _quick_target_identity_mode = _quick_target_mode;
+    _quick_target_identity_cursor = _quick_target_cursor;
+    _quick_target_identity_valid = true;
+    return true;
+  }
+
   void resetQuickKeyboard() {
     _quick_keyboard_open = false;
     _quick_keyboard_page = 0;
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
     _quick_target_cursor = 0;
+    clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
   }
 
@@ -6029,6 +6296,7 @@ class HomeScreen : public UIScreen {
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
     _quick_target_cursor = 0;
+    clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
   }
 
@@ -6101,6 +6369,10 @@ class HomeScreen : public UIScreen {
       return;
     }
 
+    if (idx == _quick_target_cursor && quickTargetIdentityMatchesCursor()) {
+      snprintf(out, out_len, "%s", _quick_target_identity_label);
+      return;
+    }
     uint16_t item_count = quickTargetItemCount();
     if (idx >= item_count) {
       snprintf(out, out_len, "%s", "Назад");
@@ -6123,6 +6395,7 @@ class HomeScreen : public UIScreen {
       _quick_last_target_mode = _quick_target_mode;
       _quick_last_target_cursor = _quick_target_cursor;
       _quick_target_mode = QR_TARGET_CLOSED;
+      clearQuickTargetIdentity();
       _quick_keyboard_open = false;
       _quick_reply_open = false;
       _quick_keyboard_text[0] = 0;
@@ -6144,6 +6417,7 @@ class HomeScreen : public UIScreen {
           uint16_t count = (uint16_t)the_mesh.getQuickReplyChannelCount();
           _quick_target_cursor = _quick_last_target_mode == QR_TARGET_CHANNEL && _quick_last_target_cursor < count
                                    ? _quick_last_target_cursor : 0;
+          captureQuickTargetIdentity();
         }
         return true;
       }
@@ -6155,25 +6429,39 @@ class HomeScreen : public UIScreen {
           uint16_t count = (uint16_t)the_mesh.getQuickReplyContactCount();
           _quick_target_cursor = _quick_last_target_mode == QR_TARGET_CONTACT && _quick_last_target_cursor < count
                                    ? _quick_last_target_cursor : 0;
+          captureQuickTargetIdentity();
         }
         return true;
       }
       _quick_target_mode = QR_TARGET_CLOSED;
       _quick_target_cursor = 0;
+      clearQuickTargetIdentity();
       return true;
     }
 
     uint16_t item_count = quickTargetItemCount();
-    if (_quick_target_cursor >= item_count) {
+    if (_quick_target_cursor >= item_count && !quickTargetIdentityMatchesCursor()) {
       _quick_target_mode = QR_TARGET_KIND;
       _quick_target_cursor = 0;
+      clearQuickTargetIdentity();
+      return true;
+    }
+
+    // Do not resolve the mutable list ordinal again here: the visible choice
+    // was snapshotted when the cursor entered this row.  If that target was
+    // deleted meanwhile, the stable backend API rejects it safely.
+    if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT) &&
+        !quickTargetIdentityMatchesCursor()) {
+      _task->showAlert("Цель изменилась", 1100);
       return true;
     }
     if (_quick_target_mode == QR_TARGET_CHANNEL) {
-      return finishQuickKeyboardSend(the_mesh.sendQuickReplyToChannel(_quick_target_cursor, _quick_keyboard_text));
+      return finishQuickKeyboardSend(
+          the_mesh.sendQuickReplyToChannelId(_quick_target_channel_id, _quick_keyboard_text));
     }
     if (_quick_target_mode == QR_TARGET_CONTACT) {
-      return finishQuickKeyboardSend(the_mesh.sendQuickReplyToContact(_quick_target_cursor, _quick_keyboard_text));
+      return finishQuickKeyboardSend(
+          the_mesh.sendQuickReplyToContactPubKey(_quick_target_contact_pubkey, _quick_keyboard_text));
     }
     return true;
   }
@@ -6183,15 +6471,20 @@ class HomeScreen : public UIScreen {
     if (total == 0) {
       _quick_target_mode = QR_TARGET_CLOSED;
       _quick_target_cursor = 0;
+      clearQuickTargetIdentity();
       return true;
     }
     if (_quick_target_cursor >= total) _quick_target_cursor = 0;
     if (c == KEY_LEFT || c == KEY_PREV) {
       _quick_target_cursor = (_quick_target_cursor + total - 1) % total;
+      if (_quick_target_cursor < quickTargetItemCount()) captureQuickTargetIdentity();
+      else clearQuickTargetIdentity();
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _quick_target_cursor = (_quick_target_cursor + 1) % total;
+      if (_quick_target_cursor < quickTargetItemCount()) captureQuickTargetIdentity();
+      else clearQuickTargetIdentity();
       return true;
     }
     if (c == KEY_ENTER || c == KEY_SELECT) {
@@ -6230,6 +6523,7 @@ class HomeScreen : public UIScreen {
         }
         _quick_target_mode = QR_TARGET_KIND;
         _quick_target_cursor = 0;
+        clearQuickTargetIdentity();
         _task->showAlert("Куда?", 600);
         return true;
 #if 0
@@ -6329,7 +6623,17 @@ class HomeScreen : public UIScreen {
     if (visible < 1) visible = 1;
 
     uint16_t total = quickTargetTotalCount();
-    if (_quick_target_cursor >= total && total > 0) _quick_target_cursor = 0;
+    if (quickTargetIdentityMatchesCursor()) {
+      // Keep the snapshotted row visible even if the live list was compacted.
+      // SEND will revalidate the immutable ID instead of silently retargeting.
+      if (total <= _quick_target_cursor) total = _quick_target_cursor + 2;
+    } else {
+      if (_quick_target_cursor >= total && total > 0) _quick_target_cursor = 0;
+      if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT) &&
+          _quick_target_cursor < quickTargetItemCount()) {
+        captureQuickTargetIdentity();
+      }
+    }
     uint16_t offset = 0;
     if (total > (uint16_t)visible && _quick_target_cursor >= (uint16_t)visible) {
       offset = _quick_target_cursor - visible + 1;
@@ -6346,7 +6650,8 @@ class HomeScreen : public UIScreen {
       int y = list_y + row * row_h;
       bool selected = idx == _quick_target_cursor;
       uint16_t item_count = quickTargetItemCount();
-      bool back = (_quick_target_mode != QR_TARGET_KIND && idx >= item_count) ||
+      bool back = (_quick_target_mode != QR_TARGET_KIND && idx >= item_count &&
+                   !(selected && quickTargetIdentityMatchesCursor())) ||
                   (_quick_target_mode == QR_TARGET_KIND && idx == 2);
       char label[36];
       quickTargetLabel(idx, label, sizeof(label));
@@ -6460,7 +6765,8 @@ class HomeScreen : public UIScreen {
 #endif
 
   void refresh_sensors() {
-    if (millis() > next_sensors_refresh) {
+    if (smartui::deadlineDueOrImmediate((uint32_t)millis(),
+                                        (uint32_t)next_sensors_refresh)) {
       sensors_lpp.reset();
       sensors_nb = 0;
       sensors_lpp.addVoltage(TELEM_CHANNEL_SELF, (float)_task->getBattMilliVolts() / 1000.0f);
@@ -6499,6 +6805,9 @@ public:
         _compact_settings_depth = 0;
         _compact_settings_group = 0;
         _compact_settings_cursor = 0;
+#if UI_TIMEZONE_PAGE == 1
+        _timezone_picker_cursor = 0;
+#endif
 #if UI_APPEARANCE_MENU
         _font_picker_cursor = 0;
         _theme_picker_cursor = 0;
@@ -6530,6 +6839,9 @@ public:
     _compact_settings_group = 0;
     _compact_settings_cursor = 0;
     _notify_picker.reset();
+#if UI_TIMEZONE_PAGE == 1
+    _timezone_picker_cursor = 0;
+#endif
 #if UI_APPEARANCE_MENU
     _font_picker_cursor = 0;
     _theme_picker_cursor = 0;
@@ -6627,6 +6939,23 @@ public:
     return !_settings_open && _page == HomePage::CLOCK;
   }
 
+#if UI_ADC_MULTIPLIER_PAGE == 1
+  bool restoreAdcDefault(uint8_t click_count) {
+    if (!smartui::adcFactoryResetGesture(_settings_open, _page == HomePage::ADC,
+                                         _adc_edit, click_count)) return false;
+    _adc_edit = false;
+    _adc_draft = 0.0f;
+    if (_task->setAdcMultiplier(0.0f, true)) {
+      _task->showAlert("АЦП: заводской", 1000);
+    } else {
+      _task->showAlert("АЦП недоступен", 1000);
+    }
+    return true;
+  }
+#else
+  bool restoreAdcDefault(uint8_t) { return false; }
+#endif
+
   bool isBlePinPage() const {
 #if UI_BLE_PIN_PAGE
     return !_settings_open && _page == HomePage::BLE_PIN;
@@ -6673,14 +7002,18 @@ public:
         int gps_count = -1;
         readGpsUiState(gps_enabled, gps_valid, gps_count);
         int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
+        int status_right = gps_right;
         if (_task->areNotificationsMuted()) {
           int icon_size = uiStatusIconSize(display);
           int mute_x = gps_right + 3;
           if (mute_x + icon_size <= name_right) {
             display.setColor(DisplayDriver::RED);
             drawUiIcon(display, mute_x, 1, muted_icon, icon_size);
+            status_right = mute_x + icon_size;
           }
         }
+        display.setColor(_task->getUiBottomColor());
+        drawClockUptimeBetween(display, _task, status_right, name_right, 0);
       } else
 #endif
       {
@@ -6692,33 +7025,46 @@ public:
           int gps_count = -1;
           readGpsUiState(gps_enabled, gps_valid, gps_count);
           int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
+          int status_right = gps_right;
           if (_task->areNotificationsMuted()) {
             int icon_size = uiStatusIconSize(display);
             int mute_x = gps_right + 3;
             if (mute_x + icon_size <= name_right) {
               display.setColor(DisplayDriver::RED);
               drawUiIcon(display, mute_x, 1, muted_icon, icon_size);
+              status_right = mute_x + icon_size;
             }
           }
+          display.setColor(_task->getUiBottomColor());
+          drawClockUptimeBetween(display, _task, status_right, name_right, 0);
 #else
           // A GPS-less board must not advertise a permanently disabled
           // module.  Keep only the useful mute state in the clock chrome.
+          int status_right = -3;
           if (_task->areNotificationsMuted()) {
             int icon_size = uiStatusIconSize(display);
             if (name_x + icon_size <= name_right) {
               display.setColor(DisplayDriver::RED);
               drawUiIcon(display, name_x, 1, muted_icon, icon_size);
+              status_right = name_x + icon_size;
             }
           }
+          display.setColor(_task->getUiBottomColor());
+          drawClockUptimeBetween(display, _task, status_right, name_right, 0);
 #endif
         } else
 #endif
         {
-          // node name
-          display.setColor(_task->getUiTopColor());
-          int maxNameWidth = name_right - name_x;
-          if (maxNameWidth < 18) maxNameWidth = 18;
-          drawRichTextEllipsized(display, name_x, 0, maxNameWidth, _node_prefs->node_name);
+          if (isClockPage()) {
+            display.setColor(_task->getUiBottomColor());
+            drawClockUptimeBetween(display, _task, -3, name_right, 0);
+          } else {
+            // node name
+            display.setColor(_task->getUiTopColor());
+            int maxNameWidth = name_right - name_x;
+            if (maxNameWidth < 18) maxNameWidth = 18;
+            drawRichTextEllipsized(display, name_x, 0, maxNameWidth, _node_prefs->node_name);
+          }
         }
       }
 
@@ -6747,7 +7093,7 @@ public:
     if (_page == HomePage::FIRST) {
 #if UI_FIRST_PAGE_SAFE_CLOCK
       uint32_t rtc_now = _rtc->getCurrentTime();
-      bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
+      bool time_valid = _task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
       bool compact_clock = display.width() <= 128 && display.height() <= 64;
       int time_y = compact_clock ? 18 : (display.height() / 2) - 24;
       if (time_y < 24) time_y = 24;
@@ -6771,11 +7117,7 @@ public:
 
         display.setBold(false);
         display.setTextSize(1);
-        if (the_mesh.getBLEPin() != 0) {
-          snprintf(tmp, sizeof(tmp), "BLE PIN %d", the_mesh.getBLEPin());
-        } else {
-          snprintf(tmp, sizeof(tmp), "BLE sync");
-        }
+        snprintf(tmp, sizeof(tmp), "синхр. время");
         display.drawTextCentered(display.width() / 2, date_y, tmp);
       }
 
@@ -6924,6 +7266,7 @@ public:
       // no safe room for the mute icon, so keep the explicit GPS ON state and
       // hide only the count while quiet mode is active.
       int gps_right = renderGpsClockLabel(display, 1, 1, gps_enabled, gps_valid, sats, !clock_muted);
+      int status_right = gps_right;
 
       if (clock_muted) {
         const int mute_size = 16;
@@ -6931,12 +7274,15 @@ public:
         if (mute_x + mute_size <= battery_left - 3) {
           display.setColor(DisplayDriver::RED);
           drawUiIcon(display, mute_x, 1, muted_icon, mute_size);
+          status_right = mute_x + mute_size;
         }
       }
+      display.setColor(_task->getUiBottomColor());
+      drawClockUptimeBetween(display, _task, status_right, battery_left, 1);
       uiPopFont(display, small_font);
 
       uint32_t rtc_now = _rtc->getCurrentTime();
-      bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
+      bool time_valid = _task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
       DateTime dt(time_valid ? localClockTime(rtc_now) : 0);
       display.setColor(time_valid ? _task->getUiTopColor() : DisplayDriver::YELLOW);
       uint8_t clock_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
@@ -6955,7 +7301,7 @@ public:
       if (time_valid) {
         snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
       } else {
-        strcpy(tmp, "нет синхр. BLE");
+        strcpy(tmp, "нет времени");
       }
       drawRichTextCenteredEllipsized(display, display.width() / 2, 43, display.width(), tmp);
 #if UI_SMART_B11_EXTRAS == 1
@@ -7025,14 +7371,17 @@ public:
 #if UI_WIRELESS_PAPER_BIG_CLOCK
       if (display.width() > 200) {
         uint32_t rtc_now = _rtc->getCurrentTime();
-        bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
+        bool time_valid = _task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
         DateTime dt(time_valid ? localClockTime(rtc_now) : 0);
 
         display.setTextSize(1);
         display.setBold(false);
         display.setColor(DisplayDriver::LIGHT);
-        drawRichTextEllipsized(display, 4, 4, display.width() - 82, _node_prefs->node_name);
-        renderBatteryIndicator(display, _task->getBattMilliVolts());
+        int battery_left = renderBatteryIndicator(display, _task->getBattMilliVolts());
+        const int node_right = display.width() / 2;
+        drawRichTextEllipsized(display, 4, 4, node_right - 8, _node_prefs->node_name);
+        display.setColor(_task->getUiBottomColor());
+        drawClockUptimeBetween(display, _task, node_right, battery_left, 4);
 
         display.setTextSize(4);
         display.setBold(true);
@@ -7049,7 +7398,7 @@ public:
         if (time_valid) {
           snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
         } else {
-          strcpy(tmp, "нет BLE");
+          strcpy(tmp, "нет времени");
         }
         display.drawTextCentered(display.width() / 2, 61, tmp);
 
@@ -7103,7 +7452,7 @@ public:
 #endif
 
       uint32_t rtc_now = _rtc->getCurrentTime();
-      bool time_valid = rtc_now >= UI_RTC_VALID_MIN;
+      bool time_valid = _task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
       display.setColor(time_valid ? DisplayDriver::GREEN : DisplayDriver::YELLOW);
 #if UI_V4_3_OLED_PROFILE
       uint8_t clock_hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
@@ -7138,7 +7487,7 @@ public:
 #endif
         if (show_clock_date) {
           display.setTextSize(1);
-          display.drawTextCentered(display.width() / 2, date_y, compact_clock ? "нет BLE" : "нет синхр. BLE");
+          display.drawTextCentered(display.width() / 2, date_y, "нет времени");
         }
       }
       display.setBold(false);
@@ -8195,11 +8544,12 @@ public:
       sprintf(battery_line, "АКБ: %u.%02uВ", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
       snprintf(coef_line, sizeof(coef_line), "Коэф: %s", adc_buf);
       drawOledCompactMenuPage(display, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ", battery_line, coef_line,
-          _adc_edit ? "+/-" : PRESS_LABEL);
+          _adc_edit ? "+/-; удерж: сохранить" : "удерж: правка; 2x: завод.");
 #else
       display.drawTextCentered(display.width() / 2, 14, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ");
-      display.drawTextCentered(display.width() / 2, 24, "аналого-цифровой");
-      display.drawTextCentered(display.width() / 2, 34, "преобразователь");
+      display.drawTextCentered(display.width() / 2, 24, "по мультиметру");
+      display.drawTextCentered(display.width() / 2, 34,
+          _adc_edit ? "удерж: сохранить" : "2x: заводской");
       display.setCursor(0, 44);
       sprintf(tmp, "АКБ: %u.%02uВ", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
       display.print(tmp);
@@ -8243,6 +8593,11 @@ public:
     else if (_page == HomePage::NOTIFY_PICKER) {
       renderNotifyPicker(display);
     }
+#if UI_TIMEZONE_PAGE == 1
+    else if (_page == HomePage::TIMEZONE_PICKER) {
+      renderTimezonePicker(display);
+    }
+#endif
 #endif
 #if UI_COMPACT_SETTINGS_MENU == 1 && UI_APPEARANCE_MENU
     else if (_page == HomePage::FONT_PICKER) {
@@ -8286,13 +8641,6 @@ public:
       snprintf(tmp, sizeof(tmp), "Радио SX1262");
 #endif
       drawRichTextEllipsized(display, 1, y + row_h * 2, display.width() - 2, tmp);
-      if (display.height() > 64) {
-        uint32_t uptime_s = millis() / 1000UL;
-        snprintf(tmp, sizeof(tmp), "Работа %luch %02luм",
-                 (unsigned long)(uptime_s / 3600UL),
-                 (unsigned long)((uptime_s / 60UL) % 60UL));
-        drawRichTextEllipsized(display, 1, y + row_h * 3, display.width() - 2, tmp);
-      }
       uiPopFont(display, saved_font);
     } else if (_page == HomePage::HARDWARE_TEST) {
       uint8_t saved_font = uiPushCompactSettingsFont(display);
@@ -8950,7 +9298,7 @@ public:
 
     if (needs_scroll) {
       unsigned long now = millis();
-      if ((long)(now - scroll_pause_until) >= 0) {
+      if (smartui::deadlineReached((uint32_t)now, (uint32_t)scroll_pause_until)) {
         scroll_px += scroll_dir * UI_CHAT_SCROLL_STEP_PX;
         if (scroll_px <= 0) {
           scroll_px = 0;
@@ -8997,6 +9345,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _display = display;
   _sensors = sensors;
   ui_started_at = millis();
+  _uptime_accumulated_ms = 0;
+  _uptime_last_millis = (uint32_t)ui_started_at;
   next_batt_chck = ui_started_at + LOW_BATTERY_SHUTDOWN_BOOT_GRACE_MILLIS;
   _low_batt_strikes = 0;
   _last_connection_state = hasConnection();
@@ -9121,7 +9471,8 @@ void UITask::invalidateBatteryCache() {
 
 uint16_t UITask::getBattMilliVolts() const {
   unsigned long now = millis();
-  if (!_battery_sample_valid || (long)(now - _battery_next_sample) >= 0) {
+  if (!_battery_sample_valid ||
+      smartui::deadlineReached((uint32_t)now, (uint32_t)_battery_next_sample)) {
     uint16_t sample = _board->getBattMilliVolts();
     if (!_battery_sample_valid || _battery_milli_volts == 0 || sample == 0 || UI_BATTERY_SMOOTHING_SAMPLES <= 1) {
       _battery_milli_volts = sample;
@@ -9133,6 +9484,57 @@ uint16_t UITask::getBattMilliVolts() const {
     _battery_next_sample = now + UI_BATTERY_SAMPLE_MILLIS;
   }
   return _battery_milli_volts;
+}
+
+smartui::BatteryReading UITask::readSafetyBattery() const {
+  if (_board == NULL) return smartui::BatteryReading();
+  // This path is intentionally independent of the slow display EMA.  Three
+  // immediate board-level readings suppress one-off ADC noise while retaining
+  // a prompt response to a genuine voltage collapse.
+  const uint16_t a = _board->getBattMilliVolts();
+  const uint16_t b = _board->getBattMilliVolts();
+  const uint16_t c = _board->getBattMilliVolts();
+  return smartui::medianBatteryReading(a, b, c);
+}
+
+bool UITask::hasTrustedTime() const {
+  return rtc_clock.isTimeTrusted() &&
+         meshRtcTimestampPlausible(rtc_clock.getCurrentTime());
+}
+
+int16_t UITask::getTimezoneOffsetMinutes() const {
+  int32_t minutes = getTimezoneOffsetSeconds() / 60L;
+  if (minutes < -720) minutes = -720;
+  if (minutes > 840) minutes = 840;
+  return (int16_t)minutes;
+}
+
+bool UITask::setTimezoneOffsetMinutes(int16_t minutes, bool save) {
+  if (_node_prefs == NULL || minutes < -720 || minutes > 840 ||
+      (minutes % 30) != 0) return false;
+  const int16_t previous_minutes = _node_prefs->timezone_offset_minutes;
+  _node_prefs->timezone_offset_minutes = minutes;
+  if (save) {
+    if (!the_mesh.savePrefs()) {
+      _node_prefs->timezone_offset_minutes = previous_minutes;
+      _next_refresh = 0;
+      return false;
+    }
+    notify(UIEventType::ack);
+  }
+  _next_refresh = 0;
+  return true;
+}
+
+int32_t UITask::getTimezoneOffsetSeconds() const {
+  int32_t seconds = (int32_t)UI_TIMEZONE_OFFSET_FROM_PREFS(_node_prefs);
+  if (seconds < -12L * 60L * 60L) seconds = -12L * 60L * 60L;
+  if (seconds > 14L * 60L * 60L) seconds = 14L * 60L * 60L;
+  return seconds;
+}
+
+uint32_t UITask::getLocalClockTime(uint32_t utc_time) const {
+  return uiApplyTimezoneOffset(utc_time, getTimezoneOffsetSeconds());
 }
 
 float UITask::getMCUTemperature() const {
@@ -9193,6 +9595,12 @@ void UITask::addHourlyMessage() {
 
 void UITask::updateHourlyMessageWindow() {
   updateHourlyStats();
+}
+
+void UITask::updateUptime(uint32_t now) {
+  // Unsigned subtraction deliberately carries across the 32-bit millis wrap.
+  _uptime_accumulated_ms += (uint32_t)(now - _uptime_last_millis);
+  _uptime_last_millis = now;
 }
 
 bool UITask::isNotifyGpioBlocked(int pin) const {
@@ -9276,14 +9684,15 @@ bool UITask::shouldHoldLightSleepLock() const {
   if (_important_notify_active) return true;
 #endif
   if (_display != NULL && _display->isOn()) return true;
-  if (_display_wake_lock_until != 0 && (long)(_display_wake_lock_until - millis()) > 0) return true;
+  const uint32_t now = (uint32_t)millis();
+  if (smartui::optionalDeadlinePending(now, (uint32_t)_display_wake_lock_until)) return true;
 #if UI_DISPLAY_RECOVER_WINDOW_MS > 0
-  if (_display_recover_until != 0 && (long)(_display_recover_until - millis()) > 0) return true;
+  if (smartui::optionalDeadlinePending(now, (uint32_t)_display_recover_until)) return true;
 #endif
 #if UI_BUTTON_WAKE_LATCH_MS > 0
-  if (_button_wake_pending_until != 0 && (long)(_button_wake_pending_until - millis()) > 0) return true;
+  if (smartui::optionalDeadlinePending(now, (uint32_t)_button_wake_pending_until)) return true;
 #endif
-  return _alert_expiry != 0 && (long)(_alert_expiry - millis()) > 0;
+  return smartui::optionalDeadlinePending(now, (uint32_t)_alert_expiry);
 }
 
 bool UITask::areMsgPopupsEnabled() const {
@@ -10651,11 +11060,11 @@ void UITask::messageVibeHandler() {
   if (_msg_vibe_until == 0) return;
 
   unsigned long now = millis();
-  if ((int32_t)(now - _msg_vibe_until) >= 0) {
+  if (smartui::deadlineReached((uint32_t)now, (uint32_t)_msg_vibe_until)) {
     stopMsgVibe();
     return;
   }
-  if (_msg_vibe_next != 0 && (int32_t)(now - _msg_vibe_next) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)now, (uint32_t)_msg_vibe_next)) return;
 
   _msg_vibe_on = !_msg_vibe_on;
   digitalWrite(pin, _msg_vibe_on ? HIGH : LOW);
@@ -10904,16 +11313,17 @@ void UITask::nightModeHandler() {
   if (_node_prefs == NULL || _display == NULL) return;
 
   if (_night_prompt_active) {
-    if (_night_prompt_expires != 0 && (long)(millis() - _night_prompt_expires) >= 0) {
+    if (_night_prompt_expires != 0 &&
+        smartui::deadlineReached((uint32_t)millis(), (uint32_t)_night_prompt_expires)) {
       closeNightPrompt(false, true);
     }
     return;
   }
 
   uint32_t rtc_now = rtc_clock.getCurrentTime();
-  if (rtc_now < UI_RTC_VALID_MIN) return;
+  if (!hasTrustedTime() || rtc_now < UI_RTC_VALID_MIN) return;
 
-  uint32_t local_now = uiLocalClockTime(rtc_now);
+  uint32_t local_now = getLocalClockTime(rtc_now);
   DateTime dt(local_now);
   uint16_t minute_of_day = (uint16_t)dt.hour() * 60U + dt.minute();
   uint32_t local_day = local_now / 86400UL;
@@ -10944,9 +11354,9 @@ void UITask::nightModeHandler() {
   if (_msg_tone_active) return;
 #endif
 #ifdef PIN_MSG_ALERT
-  if (_msg_alert_until != 0 && (long)(millis() - _msg_alert_until) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)millis(), (uint32_t)_msg_alert_until)) return;
 #endif
-  if (_msg_vibe_until != 0 && (long)(millis() - _msg_vibe_until) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)millis(), (uint32_t)_msg_vibe_until)) return;
 
   // Remember the offer before showing it, so a reset cannot make the node
   // repeatedly chirp during the same night.
@@ -11022,7 +11432,8 @@ void UITask::scheduleBleSmartNotify(uint8_t flags) {
   }
   _ble_smart_notify_flags |= flags;
   unsigned long due = millis() + UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS;
-  if (_ble_smart_notify_due == 0 || (long)(due - _ble_smart_notify_due) < 0) {
+  if (_ble_smart_notify_due == 0 ||
+      smartui::deadlinePending((uint32_t)due, (uint32_t)_ble_smart_notify_due)) {
     _ble_smart_notify_due = due;
   }
   _next_refresh = 0;
@@ -11041,7 +11452,8 @@ void UITask::bleSmartNotifyHandler() {
   }
 
   unsigned long now = millis();
-  bool due = _ble_smart_notify_due == 0 || (long)(now - _ble_smart_notify_due) >= 0;
+  bool due = smartui::deadlineDueOrImmediate((uint32_t)now,
+                                             (uint32_t)_ble_smart_notify_due);
   if (!hasConnection()) {
     uint8_t flags = _ble_smart_notify_flags;
     clearBleSmartNotify();
@@ -11111,7 +11523,8 @@ void UITask::importantNotifyHandler() {
     if (_important_notify_visual_until == 0) {
       _important_notify_visual_until = now + UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS;
     }
-    allow_visual = (long)(now - _important_notify_visual_until) < 0;
+    allow_visual = smartui::deadlinePending((uint32_t)now,
+                                            (uint32_t)_important_notify_visual_until);
   }
 #endif
 
@@ -11131,7 +11544,8 @@ void UITask::importantNotifyHandler() {
   }
   if (allow_visual &&
       !defer_gpio_while_tone &&
-      (_important_notify_led_next == 0 || (long)(now - _important_notify_led_next) >= 0)) {
+      smartui::deadlineDueOrImmediate((uint32_t)now,
+                                      (uint32_t)_important_notify_led_next)) {
     triggerMsgAlert();
     _important_notify_led_next = now + nextImportantNotifyDelay(_important_notify_led_burst_step, UI_IMPORTANT_NOTIFY_LED_REPEAT_MS);
   }
@@ -11141,7 +11555,8 @@ void UITask::importantNotifyHandler() {
     _msg_alert_until = 0;
   }
   if (allow_visual &&
-      (_important_notify_led_next == 0 || (long)(now - _important_notify_led_next) >= 0)) {
+      smartui::deadlineDueOrImmediate((uint32_t)now,
+                                      (uint32_t)_important_notify_led_next)) {
     triggerMsgAlert();
     _important_notify_led_next = now + nextImportantNotifyDelay(_important_notify_led_burst_step, UI_IMPORTANT_NOTIFY_LED_REPEAT_MS);
   }
@@ -11160,7 +11575,8 @@ void UITask::importantNotifyHandler() {
     } else if (allow_tone_repeat && !_msg_tone_active) {
       if (_important_notify_tone_next == 0) {
         _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      } else if ((long)(now - _important_notify_tone_next) >= 0) {
+      } else if (smartui::deadlineReached((uint32_t)now,
+                                          (uint32_t)_important_notify_tone_next)) {
         startMsgTone();
         _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
       }
@@ -11177,7 +11593,8 @@ void UITask::importantNotifyHandler() {
     } else if (allow_tone_repeat && !_msg_tone_active) {
       if (_important_notify_tone_next == 0) {
         _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      } else if ((long)(now - _important_notify_tone_next) >= 0) {
+      } else if (smartui::deadlineReached((uint32_t)now,
+                                          (uint32_t)_important_notify_tone_next)) {
         startMsgTone();
         _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
       }
@@ -11188,7 +11605,8 @@ void UITask::importantNotifyHandler() {
 #endif
 #endif
   if ((mode & NOTIFY_MODE_VIBE) &&
-      (_important_notify_vibe_next == 0 || (long)(now - _important_notify_vibe_next) >= 0)) {
+      smartui::deadlineDueOrImmediate((uint32_t)now,
+                                      (uint32_t)_important_notify_vibe_next)) {
     triggerMsgVibe();
     _important_notify_vibe_next = now + nextImportantNotifyDelay(_important_notify_vibe_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
   }
@@ -11228,7 +11646,8 @@ void UITask::messageAlertHandler() {
     return;
   }
 #endif
-  if (_msg_alert_until && (int32_t)(millis() - _msg_alert_until) >= 0) {
+  if (_msg_alert_until &&
+      smartui::deadlineReached((uint32_t)millis(), (uint32_t)_msg_alert_until)) {
     digitalWrite(getMsgAlertPin(), PIN_MSG_ALERT_INACTIVE);
     _msg_alert_until = 0;
   }
@@ -11329,12 +11748,14 @@ void UITask::messageToneHandler() {
     return;
   }
 
-  if (_msg_tone_off && (int32_t)(millis() - _msg_tone_off) >= 0) {
+  if (_msg_tone_off &&
+      smartui::deadlineReached((uint32_t)millis(), (uint32_t)_msg_tone_off)) {
     silenceMsgTonePin(tone_pin);
     _msg_tone_off = 0;
   }
 
-  if (_msg_tone_next && (int32_t)(millis() - _msg_tone_next) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)millis(),
+                                       (uint32_t)_msg_tone_next)) return;
   _msg_tone_off = 0;
 
   uint16_t test_duration = _msg_tone_test_duration;
@@ -11650,8 +12071,8 @@ void UITask::userLedHandler() {
     next_led_change = millis() + LED_CYCLE_MILLIS;
     return;
   }
-  int cur_time = millis();
-  if (cur_time > next_led_change) {
+  uint32_t cur_time = (uint32_t)millis();
+  if (smartui::deadlineDueOrImmediate(cur_time, (uint32_t)next_led_change)) {
     if (led_state == 0) {
       led_state = 1;
       if (_msgcount > 0 && isUnreadLedEnabled()) {
@@ -11795,7 +12216,8 @@ void UITask::handleButtonWakeLatch() {
 #if UI_BUTTON_WAKE_LATCH_MS > 0
   if (!_button_wake_pending) return;
   unsigned long now = millis();
-  if ((long)(now - _button_wake_pending_until) >= 0) {
+  if (smartui::deadlineReached((uint32_t)now,
+                               (uint32_t)_button_wake_pending_until)) {
 #if UI_WAKE_DEBUG_LOG
     Serial.printf("[DBG UI] buttonWakeLatch expired now=%lu\r\n", now);
 #endif
@@ -11851,13 +12273,13 @@ void UITask::displayRecoverHandler() {
 #if UI_DISPLAY_RECOVER_WINDOW_MS > 0
   if (_display == NULL || _display->isOn() || _display_recover_until == 0) return;
   unsigned long now = millis();
-  if ((long)(now - _display_recover_until) >= 0) {
+  if (smartui::deadlineReached((uint32_t)now, (uint32_t)_display_recover_until)) {
     _display_recover_until = 0;
     _display_recover_next = 0;
     _display_recover_reset_to_clock = false;
     return;
   }
-  if ((long)(now - _display_recover_next) < 0) return;
+  if (smartui::deadlinePending((uint32_t)now, (uint32_t)_display_recover_next)) return;
 
   _display->turnOn();
   if (_display->isOn()) {
@@ -11918,7 +12340,7 @@ void UITask::handlePendingPopupWake() {
     _next_refresh = now + UI_POPUP_BLE_STATE_SETTLE_MS;
     return;
   }
-  if (_next_refresh != 0 && (long)(now - _next_refresh) < 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)now, (uint32_t)_next_refresh)) return;
 
   _display->turnOn();
   if (_display->isOn()) {
@@ -11935,7 +12357,7 @@ void UITask::handlePendingPopupWake() {
 /*
   hardware-agnostic pre-shutdown activity should be done here
 */
-void UITask::shutdown(bool restart){
+void UITask::shutdown(bool restart, bool preserve_eink_frame) {
 
   #ifdef PIN_BUZZER
   /* note: we have a choice here -
@@ -11945,7 +12367,8 @@ void UITask::shutdown(bool restart){
   */
   buzzer.shutdown();
   uint32_t buzzer_timer = millis(); // fail-safe shutdown
-  while (buzzer.isPlaying() && (millis() - 2500) < buzzer_timer)
+  while (buzzer.isPlaying() &&
+         !smartui::elapsedAtLeast((uint32_t)millis(), buzzer_timer, 2500U))
     buzzer.loop();
 
   #endif // PIN_BUZZER
@@ -11954,7 +12377,7 @@ void UITask::shutdown(bool restart){
     _board->reboot();
   } else {
 #if UI_EINK_IDLE_SCREENSAVER
-    if (_display != NULL && idle_saver != NULL) {
+    if (!preserve_eink_frame && _display != NULL && idle_saver != NULL) {
       if (!_display->isOn()) {
         _display->turnOn();
       }
@@ -11964,6 +12387,7 @@ void UITask::shutdown(bool restart){
       delay(150);
     }
 #endif
+    (void)preserve_eink_frame;
     // PowerSaving-v17 centralises the radio/display/GPS shutdown sequence in
     // MainBoard.  Do not power peripherals down twice from the UI layer.
     _board->powerOff();
@@ -11982,7 +12406,8 @@ void UITask::debugHeartbeat() {
 #if UI_WAKE_DEBUG_LOG && UI_WAKE_DEBUG_HEARTBEAT_MS > 0
   static unsigned long next_debug_heartbeat = 0;
   unsigned long now = millis();
-  if (next_debug_heartbeat != 0 && (long)(next_debug_heartbeat - now) > 0) return;
+  if (smartui::optionalDeadlinePending((uint32_t)now,
+                                       (uint32_t)next_debug_heartbeat)) return;
   next_debug_heartbeat = now + UI_WAKE_DEBUG_HEARTBEAT_MS;
 
   int btn_raw = -1;
@@ -12029,6 +12454,7 @@ void UITask::debugHeartbeat() {
 }
 
 void UITask::loop() {
+  updateUptime((uint32_t)millis());
   debugHeartbeat();
   updateConnectionState();
   nightModeHandler();
@@ -12044,7 +12470,8 @@ void UITask::loop() {
   handleButtonWakeLatch();
   bool raw_wake_consumed = handleRawButtonWakeWhenDark();
 
-  if (_ble_reenable_at != 0 && (long)(_ble_reenable_at - millis()) <= 0) {
+  if (_ble_reenable_at != 0 &&
+      smartui::deadlineReached((uint32_t)millis(), (uint32_t)_ble_reenable_at)) {
     enableBluetooth();
     _ble_reenable_at = 0;
     showAlert("BLE connect app", 1000);
@@ -12107,7 +12534,8 @@ void UITask::loop() {
   }
 #endif
 #if defined(PIN_USER_BTN_ANA)
-  if (abs(millis() - _analogue_pin_read_millis) > 10) {
+  if (smartui::elapsedAtLeast((uint32_t)millis(),
+                              (uint32_t)_analogue_pin_read_millis, 11U)) {
     ev = analog_btn.check();
     if (ev == BUTTON_EVENT_CLICK) {
       c = checkDisplayOn(KEY_NEXT);
@@ -12122,7 +12550,7 @@ void UITask::loop() {
   }
 #endif
 #if defined(BACKLIGHT_BTN)
-  if (millis() > next_backlight_btn_check) {
+  if (smartui::deadlineDueOrImmediate((uint32_t)millis(), next_backlight_btn_check)) {
     bool touch_state = digitalRead(PIN_BUTTON2);
 #if defined(DISP_BACKLIGHT)
     digitalWrite(DISP_BACKLIGHT, !touch_state);
@@ -12177,13 +12605,14 @@ void UITask::loop() {
 #if UI_EINK_IDLE_SCREENSAVER
   if (idle_saver != NULL && curr == home &&
       (unsigned long)(millis() - _last_activity_ms) >= UI_EINK_IDLE_SCREENSAVER_MILLIS &&
-      millis() >= _alert_expiry) {
+      smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry)) {
     setCurrScreen(idle_saver);
   }
 #endif
 
 #if UI_MENU_AUTO_HOME_MILLIS > 0
-  if (home != NULL && curr != NULL && curr != splash && millis() >= _alert_expiry &&
+  if (home != NULL && curr != NULL && curr != splash &&
+      smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry) &&
 #if UI_EINK_IDLE_SCREENSAVER
       curr != idle_saver &&
 #endif
@@ -12200,20 +12629,24 @@ void UITask::loop() {
 
   if (_display != NULL && _display->isOn()) {
 #if UI_DISPLAY_RECOVER_ON_RENDER
-    if (millis() >= _next_refresh && curr) {
+    if (smartui::deadlineDueOrImmediate((uint32_t)millis(),
+                                        (uint32_t)_next_refresh) && curr) {
       _display->turnOn();
       if (!_display->isOn()) {
         _next_refresh = millis() + UI_DISPLAY_RECOVER_RETRY_MS;
       }
     }
 #endif
-    if (_display->isOn() && millis() >= _next_refresh && curr) {
+    if (_display->isOn() &&
+        smartui::deadlineDueOrImmediate((uint32_t)millis(),
+                                        (uint32_t)_next_refresh) && curr) {
       _display->startFrame();
       int delay_millis = curr->render(*_display);
       if (_night_prompt_active) {
         renderNightPrompt(*_display);
         _next_refresh = _night_prompt_expires != 0 ? _night_prompt_expires : millis() + 1000;
-      } else if (millis() < _alert_expiry) {  // render alert popup
+      } else if (smartui::optionalDeadlinePending((uint32_t)millis(),
+                                                  (uint32_t)_alert_expiry)) {
         _display->setTextSize(1);
         int line_h = _display->getTextLineHeight();
         int pad_x = _display->width() >= 150 ? 8 : 5;
@@ -12238,7 +12671,8 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    if (_display->isOn() && (UI_AUTO_OFF_ALL_WINDOWS || !curr->keepDisplayOn()) && millis() > _auto_off) {
+    if (_display->isOn() && (UI_AUTO_OFF_ALL_WINDOWS || !curr->keepDisplayOn()) &&
+        smartui::deadlineReached((uint32_t)millis(), (uint32_t)_auto_off)) {
 #if UI_WAKE_DEBUG_LOG
       Serial.printf("[DBG UI] autoOff turnOff now=%lu auto_off=%lu curr_keep=%d\r\n",
                     millis(), _auto_off, curr->keepDisplayOn() ? 1 : 0);
@@ -12256,31 +12690,35 @@ void UITask::loop() {
   const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();
   if (shutdownThreshold == 0) {
     _low_batt_strikes = 0;
-  } else if (millis() > next_batt_chck) {
-    uint16_t milliVolts = getBattMilliVolts();
+  } else if (smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)next_batt_chck)) {
+    const smartui::BatteryReading reading = readSafetyBattery();
     _low_batt_strikes = smartui::nextLowBatteryStrikeCount(_low_batt_strikes,
-        milliVolts, shutdownThreshold, LOW_BATTERY_VALID_MIN_MILLIVOLTS,
-        LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);
+        reading, shutdownThreshold, LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);
 
     if (_low_batt_strikes >= LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT) {
 
       // show low battery shutdown alert
       // we should only do this for eink displays, which will persist after power loss
-      #if defined(THINKNODE_M1) || defined(LILYGO_TECHO)
+      #if defined(THINKNODE_M1) || defined(LILYGO_TECHO) || defined(HELTEC_WIRELESS_PAPER)
       if (_display != NULL) {
+        if (!_display->isOn()) _display->turnOn();
         _display->startFrame();
         _display->setTextSize(2);
         _display->setColor(DisplayDriver::RED);
-        _display->drawTextCentered(_display->width() / 2, 20, "АКБ села");
-        _display->drawTextCentered(_display->width() / 2, 40, "Выключаюсь");
+        const int line_h = _display->getTextLineHeight();
+        const int top = (_display->height() - line_h * 2 - 4) / 2;
+        _display->drawTextCentered(_display->width() / 2, top, "АКБ села");
+        _display->drawTextCentered(_display->width() / 2, top + line_h + 4, "Выключаюсь");
         _display->endFrame();
+        delay(150);
       }
       #endif
 
-      shutdown();
+      // E-paper retains this safety message without consuming standby power.
+      shutdown(false, true);
 
     }
-    next_batt_chck = millis() + LOW_BATTERY_SHUTDOWN_CHECK_MILLIS;
+    next_batt_chck = (uint32_t)millis() + LOW_BATTERY_SHUTDOWN_CHECK_MILLIS;
   }
 #endif
 }
@@ -12362,6 +12800,10 @@ char UITask::handleLongPress(char c) {
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double click triggered");
   c = checkDisplayOn(c);
+  if (c != 0 && curr == home && home != NULL &&
+      ((HomeScreen*)home)->restoreAdcDefault(2)) {
+    return 0;
+  }
   return c;
 }
 
@@ -12449,16 +12891,33 @@ float UITask::getAdcMultiplier() const {
 }
 
 bool UITask::setAdcMultiplier(float multiplier, bool save) {
-  if (!isfinite(multiplier) || multiplier < 0.0f || multiplier > 20000.0f) {
+  if (!isfinite(multiplier) || multiplier < 0.0f) {
     return false;
   }
+  const float previous_multiplier = _board->getAdcMultiplier();
+  const float previous_pref = _node_prefs ? _node_prefs->adc_multiplier : 0.0f;
   if (!_board->setAdcMultiplier(multiplier)) {
     return false;
   }
   invalidateBatteryCache();
   if (save) {
+    if (_node_prefs == NULL) {
+      _board->setAdcMultiplier(previous_multiplier);
+      invalidateBatteryCache();
+      return false;
+    }
     _node_prefs->adc_multiplier = multiplier;
-    the_mesh.savePrefs();
+    if (!the_mesh.savePrefs()) {
+      _node_prefs->adc_multiplier = previous_pref;
+      // During edit the board already carries the draft value, so the only
+      // durable rollback source is the last committed preference.
+      if (!_board->setAdcMultiplier(previous_pref)) {
+        _board->setAdcMultiplier(0.0f);
+      }
+      invalidateBatteryCache();
+      _next_refresh = 0;
+      return false;
+    }
     notify(UIEventType::ack);
   }
   _next_refresh = 0;

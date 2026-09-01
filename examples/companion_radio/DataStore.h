@@ -19,7 +19,7 @@ class DataStore {
   mesh::RTCClock* _clock;
   IdentityStore identity_store;
 
-  void loadPrefsInt(const char *filename, NodePrefs& prefs);
+  bool loadPrefsInt(const char *filename, NodePrefs& prefs);
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   void checkAdvBlobFile();
 #endif
@@ -36,9 +36,9 @@ public:
   void loadPrefs(NodePrefs& prefs);
   bool savePrefs(NodePrefs& prefs);
   void loadContacts(DataStoreHost* host);
-  void saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
+  bool saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
   void loadChannels(DataStoreHost* host);
-  void saveChannels(DataStoreHost* host);
+  bool saveChannels(DataStoreHost* host);
   void migrateToSecondaryFS();
   uint8_t getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]);
   bool putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], uint8_t len);
@@ -49,6 +49,7 @@ public:
   bool removeFile(FILESYSTEM* fs, const char* filename);
   uint32_t getStorageUsedKb() const;
   uint32_t getStorageTotalKb() const;
+  IdentityLoadStatus loadMainIdentityStatus(mesh::LocalIdentity &identity);
 
 private:
   FILESYSTEM* _getContactsChannelsFS() const { if (_fsExtra) return _fsExtra; return _fs;};

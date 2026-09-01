@@ -115,6 +115,7 @@ public:
   uint32_t night_prompt_day = 0;
   uint8_t night_quiet_active = 0;
   uint8_t gps_source = GPS_SOURCE_HW;
+  int16_t timezone_offset_minutes = 360;  // UTC+06:00 compatibility default
 
 private:
   class RadioPrefs : public ConfigSerializer {  // COPIED from CommonCLI (for now)
@@ -239,6 +240,7 @@ private:
       def("night_day", _parent->night_prompt_day);
       def("night_quiet", _parent->night_quiet_active);
       def("gps_source", _parent->gps_source);
+      def("tz_min", _parent->timezone_offset_minutes);
     }
   public:
     SmartUIPrefs(NodePrefs* parent) : _parent(parent) { }
@@ -313,6 +315,7 @@ private:
     night_prompt_day = other.night_prompt_day;
     night_quiet_active = other.night_quiet_active;
     gps_source = other.gps_source;
+    timezone_offset_minutes = other.timezone_offset_minutes;
     repeat.disable_fwd = other.repeat.disable_fwd;
   }
 
@@ -360,4 +363,12 @@ inline bool migrateLegacyNotifyPins(NodePrefs& prefs, int8_t alert_pin,
   }
   prefs.notify_pin_fix_version = target_version;
   return true;
+}
+
+inline int16_t normalizeTimezoneOffsetMinutes(int32_t value) {
+  // The on-device picker uses half-hour steps and the civil-time range
+  // UTC-12:00 through UTC+14:00. Invalid persisted data falls back to the
+  // historical SmartUI default (Omsk, UTC+06:00) instead of affecting night mode.
+  if (value < -720 || value > 840 || value % 30 != 0) return 360;
+  return static_cast<int16_t>(value);
 }

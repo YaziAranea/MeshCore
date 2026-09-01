@@ -38,6 +38,21 @@ class ConfigSerializer {
     const char* getToken() const { return rd_buf; }
     bool keyMatch(int8_t depth, const char* key) { return strcmp(key, _keys[depth]) == 0; }
     void setKey(uint8_t depth, const char* key) { strcpy(_keys[depth], key);  }
+    void putText(const char* text) {
+      const size_t expected = strlen(text);
+      if (_f->print(text) != expected) success = false;
+    }
+    void putChar(char value) {
+      if (_f->print(value) != 1) success = false;
+    }
+    template <typename T>
+    void putValue(T value) {
+      if (_f->print(value) == 0) success = false;
+    }
+    template <typename T>
+    void putValue(T value, int format) {
+      if (_f->print(value, format) == 0) success = false;
+    }
   };
 
   Context* _context = NULL;

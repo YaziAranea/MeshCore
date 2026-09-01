@@ -112,6 +112,20 @@ void halt() {
   while (1) ;
 }
 
+#ifdef DISPLAY_CLASS
+static void showFatalStorageError(DisplayDriver* disp, const char* title,
+                                  const char* action) {
+  if (!disp) return;
+  disp->startFrame();
+  disp->setTextSize(1);
+  disp->setColor(UIColor::warning_txt);
+  const int first_line = max(0, disp->height() / 2 - 10);
+  disp->drawTextCentered(disp->width() / 2, first_line, title);
+  disp->drawTextCentered(disp->width() / 2, first_line + 14, action);
+  disp->endFrame();
+}
+#endif
+
 /* WIFI RECONNECT TRACKERS */
 #if defined(ESP32) && defined(WIFI_SSID)
   bool wifi_needs_reconnect = false;
@@ -143,10 +157,14 @@ void setup() {
 
   fast_rng.begin(radio_driver.getRngSeed());
 
+  bool storage_ready = true;
+  bool mesh_started = false;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  InternalFS.begin();
+  storage_ready = InternalFS.begin();
+  if (storage_ready) {
   #if defined(QSPIFLASH)
-    if (!QSPIFlash.begin()) {
+    storage_ready = QSPIFlash.begin();
+    if (!storage_ready) {
       // debug output might not be available at this point, might be too early. maybe should fall back to InternalFS here?
       MESH_DEBUG_PRINTLN("CustomLFS_QSPIFlash: failed to initialize");
     } else {
@@ -154,40 +172,73 @@ void setup() {
     }
   #else
   #if defined(EXTRAFS)
-      ExtraFS.begin();
+      // Call the non-formatting base mount directly. CustomLFS::begin() erases
+      // and formats this region after any mount failure, which can turn a
+      // transient error into loss of contacts/channels.
+      storage_ready = ExtraFS.Adafruit_LittleFS::begin();
+      if (!storage_ready) {
+        MESH_DEBUG_PRINTLN("CustomLFS: mount failed; refusing to auto-format persistent data");
+      }
   #endif
   #endif
-  store.begin();
-  the_mesh.begin(
+  if (storage_ready) {
+    store.begin();
+    mesh_started = the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL
     #else
         false
     #endif
-  );
+    );
+  }
+  }
 #elif defined(RP2040_PLATFORM)
-  LittleFS.begin();
-  store.begin();
-  the_mesh.begin(
+  storage_ready = LittleFS.begin();
+  if (storage_ready) {
+    store.begin();
+    mesh_started = the_mesh.begin(
     #ifdef DISPLAY_CLASS
         disp != NULL
     #else
         false
     #endif
-  );
+    );
+  }
 #elif defined(ESP32)
-  SPIFFS.begin(true);
-  store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  // Never turn a transient mount failure into an implicit factory reset.
+  // Formatting remains available only through the explicit recovery command.
+  storage_ready = SPIFFS.begin(false);
+  if (!storage_ready) {
+    MESH_DEBUG_PRINTLN("SPIFFS mount failed; refusing to auto-format persistent data");
+  } else {
+    store.begin();
+    mesh_started = the_mesh.begin(
+      #ifdef DISPLAY_CLASS
+          disp != NULL
+      #else
+          false
+      #endif
+    );
+  }
 #else
   #error "need to define filesystem"
 #endif
+
+  if (!storage_ready) {
+    MESH_DEBUG_PRINTLN("STORAGE ERROR: persistent filesystem is unavailable; refusing to continue");
+#ifdef DISPLAY_CLASS
+    showFatalStorageError(disp, "STORAGE ERROR", "RESTART / REFLASH");
+#endif
+    halt();
+  }
+
+  if (!mesh_started) {
+    MESH_DEBUG_PRINTLN("IDENTITY ERROR: restore a valid identity backup or perform an explicit factory reset");
+#ifdef DISPLAY_CLASS
+    showFatalStorageError(disp, "IDENTITY ERROR", "RESTORE / RESET");
+#endif
+    halt();
+  }
 
 // add bluetooth interface
 #if defined(BLE_PIN_CODE)
