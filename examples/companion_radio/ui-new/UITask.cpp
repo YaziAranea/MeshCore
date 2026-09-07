@@ -4,6 +4,8 @@
 #include "ClockUptime.h"
 #include "AdcCalibrationUi.h"
 #include "ConfirmedChoice.h"
+#include "QuickTargetUi.h"
+#include "SettingUndo.h"
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RTCClockQuality.h>
@@ -1218,7 +1220,7 @@ static const QuickReplyKeyboardKey quick_reply_keyboard_pages[][QR_KB_KEYS] = {
   {
     QR_KB_TEXT_KEY("Т"), QR_KB_TEXT_KEY("У"), QR_KB_TEXT_KEY("Ф"), QR_KB_TEXT_KEY("Х"), QR_KB_TEXT_KEY("Ц"), QR_KB_TEXT_KEY("Ч"),
     QR_KB_TEXT_KEY("Ш"), QR_KB_TEXT_KEY("Щ"), QR_KB_TEXT_KEY("Ъ"), QR_KB_TEXT_KEY("Ы"), QR_KB_TEXT_KEY("Ь"), QR_KB_TEXT_KEY("Э"),
-    QR_KB_TEXT_KEY("Ю"), QR_KB_TEXT_KEY("Я"), QR_KB_TEXT_KEY("."), QR_KB_TEXT_KEY(","), QR_KB_TEXT_KEY("?"), QR_KB_TEXT_KEY("!"),
+    QR_KB_TEXT_KEY("Ю"), QR_KB_TEXT_KEY("Я"), QR_KB_TEXT_KEY("Ё"), QR_KB_TEXT_KEY("."), QR_KB_TEXT_KEY("?"), QR_KB_TEXT_KEY("!"),
     QR_KB_PAGE_KEY("АС", 0), QR_KB_ACTION_KEY("_", QR_KB_SPACE), QR_KB_ACTION_KEY("<-", QR_KB_DELETE),
     QR_KB_ACTION_KEY("OK", QR_KB_SEND), QR_KB_PAGE_KEY("123", 2), QR_KB_ACTION_KEY("X", QR_KB_BACK)
   },
@@ -1237,7 +1239,9 @@ enum QuickReplyTargetMode {
   QR_TARGET_CLOSED,
   QR_TARGET_KIND,
   QR_TARGET_CHANNEL,
-  QR_TARGET_CONTACT
+  QR_TARGET_CONTACT,
+  QR_TARGET_CONTACT_HOME,
+  QR_TARGET_INITIAL
 };
 #endif
 
@@ -1689,9 +1693,8 @@ static bool drawUiProceduralIcon(DisplayDriver& display, int x, int y, const uin
   return false;
 }
 
-static bool drawUiIconpackV1(DisplayDriver& display, int x, int y, const uint16_t* rows, int size) {
+static bool drawUiIconpackV1(DisplayDriver& display, int x, int y, const uint16_t* rows, int size, int grid = 12) {
   if (rows == NULL || size <= 0) return false;
-  const int grid = 12;
   // Destination-driven nearest-neighbour sampling is intentional.  The old
   // source-driven ceil/floor rectangles overlapped adjacent cells, closing
   // one-pixel holes and turning small T114 icons into solid blocks.
@@ -1726,6 +1729,10 @@ static int uiGpsBadgeWidthForSize(int size) {
   return 25 * uiGpsBadgeScale(size);
 }
 
+static int uiSatelliteLabelWidthForSize(int size) {
+  return 11 * uiGpsBadgeScale(size);
+}
+
 static void drawUiGpsBadgeGlyph(DisplayDriver& display, int x, int y, int scale, const uint8_t rows[5]) {
   for (int row = 0; row < 5; row++) {
     for (int col = 0; col < 3; col++) {
@@ -1750,14 +1757,14 @@ static void drawUiGpsBadge(DisplayDriver& display, int x, int y, int size) {
   static const uint8_t glyph_g[5] = {0x7, 0x4, 0x5, 0x5, 0x7};
   static const uint8_t glyph_p[5] = {0x6, 0x5, 0x6, 0x4, 0x4};
   static const uint8_t glyph_s[5] = {0x7, 0x4, 0x7, 0x1, 0x7};
-  static const uint8_t waves_left[5] = {0x24, 0x12, 0x12, 0x12, 0x24};
-  static const uint8_t waves_right[5] = {0x09, 0x12, 0x12, 0x12, 0x09};
+  static const uint8_t waves_left[5] = {0x12, 0x24, 0x24, 0x24, 0x12};
+  static const uint8_t waves_right[5] = {0x12, 0x09, 0x09, 0x09, 0x12};
   int scale = uiGpsBadgeScale(size);
   int glyph_h = 5 * scale;
   int yy = y + (size - glyph_h) / 2;
   if (yy < y) yy = y;
 
-  // Two separated parenthesis-shaped waves on both sides of the GPS label.
+  // Outward-facing wave arcs: ((GPS)), not inward-facing ))GPS((.
   drawUiGpsBadgeWaves(display, x, yy, scale, waves_left);
   int text_x = x + 7 * scale;
   drawUiGpsBadgeGlyph(display, text_x, yy, scale, glyph_g);
@@ -1766,23 +1773,39 @@ static void drawUiGpsBadge(DisplayDriver& display, int x, int y, int size) {
   drawUiGpsBadgeWaves(display, x + 19 * scale, yy, scale, waves_right);
 }
 
+static void drawUiSatelliteLabel(DisplayDriver& display, int x, int y, int size) {
+  static const uint8_t glyph_s[5] = {0x7, 0x4, 0x7, 0x1, 0x7};
+  static const uint8_t glyph_a[5] = {0x2, 0x5, 0x7, 0x5, 0x5};
+  static const uint8_t glyph_t[5] = {0x7, 0x2, 0x2, 0x2, 0x2};
+  int scale = uiGpsBadgeScale(size);
+  int yy = y + (size - 5 * scale) / 2;
+  // A received satellite emoji is message content, never module status.
+  drawUiGpsBadgeGlyph(display, x, yy, scale, glyph_s);
+  drawUiGpsBadgeGlyph(display, x + 4 * scale, yy, scale, glyph_a);
+  drawUiGpsBadgeGlyph(display, x + 8 * scale, yy, scale, glyph_t);
+}
+
 static void drawUiIcon(DisplayDriver& display, int x, int y, const uint8_t* icon, int size) {
-  if (icon == satellite_icon) {
+  if (icon == gps_status_icon) {
     drawUiGpsBadge(display, x, y, size);
     return;
   }
+  if (icon == satellite_icon) {
+    drawUiSatelliteLabel(display, x, y, size);
+    return;
+  }
   const MeshcoreIconpackV2Glyph* glyph = meshcoreIconpackV2Glyph(icon);
-  // The same meanings and hand-tuned small silhouettes on TFT, OLED and
-  // Paper. Procedural downsampling used to merge holes on mono displays,
-  // and even mapped sound to mute, locations to satellites and offices to homes.
+  // Native destination rasters keep stroke weights stable. All sizes share
+  // semantic features; a T114 font change must not change an icon's meaning.
+  if (glyph != NULL && size == 11 && drawUiIconpackV1(display, x, y, glyph->native11, size, 11)) return;
+  if (glyph != NULL && size == 16 && drawUiIconpackV1(display, x, y, glyph->native16, size, 16)) return;
   if (glyph != NULL && size < 12) {
     drawUiXbmFitted(display, x, y, glyph->small, 8, 8, size, size);
     return;
   }
   if (glyph != NULL && drawUiIconpackV1(display, x, y, glyph->large, size)) return;
-  if (!drawUiProceduralIcon(display, x, y, icon, size)) {
-    drawUiXbmFitted(display, x, y, icon, 8, 8, size, size);
-  }
+  // Unmapped legacy XBM only; retired procedural approximations are not used.
+  if (icon != NULL) drawUiXbmFitted(display, x, y, icon, 8, 8, size, size);
 }
 
 static ColorVal uiGpsStatusColor(bool enabled, bool valid) {
@@ -1823,7 +1846,7 @@ static int uiGpsStatusIconWidth(DisplayDriver& display) {
 static void drawUiGpsStatusIcon(DisplayDriver& display, int x, int y, bool enabled, bool valid) {
   int size = uiStatusIconSize(display);
   display.setColor(uiGpsStatusColor(enabled, valid));
-  drawUiIcon(display, x, y, satellite_icon, size);
+  drawUiIcon(display, x, y, gps_status_icon, size);
 }
 
 static void printOriginNameBold(DisplayDriver& display, const char* origin) {
@@ -1887,7 +1910,7 @@ static const uint8_t* richAsciiEmojiIconAt(const char* src, size_t* consumed) {
   if (src == NULL || consumed == NULL || src[0] == 0) return NULL;
 
   static const char* const aliases[] = {
-    ":'(", "T_T", ">:(", ":)", ":D", "xD", "^^", ";)", "B)", "<3"
+    ":'(", "T_T", ">:(", ":(", ":)", ":D", "xD", "^^", ";)", "B)", "<3"
   };
   for (size_t i = 0; i < sizeof(aliases) / sizeof(aliases[0]); i++) {
     size_t len = strlen(aliases[i]);
@@ -1920,14 +1943,30 @@ static const uint8_t* richAsciiEmojiIconAt(const char* src, size_t* consumed) {
   return NULL;
 }
 
+static size_t richEmojiClusterEnd(const char* src, size_t len, bool* joined) {
+  for (;;) {
+    size_t mark = 0;
+    if (!richIgnorableUtf8Mark(src + len, &mark)) return len;
+    bool joiner = (uint8_t)src[len] == 0xE2;
+    len += mark;
+    if (joiner && src[len] != 0) {
+      *joined = true;
+      len += richUtf8Len(src + len);
+    }
+  }
+}
+
 static const uint8_t* richEmojiIconAt(const char* src, size_t* consumed) {
   size_t alias_consumed = 0;
   const char* alias = meshcoreEmojiAlias(src, &alias_consumed);
   if (alias) {
     const uint8_t* icon = meshcoreEmojiAliasIcon(alias);
     if (icon) {
-      *consumed = alias_consumed;
-      return icon;
+      bool joined = false;
+      *consumed = richEmojiClusterEnd(src, alias_consumed, &joined);
+      // A supported constituent does not make an unsupported joined symbol
+      // supported (person + rocket is an astronaut, not two separate icons).
+      return joined ? emoji_unsupported_icon : icon;
     }
   }
 
@@ -1943,8 +1982,15 @@ static const uint8_t* richEmojiIconAt(const char* src, size_t* consumed) {
     uint16_t cp = meshcoreReadUtf8Codepoint(p);
     size_t len = p - src;
     if (cp == '?' && len > 1) {
-      *consumed = len;
-      return emoji_unknown_icon;
+      // A flag is one unsupported symbol, not two intentional emotions.
+      if (len == 4 && (uint8_t)src[0] == 0xF0 && (uint8_t)src[1] == 0x9F &&
+          (uint8_t)src[2] == 0x87 && (uint8_t)src[3] >= 0xA6 && (uint8_t)src[3] <= 0xBF &&
+          src[4] != 0 && src[5] != 0 && src[6] != 0 && src[7] != 0 &&
+          (uint8_t)src[4] == 0xF0 && (uint8_t)src[5] == 0x9F &&
+          (uint8_t)src[6] == 0x87 && (uint8_t)src[7] >= 0xA6 && (uint8_t)src[7] <= 0xBF) len = 8;
+      bool joined = false;
+      *consumed = richEmojiClusterEnd(src, len, &joined);
+      return emoji_unsupported_icon;
     }
   }
   return NULL;
@@ -1971,7 +2017,8 @@ static int uiLineIconSize(DisplayDriver& display) {
 
 static int uiLineIconAdvance(DisplayDriver& display, const uint8_t* icon = NULL) {
   int size = uiLineIconSize(display);
-  int width = icon == satellite_icon ? uiGpsBadgeWidthForSize(size) : size;
+  int width = icon == gps_status_icon ? uiGpsBadgeWidthForSize(size) :
+              icon == satellite_icon ? uiSatelliteLabelWidthForSize(size) : size;
   return width + (size > 8 ? 2 : 1);
 }
 
@@ -2992,17 +3039,18 @@ static const uint8_t* previewGlyph5x7(uint16_t cp) {
   return meshcoreCyrillicGlyph5x7(cp);
 }
 
-static int previewEmojiAdvance() {
-#if UI_T096_PREMIUM_TFT
-  return 18;
-#else
-  return 9;
-#endif
+static int previewEmojiAdvance(const uint8_t* icon) {
+  // Preview text is always the local 5x7 font, not the display's selected
+  // font. Its icons likewise occupy an 8px row on every board.
+  int width = icon == gps_status_icon ? uiGpsBadgeWidthForSize(8) :
+              icon == satellite_icon ? uiSatelliteLabelWidthForSize(8) : 8;
+  return width + 1;
 }
 
 static int previewTokenWidth(const char* src) {
   size_t consumed = 0;
-  if (richEmojiIconAt(src, &consumed)) return previewEmojiAdvance();
+  const uint8_t* icon = richEmojiIconAt(src, &consumed);
+  if (icon) return previewEmojiAdvance(icon);
   if (richIgnorableUtf8Mark(src, &consumed)) return 0;
 
   const char* p = src;
@@ -3022,8 +3070,9 @@ static int previewTextWidth(const char* text) {
   const char* p = text ? text : "";
   while (*p) {
     size_t consumed = 0;
-    if (richEmojiIconAt(p, &consumed)) {
-      width += previewEmojiAdvance();
+    const uint8_t* icon = richEmojiIconAt(p, &consumed);
+    if (icon) {
+      width += previewEmojiAdvance(icon);
       p += consumed;
       continue;
     }
@@ -3061,8 +3110,8 @@ static void drawPreviewTextLine(DisplayDriver& display, int x, int y, const char
     size_t consumed = 0;
     const uint8_t* icon = richEmojiIconAt(p, &consumed);
     if (icon) {
-      drawUiLineIcon(display, x, y, icon);
-      x += uiLineIconAdvance(display, icon);
+      drawUiIcon(display, x, y, icon, 8);
+      x += previewEmojiAdvance(icon);
       p += consumed;
       continue;
     }
@@ -3714,6 +3763,7 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
     ADC,
+    ADC_RESET,
 #endif
 #if UI_TIMEZONE_PAGE == 1
     TIMEZONE,
@@ -3729,12 +3779,16 @@ class HomeScreen : public UIScreen {
     UNDO_SETTING,
     DEVICE_STATUS,
     HARDWARE_TEST,
+    CONTROLS_HELP,
     SETTINGS_TRANSFER,
 #endif
     FIRST,
     SETTINGS,
 #if UI_COMPACT_SETTINGS_MENU == 1
     NOTIFY_PICKER,
+#if UI_SMART_B11_EXTRAS == 1
+    FAVORITE_PICKER,
+#endif
 #if UI_TIMEZONE_PAGE == 1
     TIMEZONE_PICKER,
 #endif
@@ -3757,8 +3811,12 @@ class HomeScreen : public UIScreen {
   uint8_t _quick_keyboard_cursor;
   uint8_t _quick_target_mode;
   uint16_t _quick_target_cursor;
-  uint8_t _quick_last_target_mode = QR_TARGET_CLOSED;
-  uint16_t _quick_last_target_cursor = 0;
+  smartui::RecentRecipientKeys<PUB_KEY_SIZE> _quick_recent_contacts;
+  int8_t _quick_contact_initial = -1;
+  uint8_t _quick_initials[smartui::CONTACT_INITIAL_GROUPS] = {};
+  uint8_t _quick_initial_count = 0;
+  bool _quick_confirm_open = false;
+  bool _quick_confirm_send = true;
   bool _quick_target_identity_valid;
   uint8_t _quick_target_identity_mode;
   uint16_t _quick_target_identity_cursor;
@@ -3771,6 +3829,8 @@ class HomeScreen : public UIScreen {
   uint8_t _compact_settings_depth;
   uint8_t _compact_settings_group;
   uint8_t _compact_settings_cursor;
+  uint8_t _compact_group_cursors[8] = {};
+  uint8_t _compact_root_cursor = 0;
   smartui::ConfirmedChoice _notify_picker;
   uint8_t _notify_picker_page = SETTINGS;
 #if UI_TIMEZONE_PAGE == 1
@@ -3784,8 +3844,11 @@ class HomeScreen : public UIScreen {
   uint8_t _tone_picker_cursor;
 #endif
 #if UI_SMART_B11_EXTRAS == 1
-  NodePrefs _compact_undo_prefs;
-  bool _compact_undo_valid;
+  smartui::SettingUndo _compact_undo;
+  uint8_t _compact_undo_page = SETTINGS;
+  smartui::ConfirmedChoice _favorite_picker;
+  uint8_t _favorite_picker_slot = 0;
+  uint8_t _controls_help_page = 0;
   uint8_t _hardware_test_step;
 #endif
 #endif
@@ -3802,6 +3865,7 @@ class HomeScreen : public UIScreen {
   bool _shutdown_init;
 #if UI_ADC_MULTIPLIER_PAGE == 1
   bool _adc_edit;
+  bool _adc_reset_confirm = false;
   float _adc_draft;
 #endif
   AdvertPath recent[UI_RECENT_LIST_SIZE];
@@ -4400,26 +4464,6 @@ class HomeScreen : public UIScreen {
     else _node_prefs->favorite_setting_3 = id;
   }
 
-  void cycleFavoriteSlot(uint8_t slot) {
-    uint8_t next = favoriteIdAt(slot);
-    for (uint8_t tries = 0; tries < SMART_FAVORITE_MAX; tries++) {
-      next++;
-      if (next > SMART_FAVORITE_MAX) next = 1;
-#if UI_SMART_B12_TONE_LIST == 1
-      if (next == SMART_FAVORITE_DM_TONE || next == SMART_FAVORITE_MENTION_TONE) continue;
-      if (next == SMART_FAVORITE_PROFILE) continue;
-#endif
-      uint8_t page = favoritePageFromId(next);
-      if (page != HomePage::SETTINGS && isSettingsItem(page)) {
-        setFavoriteId(slot, next);
-        the_mesh.savePrefs();
-        char alert[64];
-        snprintf(alert, sizeof(alert), "Избранное %u: %s", slot + 1, compactSettingsLabel(page));
-        _task->showAlert(alert, 1000);
-        return;
-      }
-    }
-  }
 #endif
 
   const uint8_t* compactSettingsRawPages(uint8_t group, uint8_t& count) const {
@@ -4499,6 +4543,7 @@ class HomeScreen : public UIScreen {
       HomePage::FAVORITE_SLOT_3,
       HomePage::UNDO_SETTING,
       HomePage::DEVICE_STATUS,
+      HomePage::CONTROLS_HELP,
 #if UI_SMART_B12_TONE_LIST != 1
       HomePage::SETTINGS_TRANSFER,
 #endif
@@ -4522,6 +4567,7 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
       HomePage::ADC,
+      HomePage::ADC_RESET,
 #endif
 #if UI_SMART_B11_EXTRAS == 1
       HomePage::HARDWARE_TEST,
@@ -4657,6 +4703,7 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
       case HomePage::ADC: return "Калибр. АКБ";
+      case HomePage::ADC_RESET: return "Сброс калибр.";
 #endif
 #if UI_TIMEZONE_PAGE == 1
       case HomePage::TIMEZONE: return "Часовой пояс";
@@ -4678,6 +4725,7 @@ class HomeScreen : public UIScreen {
       case HomePage::UNDO_SETTING: return "Отменить изменение";
       case HomePage::DEVICE_STATUS: return "Состояние";
       case HomePage::HARDWARE_TEST: return "Тест оборудования";
+      case HomePage::CONTROLS_HELP: return "Управление";
 #if UI_SMART_B12_TONE_LIST != 1
       case HomePage::SETTINGS_TRANSFER: return "Экспорт / импорт";
 #endif
@@ -4886,10 +4934,11 @@ class HomeScreen : public UIScreen {
         break;
       }
       case HomePage::UNDO_SETTING:
-        snprintf(out, out_len, "%s", _compact_undo_valid ? "ГОТОВО" : "НЕТ");
+        snprintf(out, out_len, "%s", _compact_undo.available() ? compactSettingsLabel(_compact_undo_page) : "НЕТ");
         break;
       case HomePage::DEVICE_STATUS:
       case HomePage::HARDWARE_TEST:
+      case HomePage::CONTROLS_HELP:
         snprintf(out, out_len, "ОТКРЫТЬ");
         break;
 #if UI_SMART_B12_TONE_LIST != 1
@@ -4948,6 +4997,98 @@ class HomeScreen : public UIScreen {
     }
   }
 
+  enum SettingRowKind { SettingOpen, SettingToggle, SettingAction, SettingCycle };
+
+  SettingRowKind compactSettingKind(uint8_t page) const {
+    switch (page) {
+      case HomePage::RADIO:
+      case HomePage::ALERT_VIBE_PIN:
+#ifdef PIN_MSG_ALERT
+      case HomePage::ALERT_LED:
+#endif
+#ifdef PIN_MSG_TONE
+      case HomePage::ALERT_TONE_PIN:
+      case HomePage::ALERT_SOUND:
+#if UI_TONE_HIGH_DRIVE_PAGE != 1
+      case HomePage::ALERT_VOLUME:
+#endif
+#if UI_TONE_RESONANCE_PAGE == 1
+      case HomePage::ALERT_TONE_RESONANCE:
+#endif
+#endif
+#if UI_APPEARANCE_MENU
+      case HomePage::UI_FONT:
+      case HomePage::UI_THEME:
+#endif
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      case HomePage::ADC:
+#endif
+#if UI_TIMEZONE_PAGE == 1
+      case HomePage::TIMEZONE:
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      case HomePage::FAVORITE_SLOT_1:
+      case HomePage::FAVORITE_SLOT_2:
+      case HomePage::FAVORITE_SLOT_3:
+      case HomePage::DEVICE_STATUS:
+      case HomePage::HARDWARE_TEST:
+      case HomePage::CONTROLS_HELP:
+#endif
+        return SettingOpen;
+      case HomePage::BLUETOOTH:
+      case HomePage::MSG_POPUP:
+#if UI_BOARD_LEDS_PAGE == 1
+      case HomePage::BOARD_LEDS:
+#endif
+#if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
+      case HomePage::LOW_BATT_SHUTDOWN:
+#endif
+#if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
+      case HomePage::GPS:
+#endif
+#if UI_CLIENT_REPEAT_PAGE == 1
+      case HomePage::CLIENT_REPEAT:
+#endif
+#if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
+      case HomePage::OFFLINE_DM_LED:
+      case HomePage::BLE_DM_LED:
+#endif
+#if UI_APPEARANCE_MENU && UI_UNREAD_LED_PAGE == 1
+      case HomePage::UNREAD_LED:
+#endif
+#ifdef PIN_MSG_TONE
+#if UI_TONE_BRIDGE_PAGE == 1
+      case HomePage::ALERT_TONE_BRIDGE:
+#endif
+#if UI_TONE_8BIT_PAGE == 1
+      case HomePage::ALERT_TONE_STYLE:
+#endif
+#if UI_TONE_HIGH_DRIVE_PAGE == 1
+      case HomePage::ALERT_VOLUME:
+#endif
+#endif
+        return SettingToggle;
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      case HomePage::ADC_RESET:
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      case HomePage::UNDO_SETTING:
+#endif
+      case HomePage::LINK_TEST:
+        return SettingAction;
+      default: return SettingCycle;
+    }
+  }
+
+  void renderSettingsHeader(DisplayDriver& display, const char* title, const char* action) const {
+    display.setBold(false);
+    int hint_w = display.getTextWidth(action);
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextStaticEllipsized(display, 2, 14, display.width() - hint_w - 8, title);
+    display.setColor(DisplayDriver::LIGHT);
+    display.drawTextRightAlign(display.width() - 2, 14, action);
+  }
+
   void renderCompactSettings(DisplayDriver& display) const {
     uint8_t saved_font = uiPushCompactSettingsFont(display);
     int line_h = display.getTextLineHeight();
@@ -4955,10 +5096,14 @@ class HomeScreen : public UIScreen {
     const char* title = _compact_settings_depth == 0
       ? "Настройки"
       : compactSettingsGroupName(_compact_settings_group);
-    display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, title);
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    const char* action = _compact_settings_depth == 0 ? "Закрыть" : "Назад";
+    if (_compact_settings_depth == 0 && _compact_settings_cursor < COMPACT_SETTINGS_GROUP_COUNT) {
+      action = "Открыть";
+    } else if (_compact_settings_depth != 0 && _compact_settings_cursor < compactSettingsItemCount(_compact_settings_group)) {
+      SettingRowKind kind = compactSettingKind(compactSettingsPageAt(_compact_settings_group, _compact_settings_cursor));
+      action = kind == SettingOpen ? "Открыть" : kind == SettingAction ? "Выполн." : "Изменить";
+    }
+    renderSettingsHeader(display, title, action);
 
     uint8_t item_count = _compact_settings_depth == 0
       ? COMPACT_SETTINGS_GROUP_COUNT + 1
@@ -4983,10 +5128,12 @@ class HomeScreen : public UIScreen {
       bool selected = index == _compact_settings_cursor;
       const char* label = "";
       char value[48] = {0};
+      SettingRowKind kind = SettingOpen;
+      bool has_action = false;
       if (_compact_settings_depth == 0) {
         if (index < COMPACT_SETTINGS_GROUP_COUNT) {
           label = compactSettingsGroupName(index);
-          compactSettingsGroupSummary(index, value, sizeof(value));
+          has_action = true;  // Root rows use their full width for names.
         } else {
           label = "Закрыть";
         }
@@ -4996,6 +5143,10 @@ class HomeScreen : public UIScreen {
           uint8_t page = compactSettingsPageAt(_compact_settings_group, index);
           label = compactSettingsLabel(page);
           compactSettingsValue(page, value, sizeof(value));
+          // An "open" placeholder is not a setting value: keep the name wide.
+          if (strcmp(value, "ОТКРЫТЬ") == 0) value[0] = 0;
+          kind = compactSettingKind(page);
+          has_action = true;
         } else {
           label = "Назад";
         }
@@ -5006,19 +5157,24 @@ class HomeScreen : public UIScreen {
         display.setColor(DisplayDriver::YELLOW);
         display.fillRect(0, y, display.width() - (item_count > visible_rows ? 3 : 0), row_h);
         display.setColor(DisplayDriver::DARK);
-        display.setBold(true);
+        display.setBold(false);
       } else {
         display.setColor(DisplayDriver::LIGHT);
         display.setBold(false);
       }
       int label_x = 3;
+      // Real values (especially battery thresholds/frequency) keep their full
+      // existing lane; the header already states the action of the row.
+      const char* marker = has_action && !value[0] ? (kind == SettingOpen ? ">" : kind == SettingAction ? "!" : "") : "";
+      int marker_w = marker[0] ? display.getTextWidth(marker) + 4 : 0;
       int value_x = display.width() - value_width;
-      int label_width = value[0] ? value_x - label_x - 2 : display.width() - label_x - 2;
+      int label_width = value[0] ? value_x - label_x - 2 : display.width() - label_x - marker_w - 5;
       drawRichTextStaticEllipsized(display, label_x, y, label_width, label);
       if (value[0]) {
         display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::GREEN);
         drawRichTextStaticEllipsized(display, value_x, y, value_width - 1, value);
       }
+      if (marker[0]) display.drawTextRightAlign(display.width() - 5, y, marker);
       display.setBold(false);
     }
     if (item_count > visible_rows) {
@@ -5059,11 +5215,7 @@ class HomeScreen : public UIScreen {
       start = item_count - visible_rows;
     }
 
-    display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38,
-                                 font_picker ? "Шрифт" : "Тема");
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    renderSettingsHeader(display, font_picker ? "Шрифт" : "Тема", cursor < choice_count ? "Выбрать" : "Отмена");
 
     uint8_t active = font_picker ? _task->getUiFontChoiceIndex() : _task->getUiThemeChoiceIndex();
     bool has_scrollbar = item_count > visible_rows;
@@ -5075,7 +5227,7 @@ class HomeScreen : public UIScreen {
         display.setColor(DisplayDriver::YELLOW);
         display.fillRect(0, y, display.width() - (has_scrollbar ? 3 : 0), row_h);
         display.setColor(DisplayDriver::DARK);
-        display.setBold(true);
+        display.setBold(false);
       } else {
         display.setColor(DisplayDriver::LIGHT);
         display.setBold(false);
@@ -5096,7 +5248,7 @@ class HomeScreen : public UIScreen {
         }
       } else {
         drawRichTextStaticEllipsized(display, label_x, y,
-                                     display.width() - label_x - right_guard, "Назад");
+                                     display.width() - label_x - right_guard, "Отмена");
       }
       display.setBold(false);
     }
@@ -5139,10 +5291,7 @@ class HomeScreen : public UIScreen {
       start = item_count - visible_rows;
     }
 
-    display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, "Мелодия");
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    renderSettingsHeader(display, "Мелодия", _tone_picker_cursor < tone_count ? "Выбрать" : "Отмена");
 
     uint8_t current = _task->getNotifyToneId();
     for (uint8_t row = 0; row < visible_rows && start + row < item_count; row++) {
@@ -5153,7 +5302,7 @@ class HomeScreen : public UIScreen {
         display.setColor(DisplayDriver::YELLOW);
         display.fillRect(0, y, display.width() - (item_count > visible_rows ? 3 : 0), row_h);
         display.setColor(DisplayDriver::DARK);
-        display.setBold(true);
+        display.setBold(false);
       } else {
         display.setColor(DisplayDriver::LIGHT);
         display.setBold(false);
@@ -5169,7 +5318,7 @@ class HomeScreen : public UIScreen {
           display.drawTextRightAlign(display.width() - 3, y, "OK");
         }
       } else {
-        drawRichTextStaticEllipsized(display, label_x, y, display.width() - label_x - 3, "Назад");
+        drawRichTextStaticEllipsized(display, label_x, y, display.width() - label_x - 3, "Отмена");
       }
       display.setBold(false);
     }
@@ -5263,10 +5412,7 @@ class HomeScreen : public UIScreen {
     if (item_count > visible_rows && start + visible_rows > item_count) start = item_count - visible_rows;
     const bool has_scrollbar = item_count > visible_rows;
 
-    display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, compactSettingsLabel(_notify_picker_page));
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    renderSettingsHeader(display, compactSettingsLabel(_notify_picker_page), cursor < _notify_picker.count() ? "Выбрать" : "Отмена");
     const int active_value = notifyPickerActiveValue();
     for (uint8_t row = 0; row < visible_rows && start + row < item_count; row++) {
       uint8_t index = start + row;
@@ -5277,13 +5423,13 @@ class HomeScreen : public UIScreen {
         display.fillRect(0, y, display.width() - (has_scrollbar ? 3 : 0), row_h);
       }
       display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
-      display.setBold(selected);
+      display.setBold(false);
       char label[32];
       bool active = false;
       if (index < _notify_picker.count()) {
         int value = _notify_picker.value(index);
         active = value == active_value;
-        const char* format = "D%d";
+        const char* format = "GPIO%d";
 #ifdef PIN_MSG_TONE
         if (_notify_picker_page == HomePage::ALERT_VOLUME) format = "%d/10";
 #if UI_TONE_RESONANCE_PAGE == 1
@@ -5348,10 +5494,7 @@ class HomeScreen : public UIScreen {
     if (item_count > visible_rows && start + visible_rows > item_count) start = item_count - visible_rows;
     const bool has_scrollbar = item_count > visible_rows;
 
-    display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - 38, "Часовой пояс");
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, "<>OK");
+    renderSettingsHeader(display, "Часовой пояс", cursor < TIMEZONE_CHOICE_COUNT ? "Выбрать" : "Отмена");
 
     const int16_t active_minutes = _task->getTimezoneOffsetMinutes();
     for (uint8_t row = 0; row < visible_rows && start + row < item_count; row++) {
@@ -5363,7 +5506,7 @@ class HomeScreen : public UIScreen {
         display.fillRect(0, y, display.width() - (has_scrollbar ? 3 : 0), row_h);
       }
       display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
-      display.setBold(selected);
+      display.setBold(false);
       char label[20];
       bool active = false;
       if (index < TIMEZONE_CHOICE_COUNT) {
@@ -5411,6 +5554,77 @@ class HomeScreen : public UIScreen {
       default: break;
     }
   }
+
+#if UI_SMART_B11_EXTRAS == 1
+  void rememberSettingUndo(const NodePrefs& before, uint8_t page) {
+    smartui::SettingUndo next;
+    // Only UI-reachable scalar fields: no serializer internals, identity,
+    // channel tables or unrelated app settings can be restored by UI undo.
+    next.capture(_node_prefs->adc_multiplier, before.adc_multiplier);
+    next.capture(_node_prefs->notify_mode, before.notify_mode);
+    next.capture(_node_prefs->notify_gpio_pin, before.notify_gpio_pin);
+    next.capture(_node_prefs->notify_tone_pin, before.notify_tone_pin);
+    next.capture(_node_prefs->notify_tone_id, before.notify_tone_id);
+    next.capture(_node_prefs->notify_tone_volume, before.notify_tone_volume);
+    next.capture(_node_prefs->auto_advert_interval_mins, before.auto_advert_interval_mins);
+    next.capture(_node_prefs->ch2_mode, before.ch2_mode);
+    next.capture(_node_prefs->board_leds_enabled, before.board_leds_enabled);
+    next.capture(_node_prefs->ui_font, before.ui_font);
+    next.capture(_node_prefs->ui_theme, before.ui_theme);
+    next.capture(_node_prefs->unread_led_enabled, before.unread_led_enabled);
+    next.capture(_node_prefs->msg_popup_enabled, before.msg_popup_enabled);
+    next.capture(_node_prefs->important_notify_mode, before.important_notify_mode);
+    next.capture(_node_prefs->notifications_muted, before.notifications_muted);
+    next.capture(_node_prefs->ui_top_color, before.ui_top_color);
+    next.capture(_node_prefs->ui_bottom_color, before.ui_bottom_color);
+    next.capture(_node_prefs->backlight_timeout_idx, before.backlight_timeout_idx);
+    next.capture(_node_prefs->notify_vibe_pin, before.notify_vibe_pin);
+    next.capture(_node_prefs->offline_dm_led_enabled, before.offline_dm_led_enabled);
+    next.capture(_node_prefs->ble_dm_led_enabled, before.ble_dm_led_enabled);
+    next.capture(_node_prefs->low_battery_shutdown_enabled, before.low_battery_shutdown_enabled);
+    next.capture(_node_prefs->notify_tone_bridge_enabled, before.notify_tone_bridge_enabled);
+    next.capture(_node_prefs->notify_tone_8bit_enabled, before.notify_tone_8bit_enabled);
+    next.capture(_node_prefs->notify_tone_high_drive_enabled, before.notify_tone_high_drive_enabled);
+    next.capture(_node_prefs->notify_pin_fix_version, before.notify_pin_fix_version);
+    next.capture(_node_prefs->notify_tone_resonance_hz, before.notify_tone_resonance_hz);
+    next.capture(_node_prefs->notify_tone_dm_id, before.notify_tone_dm_id);
+    next.capture(_node_prefs->notify_tone_mention_id, before.notify_tone_mention_id);
+    next.capture(_node_prefs->notify_tone_system_id, before.notify_tone_system_id);
+    next.capture(_node_prefs->smart_profile_id, before.smart_profile_id);
+    next.capture(_node_prefs->favorite_setting_1, before.favorite_setting_1);
+    next.capture(_node_prefs->favorite_setting_2, before.favorite_setting_2);
+    next.capture(_node_prefs->favorite_setting_3, before.favorite_setting_3);
+    next.capture(_node_prefs->gps_enabled, before.gps_enabled);
+    next.capture(_node_prefs->gps_source, before.gps_source);
+    next.capture(_node_prefs->timezone_offset_minutes, before.timezone_offset_minutes);
+    next.captureBool(_node_prefs, before.isRepeatEn(), _node_prefs->isRepeatEn(),
+        [](void* context) { return static_cast<NodePrefs*>(context)->isRepeatEn(); },
+        [](void* context, bool enabled) { static_cast<NodePrefs*>(context)->setRepeatEn(enabled); });
+    if (next.overflowed()) {
+      _compact_undo.clear();
+    } else if (next.available()) {
+      _compact_undo = next;
+      _compact_undo_page = page;
+    }
+  }
+
+  void beginFavoritePicker(uint8_t slot) {
+    _favorite_picker_slot = slot;
+    _favorite_picker.reset();
+    int16_t active = favoriteIdAt(slot);
+    for (uint8_t id = 1; id <= SMART_FAVORITE_MAX; ++id) {
+#if UI_SMART_B12_TONE_LIST == 1
+      if (id == SMART_FAVORITE_DM_TONE || id == SMART_FAVORITE_MENTION_TONE || id == SMART_FAVORITE_PROFILE) continue;
+#endif
+      uint8_t page = favoritePageFromId(id);
+      if (page == HomePage::SETTINGS || !isSettingsItem(page)) continue;
+      _favorite_picker.add(id);
+      if (page == resolvedFavoritePageAt(slot)) active = id;
+    }
+    _favorite_picker.begin(active);
+    _page = HomePage::FAVORITE_PICKER;
+  }
+#endif
 
   void activateCompactSetting(uint8_t page) {
 #if UI_SMART_B11_EXTRAS == 1
@@ -5555,6 +5769,11 @@ class HomeScreen : public UIScreen {
         _adc_edit = false;
         _page = HomePage::ADC;
         break;
+      case HomePage::ADC_RESET:
+        cancelAdcEdit();
+        _adc_reset_confirm = false;
+        _page = HomePage::ADC_RESET;
+        break;
 #endif
 #if UI_TIMEZONE_PAGE == 1
       case HomePage::TIMEZONE: {
@@ -5589,22 +5808,27 @@ class HomeScreen : public UIScreen {
       case HomePage::FAVORITE_SLOT_1:
       case HomePage::FAVORITE_SLOT_2:
       case HomePage::FAVORITE_SLOT_3:
-        cycleFavoriteSlot(page - HomePage::FAVORITE_SLOT_1);
+        beginFavoritePicker(page - HomePage::FAVORITE_SLOT_1);
         break;
       case HomePage::UNDO_SETTING:
-        if (_compact_undo_valid) {
-          NodePrefs redo = *_node_prefs;
-          *_node_prefs = _compact_undo_prefs;
-          _compact_undo_prefs = redo;
-          _task->applyImportedPrefs();
-          the_mesh.savePrefs();
-          _task->showAlert("Изменение отменено", 1000);
+        if (_compact_undo.available()) {
+          smartui::SettingUndo::Result result = _compact_undo.apply([]() { return the_mesh.savePrefs(); });
+          if (result == smartui::SettingUndo::Applied) {
+            _task->applyImportedPrefs();
+            _task->showAlert("Изменение отменено", 1000);
+          } else {
+            _task->showAlert(result == smartui::SettingUndo::Conflict ? "Уже изменено извне" : "Ошибка сохранения", 1200);
+          }
         } else {
           _task->showAlert("Нет изменения", 900);
         }
         break;
       case HomePage::DEVICE_STATUS:
         _page = HomePage::DEVICE_STATUS;
+        break;
+      case HomePage::CONTROLS_HELP:
+        _controls_help_page = 0;
+        _page = HomePage::CONTROLS_HELP;
         break;
       case HomePage::HARDWARE_TEST:
         _hardware_test_step = 0;
@@ -5631,21 +5855,56 @@ class HomeScreen : public UIScreen {
     }
 #endif
     if (track_undo && prefs_changed) {
-      _compact_undo_prefs = before;
-      _compact_undo_valid = true;
+      rememberSettingUndo(before, page);
     }
-#if UI_ADC_MULTIPLIER_PAGE == 1
-    else if (track_undo && page == HomePage::ADC) {
-      _compact_undo_prefs = before;
-      _compact_undo_valid = true;
-    }
-#endif
 #endif
   }
 
   bool handleCompactSettingsInput(char c) {
     if (!_settings_open) return false;
     if (_page != HomePage::SETTINGS) {
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      if (_page == HomePage::ADC_RESET) {
+        if (c == KEY_PREV || c == KEY_LEFT || c == KEY_NEXT || c == KEY_RIGHT) {
+          _adc_reset_confirm = !_adc_reset_confirm;
+        } else if (c == KEY_ENTER) {
+          if (_adc_reset_confirm) restoreAdcDefaultConfirmed();
+          _adc_reset_confirm = false;
+          _page = HomePage::SETTINGS;
+        }
+        return true;
+      }
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      if (_page == HomePage::FAVORITE_PICKER) {
+        if (c == KEY_LEFT || c == KEY_PREV) _favorite_picker.move(-1);
+        else if (c == KEY_NEXT || c == KEY_RIGHT) _favorite_picker.move(1);
+        else if (c == KEY_ENTER) {
+          int16_t selected;
+          if (_favorite_picker.selected(selected) && selected != favoriteIdAt(_favorite_picker_slot)) {
+            NodePrefs before = *_node_prefs;
+            setFavoriteId(_favorite_picker_slot, selected);
+            if (the_mesh.savePrefs()) {
+              rememberSettingUndo(before, HomePage::FAVORITE_SLOT_1 + _favorite_picker_slot);
+              _task->showAlert("Избранное сохранено", 900);
+            } else {
+              setFavoriteId(_favorite_picker_slot, _favorite_picker_slot == 0 ? before.favorite_setting_1 :
+                  (_favorite_picker_slot == 1 ? before.favorite_setting_2 : before.favorite_setting_3));
+              _task->showAlert("Ошибка сохранения", 1100);
+            }
+          }
+          _favorite_picker.reset();
+          _page = HomePage::SETTINGS;
+        }
+        return true;
+      }
+      if (_page == HomePage::CONTROLS_HELP) {
+        if (c == KEY_LEFT || c == KEY_PREV) _controls_help_page = (_controls_help_page + 7) % 8;
+        else if (c == KEY_NEXT || c == KEY_RIGHT) _controls_help_page = (_controls_help_page + 1) % 8;
+        else if (c == KEY_ENTER) _page = HomePage::SETTINGS;
+        return true;
+      }
+#endif
       if (_page == HomePage::NOTIFY_PICKER) {
         if (c == KEY_LEFT || c == KEY_PREV) {
           _notify_picker.move(-1);
@@ -5663,10 +5922,7 @@ class HomeScreen : public UIScreen {
 #endif
           applyNotifyPickerChoice(value);
 #if UI_SMART_B11_EXTRAS == 1
-          if (memcmp(&before, _node_prefs, sizeof(NodePrefs)) != 0) {
-            _compact_undo_prefs = before;
-            _compact_undo_valid = true;
-          }
+          rememberSettingUndo(before, _notify_picker_page);
 #endif
         }
         _notify_picker.reset();
@@ -5694,8 +5950,7 @@ class HomeScreen : public UIScreen {
           if (changed) _task->setTimezoneOffsetMinutes(selected, true);
 #if UI_SMART_B11_EXTRAS == 1
           if (changed) {
-            _compact_undo_prefs = before;
-            _compact_undo_valid = true;
+            rememberSettingUndo(before, HomePage::TIMEZONE);
           }
 #else
           (void)changed;
@@ -5735,8 +5990,7 @@ class HomeScreen : public UIScreen {
         else _task->setUiThemeChoice(*cursor);
 #if UI_SMART_B11_EXTRAS == 1
         if (changed) {
-          _compact_undo_prefs = before;
-          _compact_undo_valid = true;
+          rememberSettingUndo(before, font_picker ? HomePage::UI_FONT : HomePage::UI_THEME);
         }
 #else
         (void)changed;
@@ -5770,8 +6024,7 @@ class HomeScreen : public UIScreen {
         _task->setCommonNotifyTone(_tone_picker_cursor);
 #if UI_SMART_B11_EXTRAS == 1
         if (changed) {
-          _compact_undo_prefs = before;
-          _compact_undo_valid = true;
+          rememberSettingUndo(before, HomePage::ALERT_SOUND);
         }
 #else
         (void)changed;
@@ -5806,10 +6059,16 @@ class HomeScreen : public UIScreen {
       : compactSettingsItemCount(_compact_settings_group) + 1;
     if (c == KEY_LEFT || c == KEY_PREV) {
       _compact_settings_cursor = (_compact_settings_cursor + item_count - 1) % item_count;
+      if (_compact_settings_depth == 0) {
+        if (_compact_settings_cursor < COMPACT_SETTINGS_GROUP_COUNT) _compact_root_cursor = _compact_settings_cursor;
+      } else if (_compact_settings_cursor < item_count - 1) _compact_group_cursors[_compact_settings_group] = _compact_settings_cursor;
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _compact_settings_cursor = (_compact_settings_cursor + 1) % item_count;
+      if (_compact_settings_depth == 0) {
+        if (_compact_settings_cursor < COMPACT_SETTINGS_GROUP_COUNT) _compact_root_cursor = _compact_settings_cursor;
+      } else if (_compact_settings_cursor < item_count - 1) _compact_group_cursors[_compact_settings_group] = _compact_settings_cursor;
       return true;
     }
     if (c != KEY_ENTER) return false;
@@ -5820,11 +6079,12 @@ class HomeScreen : public UIScreen {
         cancelAdcEdit();
 #endif
         _settings_open = false;
-        _compact_settings_cursor = 0;
+        _compact_settings_cursor = _compact_root_cursor;
       } else {
         _compact_settings_group = _compact_settings_cursor;
         _compact_settings_depth = 1;
-        _compact_settings_cursor = 0;
+        _compact_settings_cursor = _compact_group_cursors[_compact_settings_group];
+        if (_compact_settings_cursor > compactSettingsItemCount(_compact_settings_group)) _compact_settings_cursor = 0;
       }
       return true;
     }
@@ -5833,10 +6093,96 @@ class HomeScreen : public UIScreen {
     if (_compact_settings_cursor >= group_items) {
       _compact_settings_depth = 0;
       _compact_settings_cursor = _compact_settings_group;
+      _compact_root_cursor = _compact_settings_cursor;
       return true;
     }
     activateCompactSetting(compactSettingsPageAt(_compact_settings_group, _compact_settings_cursor));
     return true;
+  }
+#endif
+
+#if UI_COMPACT_SETTINGS_MENU == 1
+  void renderAuxSettingsPage(DisplayDriver& display) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    uint8_t total = 0, cursor = 0;
+    const char* title = "Настройки";
+    const char* hint = "Выбрать";
+#if UI_ADC_MULTIPLIER_PAGE == 1
+    if (_page == HomePage::ADC_RESET) {
+      total = 2;
+      cursor = _adc_reset_confirm ? 1 : 0;
+      title = "Сброс ADC";
+      hint = _adc_reset_confirm ? "Сбросить" : "Отмена";
+    }
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+    char favorite_title[24];
+    if (_page == HomePage::FAVORITE_PICKER) {
+      total = _favorite_picker.count() + 1;
+      cursor = _favorite_picker.cursor();
+      hint = cursor < _favorite_picker.count() ? "Выбрать" : "Отмена";
+      snprintf(favorite_title, sizeof(favorite_title), "Избранное %u", _favorite_picker_slot + 1);
+      title = favorite_title;
+    } else if (_page == HomePage::CONTROLS_HELP) {
+      total = 8;
+      cursor = _controls_help_page;
+      title = "Управление";
+      hint = "Назад";
+    }
+#endif
+    renderSettingsHeader(display, title, hint);
+    int line_h = display.getTextLineHeight();
+    if (line_h < 8) line_h = 8;
+    int row_y = 14 + line_h + 1;
+    if (display.height() <= 64 && row_y < 28) row_y = 28;
+    int row_h = line_h > 12 ? line_h : 12;
+    uint8_t visible = (display.height() - row_y) / row_h;
+    if (visible < 1) visible = 1;
+    if (visible > UI_COMPACT_SETTINGS_MAX_ROWS) visible = UI_COMPACT_SETTINGS_MAX_ROWS;
+    uint8_t start = cursor >= visible ? cursor - visible + 1 : 0;
+    if (total > visible && start + visible > total) start = total - visible;
+    bool scroll = total > visible;
+    for (uint8_t row = 0; row < visible && start + row < total; ++row) {
+      uint8_t index = start + row;
+      const char* label = "Отмена";
+      bool active = false;
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      if (_page == HomePage::ADC_RESET) label = index == 0 ? "Отмена" : "Заводской коэф.";
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      if (_page == HomePage::FAVORITE_PICKER && index < _favorite_picker.count()) {
+        uint8_t page = favoritePageFromId(_favorite_picker.value(index));
+        label = compactSettingsLabel(page);
+        active = page == resolvedFavoritePageAt(_favorite_picker_slot);
+      } else if (_page == HomePage::CONTROLS_HELP) {
+        static const char* lines[] = { "1x: далее", "2x: назад", "Удерж: выбрать", "3x: часы",
+          "Часы: удерж=тихо", "ADC правка:1x+2x-", "Старт8с:удерж=CLI", "Назад" };
+        label = lines[index];
+      }
+#endif
+      int y = row_y + row * row_h;
+      bool selected = index == cursor;
+      if (selected) {
+        display.setColor(DisplayDriver::YELLOW);
+        display.fillRect(0, y, display.width() - (scroll ? 3 : 0), row_h);
+      }
+      display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+      display.setBold(false);
+      int guard = scroll ? 5 : 3;
+      int marker_w = active ? display.getTextWidth("OK") + 4 : 0;
+      drawRichTextStaticEllipsized(display, 3, y, display.width() - 3 - guard - marker_w, label);
+      if (active) display.drawTextRightAlign(display.width() - guard, y, "OK");
+    }
+    if (scroll) {
+      int track_h = visible * row_h - 2;
+      int thumb_h = track_h * visible / total;
+      if (thumb_h < 4) thumb_h = 4;
+      int thumb_y = row_y + (track_h - thumb_h) * start / (total - visible);
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawRect(display.width() - 2, row_y, 2, track_h);
+      display.fillRect(display.width() - 2, thumb_y, 2, thumb_h);
+    }
+    uiPopFont(display, saved_font);
   }
 #endif
 
@@ -5912,7 +6258,7 @@ class HomeScreen : public UIScreen {
     if (page == HomePage::GPS) return true;
 #endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
-    if (page == HomePage::ADC) return true;
+    if (page == HomePage::ADC || page == HomePage::ADC_RESET) return true;
 #endif
 #if UI_TIMEZONE_PAGE == 1
     if (page == HomePage::TIMEZONE) return true;
@@ -5927,6 +6273,10 @@ class HomeScreen : public UIScreen {
         page == HomePage::UNDO_SETTING ||
         page == HomePage::DEVICE_STATUS ||
         page == HomePage::HARDWARE_TEST
+        || page == HomePage::CONTROLS_HELP
+#if UI_COMPACT_SETTINGS_MENU == 1
+        || page == HomePage::FAVORITE_PICKER
+#endif
 #if UI_SMART_B12_TONE_LIST == 1 && defined(PIN_MSG_TONE)
         || page == HomePage::TONE_PICKER
 #else
@@ -5939,6 +6289,18 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
+#if UI_COMPACT_SETTINGS_MENU != 1
+    // These auxiliary screens are entered only by the compact-menu actions.
+#if UI_ADC_MULTIPLIER_PAGE == 1
+    if (page == HomePage::ADC_RESET) return false;
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+    if (page == HomePage::CONTROLS_HELP) return false;
+#endif
+#endif
+#if UI_COMPACT_SETTINGS_MENU == 1 && UI_SMART_B11_EXTRAS == 1
+    if (page == HomePage::FAVORITE_PICKER) return false;
+#endif
 #if UI_COMPACT_SETTINGS_MENU == 1
     if (page == HomePage::NOTIFY_PICKER) return false;  // Only entered through a setting.
 #if UI_TIMEZONE_PAGE == 1
@@ -6214,7 +6576,7 @@ class HomeScreen : public UIScreen {
 
 #if UI_QUICK_REPLY_KEYBOARD
   uint8_t quickReplyKeyboardIndex() const {
-    return quick_reply_count;
+    return 0;
   }
 #endif
 
@@ -6227,14 +6589,68 @@ class HomeScreen : public UIScreen {
   }
 
   const char* quickReplyLabel() const {
-    if (_quick_reply_idx < quick_reply_count) return quick_reply_texts[_quick_reply_idx];
 #if UI_QUICK_REPLY_KEYBOARD
-    if (_quick_reply_idx == quickReplyKeyboardIndex()) return "Клавиатура";
+    if (_quick_reply_idx == quickReplyKeyboardIndex()) return "Написать...";
+    if (_quick_reply_idx <= quick_reply_count) return quick_reply_texts[_quick_reply_idx - 1];
+#else
+    if (_quick_reply_idx < quick_reply_count) return quick_reply_texts[_quick_reply_idx];
 #endif
     return "Назад";
   }
 
 #if UI_QUICK_REPLY_KEYBOARD
+  bool quickContactAt(uint16_t index, ContactInfo& out) const {
+    ContactInfo candidate;
+    uint16_t seen = 0;
+    for (uint32_t i = 0; the_mesh.getContactByIdx(i, candidate); ++i) {
+      if (candidate.type != ADV_TYPE_CHAT || candidate.name[0] == 0) continue;
+      if (_quick_contact_initial >= 0 &&
+          smartui::contactInitialGroup(candidate.name) != (uint8_t)_quick_contact_initial) continue;
+      if (seen++ == index) { out = candidate; return true; }
+    }
+    return false;
+  }
+
+  uint16_t quickContactCount() const {
+    ContactInfo candidate;
+    uint16_t count = 0;
+    for (uint32_t i = 0; the_mesh.getContactByIdx(i, candidate); ++i) {
+      if (candidate.type != ADV_TYPE_CHAT || candidate.name[0] == 0) continue;
+      if (_quick_contact_initial < 0 ||
+          smartui::contactInitialGroup(candidate.name) == (uint8_t)_quick_contact_initial) ++count;
+    }
+    return count;
+  }
+
+  bool quickRecentContactAt(uint16_t index, ContactInfo& out) const {
+    uint16_t seen = 0;
+    for (uint8_t i = 0; i < _quick_recent_contacts.count(); ++i) {
+      ContactInfo* candidate = the_mesh.lookupContactByPubKey(_quick_recent_contacts.at(i), PUB_KEY_SIZE);
+      if (candidate == NULL || candidate->type != ADV_TYPE_CHAT || candidate->name[0] == 0) continue;
+      if (seen++ == index) { out = *candidate; return true; }
+    }
+    return false;
+  }
+
+  uint16_t quickRecentContactCount() const {
+    ContactInfo contact;
+    uint16_t count = 0;
+    while (quickRecentContactAt(count, contact)) ++count;
+    return count;
+  }
+
+  void collectQuickContactInitials() {
+    bool present[smartui::CONTACT_INITIAL_GROUPS] = {};
+    ContactInfo contact;
+    for (uint32_t i = 0; the_mesh.getContactByIdx(i, contact); ++i) {
+      if (contact.type == ADV_TYPE_CHAT && contact.name[0] != 0)
+        present[smartui::contactInitialGroup(contact.name)] = true;
+    }
+    _quick_initial_count = 0;
+    for (uint8_t i = 0; i < smartui::CONTACT_INITIAL_GROUPS; ++i)
+      if (present[i]) _quick_initials[_quick_initial_count++] = i;
+  }
+
   void clearQuickTargetIdentity() {
     _quick_target_identity_valid = false;
     _quick_target_identity_mode = QR_TARGET_CLOSED;
@@ -6257,10 +6673,16 @@ class HomeScreen : public UIScreen {
       ChannelDetails channel;
       if (!the_mesh.getQuickReplyChannel(_quick_target_cursor, channel_id, channel)) return false;
       _quick_target_channel_id = channel_id;
+      // A channel slot may be edited over BLE while its confirmation is open.
+      // Reuse the identity buffer to guard the actual channel secret as well.
+      memcpy(_quick_target_contact_pubkey, channel.channel.secret, PUB_KEY_SIZE);
       snprintf(_quick_target_identity_label, sizeof(_quick_target_identity_label), "%s", channel.name);
-    } else if (_quick_target_mode == QR_TARGET_CONTACT) {
+    } else if (_quick_target_mode == QR_TARGET_CONTACT || _quick_target_mode == QR_TARGET_CONTACT_HOME) {
       ContactInfo contact;
-      if (!the_mesh.getQuickReplyContact(_quick_target_cursor, contact)) return false;
+      bool found = _quick_target_mode == QR_TARGET_CONTACT
+                     ? quickContactAt(_quick_target_cursor, contact)
+                     : quickRecentContactAt(_quick_target_cursor, contact);
+      if (!found) return false;
       memcpy(_quick_target_contact_pubkey, contact.id.pub_key,
              sizeof(_quick_target_contact_pubkey));
       snprintf(_quick_target_identity_label, sizeof(_quick_target_identity_label), "%s", contact.name);
@@ -6279,6 +6701,8 @@ class HomeScreen : public UIScreen {
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
     _quick_target_cursor = 0;
+    _quick_confirm_open = false;
+    _quick_contact_initial = -1;
     clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
   }
@@ -6289,6 +6713,8 @@ class HomeScreen : public UIScreen {
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
     _quick_target_cursor = 0;
+    _quick_confirm_open = false;
+    _quick_contact_initial = -1;
     clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
   }
@@ -6324,14 +6750,23 @@ class HomeScreen : public UIScreen {
     switch (_quick_target_mode) {
       case QR_TARGET_KIND: return 3;
       case QR_TARGET_CHANNEL: return (uint16_t)the_mesh.getQuickReplyChannelCount();
-      case QR_TARGET_CONTACT: return (uint16_t)the_mesh.getQuickReplyContactCount();
+      case QR_TARGET_CONTACT: return quickContactCount();
+      case QR_TARGET_CONTACT_HOME: return quickRecentContactCount() + 2;
+      case QR_TARGET_INITIAL: return _quick_initial_count;
       default: return 0;
     }
   }
 
   uint16_t quickTargetTotalCount() const {
     uint16_t items = quickTargetItemCount();
-    if (_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT) return items + 1;
+    if (_quick_target_mode != QR_TARGET_KIND && _quick_target_mode != QR_TARGET_CLOSED) {
+      uint16_t total = items + 1;
+      // A vanished selected recipient still owns its pinned row. Reserve a
+      // separate Back row, including when it used to be the very last item.
+      if (quickTargetIdentityMatchesCursor() && total < _quick_target_cursor + 2)
+        total = _quick_target_cursor + 2;
+      return total;
+    }
     return items;
   }
 
@@ -6339,6 +6774,8 @@ class HomeScreen : public UIScreen {
     switch (_quick_target_mode) {
       case QR_TARGET_CHANNEL: return "Чат";
       case QR_TARGET_CONTACT: return "Контакт";
+      case QR_TARGET_CONTACT_HOME: return "Контакты";
+      case QR_TARGET_INITIAL: return "Первая буква";
       case QR_TARGET_KIND:
       default: return "Куда?";
     }
@@ -6363,7 +6800,8 @@ class HomeScreen : public UIScreen {
     }
 
     if (idx == _quick_target_cursor && quickTargetIdentityMatchesCursor()) {
-      snprintf(out, out_len, "%s", _quick_target_identity_label);
+      snprintf(out, out_len, "%s%s", _quick_target_mode == QR_TARGET_CONTACT_HOME ? "* " : "",
+               _quick_target_identity_label);
       return;
     }
     uint16_t item_count = quickTargetItemCount();
@@ -6379,14 +6817,25 @@ class HomeScreen : public UIScreen {
     }
     if (_quick_target_mode == QR_TARGET_CONTACT) {
       ContactInfo contact;
-      if (the_mesh.getQuickReplyContact(idx, contact)) snprintf(out, out_len, "%s", contact.name);
+      if (quickContactAt(idx, contact)) snprintf(out, out_len, "%s", contact.name);
+    } else if (_quick_target_mode == QR_TARGET_CONTACT_HOME) {
+      const uint16_t recent = quickRecentContactCount();
+      ContactInfo contact;
+      if (idx < recent && quickRecentContactAt(idx, contact)) snprintf(out, out_len, "* %s", contact.name);
+      else if (idx == recent) snprintf(out, out_len, "Все контакты >");
+      else if (idx == recent + 1) snprintf(out, out_len, "По букве >");
+    } else if (_quick_target_mode == QR_TARGET_INITIAL && idx < _quick_initial_count) {
+      char initial[3];
+      smartui::contactInitialLabel(_quick_initials[idx], initial);
+      snprintf(out, out_len, "%s", initial);
     }
   }
 
   bool finishQuickKeyboardSend(bool sent) {
     if (sent) {
-      _quick_last_target_mode = _quick_target_mode;
-      _quick_last_target_cursor = _quick_target_cursor;
+      if (_quick_target_mode == QR_TARGET_CONTACT || _quick_target_mode == QR_TARGET_CONTACT_HOME)
+        _quick_recent_contacts.remember(_quick_target_contact_pubkey);
+      _quick_confirm_open = false;
       _quick_target_mode = QR_TARGET_CLOSED;
       clearQuickTargetIdentity();
       _quick_keyboard_open = false;
@@ -6401,15 +6850,36 @@ class HomeScreen : public UIScreen {
   }
 
   bool selectQuickTarget() {
+    if (_quick_confirm_open) {
+      if (!_quick_confirm_send) {
+        _quick_confirm_open = false;
+        return true;
+      }
+      if (!quickTargetIdentityMatchesCursor()) {
+        _task->showAlert("Цель изменилась", 1100);
+        return true;
+      }
+      if (_quick_target_mode == QR_TARGET_CHANNEL) {
+        ChannelDetails channel;
+        if (!the_mesh.getChannel(_quick_target_channel_id, channel) ||
+            memcmp(channel.channel.secret, _quick_target_contact_pubkey, PUB_KEY_SIZE) != 0 ||
+            strcmp(channel.name, _quick_target_identity_label) != 0) {
+          _task->showAlert("Чат изменился", 1100);
+          return true;
+        }
+        return finishQuickKeyboardSend(
+            the_mesh.sendQuickReplyToChannelId(_quick_target_channel_id, _quick_keyboard_text));
+      }
+      return finishQuickKeyboardSend(
+          the_mesh.sendQuickReplyToContactPubKey(_quick_target_contact_pubkey, _quick_keyboard_text));
+    }
     if (_quick_target_mode == QR_TARGET_KIND) {
       if (_quick_target_cursor == 0) {
         if (the_mesh.getQuickReplyChannelCount() <= 0) {
           _task->showAlert("Нет чатов", 900);
         } else {
           _quick_target_mode = QR_TARGET_CHANNEL;
-          uint16_t count = (uint16_t)the_mesh.getQuickReplyChannelCount();
-          _quick_target_cursor = _quick_last_target_mode == QR_TARGET_CHANNEL && _quick_last_target_cursor < count
-                                   ? _quick_last_target_cursor : 0;
+          _quick_target_cursor = 0;
           captureQuickTargetIdentity();
         }
         return true;
@@ -6418,10 +6888,9 @@ class HomeScreen : public UIScreen {
         if (the_mesh.getQuickReplyContactCount() <= 0) {
           _task->showAlert("Нет контактов", 900);
         } else {
-          _quick_target_mode = QR_TARGET_CONTACT;
-          uint16_t count = (uint16_t)the_mesh.getQuickReplyContactCount();
-          _quick_target_cursor = _quick_last_target_mode == QR_TARGET_CONTACT && _quick_last_target_cursor < count
-                                   ? _quick_last_target_cursor : 0;
+          _quick_target_mode = QR_TARGET_CONTACT_HOME;
+          _quick_contact_initial = -1;
+          _quick_target_cursor = 0;
           captureQuickTargetIdentity();
         }
         return true;
@@ -6434,32 +6903,63 @@ class HomeScreen : public UIScreen {
 
     uint16_t item_count = quickTargetItemCount();
     if (_quick_target_cursor >= item_count && !quickTargetIdentityMatchesCursor()) {
-      _quick_target_mode = QR_TARGET_KIND;
+      if (_quick_target_mode == QR_TARGET_INITIAL || _quick_target_mode == QR_TARGET_CONTACT)
+        _quick_target_mode = QR_TARGET_CONTACT_HOME;
+      else _quick_target_mode = QR_TARGET_KIND;
       _quick_target_cursor = 0;
       clearQuickTargetIdentity();
+      return true;
+    }
+
+    if (_quick_target_mode == QR_TARGET_CONTACT_HOME && !quickTargetIdentityMatchesCursor()) {
+      uint16_t recent = quickRecentContactCount();
+      if (_quick_target_cursor == recent) {
+        _quick_contact_initial = -1;
+        _quick_target_mode = QR_TARGET_CONTACT;
+      } else if (_quick_target_cursor == recent + 1) {
+        collectQuickContactInitials();
+        _quick_target_mode = QR_TARGET_INITIAL;
+      } else {
+        _task->showAlert("Цель изменилась", 1100);
+        return true;
+      }
+      _quick_target_cursor = 0;
+      captureQuickTargetIdentity();
+      return true;
+    }
+    if (_quick_target_mode == QR_TARGET_INITIAL) {
+      if (_quick_target_cursor < _quick_initial_count) {
+        _quick_contact_initial = _quick_initials[_quick_target_cursor];
+        _quick_target_mode = QR_TARGET_CONTACT;
+        _quick_target_cursor = 0;
+        captureQuickTargetIdentity();
+      }
       return true;
     }
 
     // Do not resolve the mutable list ordinal again here: the visible choice
     // was snapshotted when the cursor entered this row.  If that target was
     // deleted meanwhile, the stable backend API rejects it safely.
-    if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT) &&
+    if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT ||
+         _quick_target_mode == QR_TARGET_CONTACT_HOME) &&
         !quickTargetIdentityMatchesCursor()) {
       _task->showAlert("Цель изменилась", 1100);
       return true;
     }
-    if (_quick_target_mode == QR_TARGET_CHANNEL) {
-      return finishQuickKeyboardSend(
-          the_mesh.sendQuickReplyToChannelId(_quick_target_channel_id, _quick_keyboard_text));
-    }
-    if (_quick_target_mode == QR_TARGET_CONTACT) {
-      return finishQuickKeyboardSend(
-          the_mesh.sendQuickReplyToContactPubKey(_quick_target_contact_pubkey, _quick_keyboard_text));
-    }
+    _quick_confirm_open = true;
+    _quick_confirm_send = true;
     return true;
   }
 
   bool handleQuickTargetInput(char c) {
+    if (_quick_confirm_open) {
+      if (c == KEY_LEFT || c == KEY_PREV || c == KEY_NEXT || c == KEY_RIGHT) {
+        _quick_confirm_send = !_quick_confirm_send;
+      } else if (c == KEY_ENTER || c == KEY_SELECT) {
+        return selectQuickTarget();
+      }
+      return true;
+    }
     uint16_t total = quickTargetTotalCount();
     if (total == 0) {
       _quick_target_mode = QR_TARGET_CLOSED;
@@ -6471,13 +6971,19 @@ class HomeScreen : public UIScreen {
     if (c == KEY_LEFT || c == KEY_PREV) {
       _quick_target_cursor = (_quick_target_cursor + total - 1) % total;
       if (_quick_target_cursor < quickTargetItemCount()) captureQuickTargetIdentity();
-      else clearQuickTargetIdentity();
+      else {
+        if (_quick_target_mode != QR_TARGET_KIND) _quick_target_cursor = quickTargetItemCount();
+        clearQuickTargetIdentity();
+      }
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
       _quick_target_cursor = (_quick_target_cursor + 1) % total;
       if (_quick_target_cursor < quickTargetItemCount()) captureQuickTargetIdentity();
-      else clearQuickTargetIdentity();
+      else {
+        if (_quick_target_mode != QR_TARGET_KIND) _quick_target_cursor = quickTargetItemCount();
+        clearQuickTargetIdentity();
+      }
       return true;
     }
     if (c == KEY_ENTER || c == KEY_SELECT) {
@@ -6505,7 +7011,7 @@ class HomeScreen : public UIScreen {
         }
         return true;
       case QR_KB_BACK:
-        _quick_keyboard_open = false;
+        resetQuickKeyboard(); // explicit exit discards text; no draft feature
         _quick_reply_idx = quickReplyKeyboardIndex();
         _task->showAlert("К ответам", 800);
         return true;
@@ -6518,18 +7024,6 @@ class HomeScreen : public UIScreen {
         _quick_target_cursor = 0;
         clearQuickTargetIdentity();
         _task->showAlert("Куда?", 600);
-        return true;
-#if 0
-        if (the_mesh.sendQuickReply(_quick_keyboard_text)) {
-          _quick_keyboard_open = false;
-          _quick_reply_open = false;
-          _quick_keyboard_text[0] = 0;
-          _task->notify(UIEventType::ack);
-          _task->showAlert("Отправлено", 900);
-        } else {
-          _task->showAlert("Err", 1000);
-        }
-#endif
         return true;
       default:
         return true;
@@ -6591,6 +7085,38 @@ class HomeScreen : public UIScreen {
 
     const int w = display.width();
     const int h = display.height();
+    if (_quick_confirm_open) {
+      // Four fixed rows fit all five backends. Never ellipsize the identity
+      // suffix; same/truncated names remain distinguishable before sending.
+      const int font_h = display.getTextLineHeight();
+      const int row_h = h / 4;
+      const int text_dy = row_h > font_h ? (row_h - font_h) / 2 : 0;
+      char target_id[12];
+      if (_quick_target_mode == QR_TARGET_CHANNEL) {
+        snprintf(target_id, sizeof(target_id), "CH%u", (unsigned)_quick_target_channel_id + 1);
+      } else {
+        snprintf(target_id, sizeof(target_id), "#%02X%02X",
+                 _quick_target_contact_pubkey[PUB_KEY_SIZE - 2], _quick_target_contact_pubkey[PUB_KEY_SIZE - 1]);
+      }
+      display.setBold(false);
+      display.setColor(DisplayDriver::LIGHT);
+      int id_w = display.getTextWidth(target_id);
+      drawRichTextStaticEllipsized(display, 2, text_dy, w - id_w - 8, _quick_target_identity_label);
+      display.drawTextRightAlign(w - 2, text_dy, target_id);
+      drawRichTextStaticEllipsized(display, 2, row_h + text_dy, w - 4, _quick_keyboard_text);
+      for (int row = 2; row < 4; ++row) {
+        bool selected = (row == 2) == _quick_confirm_send;
+        display.setColor(selected ? DisplayDriver::LIGHT : DisplayDriver::DARK);
+        if (selected) display.fillRect(0, row * row_h, w, row_h);
+        display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+        drawRichTextCenteredEllipsized(display, w / 2, row * row_h + text_dy, w - 4,
+                                       row == 2 ? "Отправить" : "Назад");
+      }
+#if UI_T096_PREMIUM_TFT || UI_NATIVE_TFT_PROFILE
+      uiPopFont(display, saved_font);
+#endif
+      return;
+    }
 #if UI_T096_PREMIUM_TFT
     const int line_h = display.getTextLineHeight();
     const int header_h = line_h + 2;
@@ -6619,10 +7145,11 @@ class HomeScreen : public UIScreen {
     if (quickTargetIdentityMatchesCursor()) {
       // Keep the snapshotted row visible even if the live list was compacted.
       // SEND will revalidate the immutable ID instead of silently retargeting.
-      if (total <= _quick_target_cursor) total = _quick_target_cursor + 2;
+      if (total < _quick_target_cursor + 2) total = _quick_target_cursor + 2;
     } else {
       if (_quick_target_cursor >= total && total > 0) _quick_target_cursor = 0;
-      if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT) &&
+      if ((_quick_target_mode == QR_TARGET_CHANNEL || _quick_target_mode == QR_TARGET_CONTACT ||
+           _quick_target_mode == QR_TARGET_CONTACT_HOME) &&
           _quick_target_cursor < quickTargetItemCount()) {
         captureQuickTargetIdentity();
       }
@@ -6653,7 +7180,7 @@ class HomeScreen : public UIScreen {
         display.setColor(back ? DisplayDriver::YELLOW : DisplayDriver::GREEN);
         display.fillRect(0, y, w, row_h);
         display.setColor(DisplayDriver::DARK);
-        display.setBold(true);
+        display.setBold(false);
       } else {
         display.setColor(back ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
         display.setBold(false);
@@ -6721,7 +7248,20 @@ class HomeScreen : public UIScreen {
     display.setColor(DisplayDriver::BLUE);
     display.drawRect(0, 0, w - 1, preview_h);
     display.setColor(DisplayDriver::LIGHT);
-    drawRichTextTailEllipsized(display, 3, preview_text_y, w - 6, _quick_keyboard_text, true);
+    const QuickReplyKeyboardKey& focused = currentQuickKeyboardKey();
+    const char* hint = NULL;
+    switch (focused.action) {
+      case QR_KB_SPACE: hint = "Пробел"; break;
+      case QR_KB_DELETE: hint = "Удалить символ"; break;
+      case QR_KB_SEND: hint = "Выбрать адресата"; break;
+      case QR_KB_BACK: hint = "Выйти из ввода"; break;
+      case QR_KB_PAGE:
+        hint = focused.page == 2 ? "Цифры и знаки" : focused.page == 1 ? "Буквы Т-Я" : "Буквы А-С";
+        break;
+      default: break;
+    }
+    if (hint != NULL) drawRichTextStaticEllipsized(display, 3, preview_text_y, w - 6, hint);
+    else drawRichTextTailEllipsized(display, 3, preview_text_y, w - 6, _quick_keyboard_text, true);
 
     for (uint8_t row = 0; row < QR_KB_ROWS; row++) {
       for (uint8_t col = 0; col < QR_KB_COLS; col++) {
@@ -6741,7 +7281,7 @@ class HomeScreen : public UIScreen {
           display.setColor(key.action == QR_KB_SEND ? DisplayDriver::GREEN : DisplayDriver::YELLOW);
           display.fillRect(x, y, key_w, key_h);
           display.setColor(DisplayDriver::DARK);
-          display.setBold(true);
+          display.setBold(false);
         } else {
           display.setColor(service ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
           display.setBold(false);
@@ -6809,9 +7349,8 @@ public:
         _tone_picker_cursor = 0;
 #endif
 #if UI_SMART_B11_EXTRAS == 1
-        _compact_undo_valid = false;
+        _compact_undo.clear();
         _hardware_test_step = 0;
-        memset(&_compact_undo_prefs, 0, sizeof(_compact_undo_prefs));
 #endif
 #endif
        }
@@ -6914,13 +7453,11 @@ public:
       }
     } else
 #endif
-    if (!enabled) {
-      strcpy(gps_buf, "GPS OFF");
-    } else if (show_count && sats >= 0) {
+    if (enabled && show_count && sats >= 0) {
       if (sats > 99) sats = 99;
-      snprintf(gps_buf, sizeof(gps_buf), "GPS ON %d", sats);
+      snprintf(gps_buf, sizeof(gps_buf), "GPS %s %d", smartui::gpsClockStateWord(enabled, valid), sats);
     } else {
-      strcpy(gps_buf, "GPS ON");
+      snprintf(gps_buf, sizeof(gps_buf), "GPS %s", smartui::gpsClockStateWord(enabled, valid));
     }
     display.setColor(uiGpsStatusColor(enabled, valid));
     display.setCursor(x, y);
@@ -6933,20 +7470,24 @@ public:
   }
 
 #if UI_ADC_MULTIPLIER_PAGE == 1
-  bool restoreAdcDefault(uint8_t click_count) {
-    if (!smartui::adcFactoryResetGesture(_settings_open, _page == HomePage::ADC,
-                                         _adc_edit, click_count)) return false;
+  bool restoreAdcDefaultConfirmed() {
+    if (!smartui::adcFactoryResetConfirmed(_settings_open, _page == HomePage::ADC_RESET,
+                                           _adc_edit, _adc_reset_confirm)) return false;
+#if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
+    NodePrefs before = *_node_prefs;
+#endif
     _adc_edit = false;
     _adc_draft = 0.0f;
     if (_task->setAdcMultiplier(0.0f, true)) {
+#if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
+      rememberSettingUndo(before, HomePage::ADC);
+#endif
       _task->showAlert("АЦП: заводской", 1000);
     } else {
       _task->showAlert("АЦП недоступен", 1000);
     }
     return true;
   }
-#else
-  bool restoreAdcDefault(uint8_t) { return false; }
 #endif
 
   bool isBlePinPage() const {
@@ -7409,8 +7950,8 @@ public:
           snprintf(sat_buf, sizeof(sat_buf), "%d", sats);
           int sat_text_w = display.getTextWidth(sat_buf);
           int sat_right_x = has_mcu_temp ? display.width() - display.getTextWidth(temp_text) - 10 : display.width() - 4;
-          int sat_icon_x = sat_right_x - sat_text_w - uiLineIconAdvance(display, satellite_icon);
-          drawUiLineIcon(display, sat_icon_x, 101, satellite_icon);
+          int sat_icon_x = sat_right_x - sat_text_w - uiLineIconAdvance(display, gps_status_icon);
+          drawUiLineIcon(display, sat_icon_x, 101, gps_status_icon);
           display.drawTextRightAlign(sat_right_x, 101, sat_buf);
         }
       } else {
@@ -7535,15 +8076,21 @@ public:
           if (sats > 99) sats = 99;
           snprintf(sat_buf, sizeof(sat_buf), "%d", sats);
           int sat_text_w = display.getTextWidth(sat_buf);
-          int sat_icon_x = detail_right_x - sat_text_w - uiLineIconAdvance(display, satellite_icon);
+          int sat_icon_x = detail_right_x - sat_text_w - uiLineIconAdvance(display, gps_status_icon);
           if (sat_icon_x < 0) sat_icon_x = 0;
-          drawUiLineIcon(display, sat_icon_x, detail_y, satellite_icon);
+          drawUiLineIcon(display, sat_icon_x, detail_y, gps_status_icon);
           display.drawTextRightAlign(detail_right_x, detail_y, sat_buf);
           detail_right_x = sat_icon_x - 2;
         }
         snprintf(tmp, sizeof(tmp), "MSG/h %s", msg_hour);
         if (detail_right_x >= 8) {
-          drawRichTextEllipsized(display, 0, detail_y, detail_right_x + 1, tmp);
+          // Keep the value stationary and complete; abbreviate the caption
+          // before sacrificing digits to a moving or ellipsized window.
+          if (display.getTextWidth(tmp) > detail_right_x + 1)
+            snprintf(tmp, sizeof(tmp), "M/h %s", msg_hour);
+          if (display.getTextWidth(tmp) > detail_right_x + 1)
+            snprintf(tmp, sizeof(tmp), "%s/h", msg_hour);
+          drawRichTextStaticEllipsized(display, 0, detail_y, detail_right_x + 1, tmp);
         }
       } else
 #endif
@@ -7585,9 +8132,9 @@ public:
             if (sats > 99) sats = 99;
             snprintf(sat_buf, sizeof(sat_buf), "%d", sats);
             int sat_text_w = display.getTextWidth(sat_buf);
-            int sat_icon_x = detail_right_x - sat_text_w - uiLineIconAdvance(display, satellite_icon);
+            int sat_icon_x = detail_right_x - sat_text_w - uiLineIconAdvance(display, gps_status_icon);
             if (sat_icon_x < 0) sat_icon_x = 0;
-            drawUiLineIcon(display, sat_icon_x, detail_y, satellite_icon);
+            drawUiLineIcon(display, sat_icon_x, detail_y, gps_status_icon);
             display.drawTextRightAlign(detail_right_x, detail_y, sat_buf);
             detail_right_x = sat_icon_x - 2;
           }
@@ -7614,10 +8161,10 @@ public:
         snprintf(sat_buf, sizeof(sat_buf), "%d", sats);
         int sat_text_w = display.getTextWidth(sat_buf);
         int sat_right_x = has_mcu_temp ? display.width() - display.getTextWidth(temp_text) - 8 : display.width() - 1;
-        int sat_icon_x = sat_right_x - sat_text_w - uiLineIconAdvance(display, satellite_icon);
+        int sat_icon_x = sat_right_x - sat_text_w - uiLineIconAdvance(display, gps_status_icon);
         if (sat_icon_x < 0) sat_icon_x = 0;
         int sat_y = detail_y;
-        drawUiLineIcon(display, sat_icon_x, sat_y, satellite_icon);
+        drawUiLineIcon(display, sat_icon_x, sat_y, gps_status_icon);
         display.drawTextRightAlign(sat_right_x, sat_y, sat_buf);
       }
 #if UI_V4_3_OLED_PROFILE
@@ -8564,12 +9111,12 @@ public:
       sprintf(battery_line, "АКБ: %u.%02uВ", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
       snprintf(coef_line, sizeof(coef_line), "Коэф: %s", adc_buf);
       drawOledCompactMenuPage(display, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ", battery_line, coef_line,
-          _adc_edit ? "+/-; удерж: сохранить" : "удерж: правка; 2x: завод.");
+          _adc_edit ? "+/-; удерж: сохранить" : "удерж: правка; 2x: назад");
 #else
       display.drawTextCentered(display.width() / 2, 14, _adc_edit ? "Калибр. АКБ +/-" : "Калибр. АКБ");
       display.drawTextCentered(display.width() / 2, 24, "по мультиметру");
       display.drawTextCentered(display.width() / 2, 34,
-          _adc_edit ? "удерж: сохранить" : "2x: заводской");
+          _adc_edit ? "удерж: сохранить" : "2x: назад");
       display.setCursor(0, 44);
       sprintf(tmp, "АКБ: %u.%02uВ", batteryMilliVolts / 1000, (batteryMilliVolts % 1000) / 10);
       display.print(tmp);
@@ -8610,6 +9157,16 @@ public:
 #endif
     }
 #if UI_COMPACT_SETTINGS_MENU == 1
+    else if (
+#if UI_ADC_MULTIPLIER_PAGE == 1
+      _page == HomePage::ADC_RESET ||
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      _page == HomePage::FAVORITE_PICKER || _page == HomePage::CONTROLS_HELP ||
+#endif
+      false) {
+      renderAuxSettingsPage(display);
+    }
     else if (_page == HomePage::NOTIFY_PICKER) {
       renderNotifyPicker(display);
     }
@@ -8634,21 +9191,32 @@ public:
 #if UI_SMART_B11_EXTRAS == 1
     else if (_page == HomePage::DEVICE_STATUS) {
       uint8_t saved_font = uiPushCompactSettingsFont(display);
+      display.setBold(false);
       display.setColor(DisplayDriver::GREEN);
       drawRichTextCenteredEllipsized(display, display.width() / 2, 14, display.width(), "Состояние");
-      int y = display.height() > 64 ? 27 : 28;
-      int row_h = display.height() > 64 ? 13 : 12;
-      snprintf(tmp, sizeof(tmp), "АКБ %.3fВ  BLE %s",
-               _task->getBattMilliVolts() / 1000.0f,
+      int row_h = display.getTextLineHeight();
+      int y = 14 + row_h + 1;
+      if (row_h < 12) row_h = 12;
+      if (y < 28) y = 28;
+      char voltage[12];
+      const uint16_t mv = _task->getBattMilliVolts();
+      if (mv > 0) snprintf(voltage, sizeof(voltage), "%.3fV", mv / 1000.0f);
+      else strcpy(voltage, "--V");
+      snprintf(tmp, sizeof(tmp), "%s BLE:%s", voltage,
                _task->hasConnection() ? "СВЯЗЬ" : (_task->isBluetoothEnabled() ? "ЖДЁТ" : "ВЫКЛ"));
       display.setColor(DisplayDriver::LIGHT);
-      drawRichTextEllipsized(display, 1, y, display.width() - 2, tmp);
+      drawRichTextStaticEllipsized(display, 1, y, display.width() - 2, tmp);
       snprintf(tmp, sizeof(tmp), "RSSI %d  SNR %.1f",
                (int)radio_driver.getLastRSSI(), radio_driver.getLastSNR());
-      drawRichTextEllipsized(display, 1, y + row_h, display.width() - 2, tmp);
+      if (display.getTextWidth(tmp) > display.width() - 2)
+        snprintf(tmp, sizeof(tmp), "R%d S%.1f", (int)radio_driver.getLastRSSI(), radio_driver.getLastSNR());
+      drawRichTextStaticEllipsized(display, 1, y + row_h, display.width() - 2, tmp);
 #if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
+      bool gps_enabled = false, gps_valid = false;
+      int gps_sats = -1;
+      readGpsUiState(gps_enabled, gps_valid, gps_sats);
       snprintf(tmp, sizeof(tmp), "GPS %s  FEM %s",
-               _task->getGPSState() ? "ВКЛ" : "ВЫКЛ",
+               smartui::gpsClockStateWord(gps_enabled, gps_valid),
 #ifdef RADIO_FEM_RXGAIN
                _node_prefs->radio_fem_rxgain ? "ВКЛ" : "ВЫКЛ");
 #else
@@ -8660,7 +9228,7 @@ public:
 #else
       snprintf(tmp, sizeof(tmp), "Радио SX1262");
 #endif
-      drawRichTextEllipsized(display, 1, y + row_h * 2, display.width() - 2, tmp);
+      drawRichTextStaticEllipsized(display, 1, y + row_h * 2, display.width() - 2, tmp);
       uiPopFont(display, saved_font);
     } else if (_page == HomePage::HARDWARE_TEST) {
       uint8_t saved_font = uiPushCompactSettingsFont(display);
@@ -8768,7 +9336,7 @@ public:
         if (_quick_reply_idx == quickReplyBackIndex()) {
           _quick_reply_open = false;
           _task->showAlert("Ответ закрыт", 800);
-        } else if (the_mesh.sendQuickReply(quick_reply_texts[_quick_reply_idx])) {
+        } else if (the_mesh.sendQuickReply(quickReplyLabel())) {
           _quick_reply_open = false;
           _task->notify(UIEventType::ack);
           _task->showAlert("Ответ отправлен", 900);
@@ -8808,8 +9376,7 @@ public:
       if (!_settings_open) {
         _settings_open = true;
         _compact_settings_depth = 0;
-        _compact_settings_group = 0;
-        _compact_settings_cursor = 0;
+        _compact_settings_cursor = _compact_root_cursor < COMPACT_SETTINGS_GROUP_COUNT ? _compact_root_cursor : 0;
       }
 #else
       if (_settings_open) {
@@ -9014,10 +9581,16 @@ public:
 #if UI_ADC_MULTIPLIER_PAGE == 1
     if (c == KEY_ENTER && _settings_open && _page == HomePage::ADC) {
       if (_adc_edit) {
+#if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
+        NodePrefs before = *_node_prefs;
+#endif
         if (_task->setAdcMultiplier(_adc_draft, true)) {
 #if UI_SMART_B11_EXTRAS == 1
           _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
           the_mesh.savePrefs();
+#endif
+#if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
+          rememberSettingUndo(before, HomePage::ADC);
 #endif
           _task->showAlert("АЦП сохранен", 800);
         } else {
@@ -12808,12 +13381,7 @@ char UITask::handleLongPress(char c) {
 
 char UITask::handleDoubleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: double click triggered");
-  c = checkDisplayOn(c);
-  if (c != 0 && curr == home && home != NULL &&
-      ((HomeScreen*)home)->restoreAdcDefault(2)) {
-    return 0;
-  }
-  return c;
+  return checkDisplayOn(c);
 }
 
 char UITask::handleTripleClick(char c) {

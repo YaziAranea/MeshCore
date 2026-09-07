@@ -426,15 +426,15 @@ def render_settings(profile: str = "Стандарт") -> Canvas:
 
 
 def render_settings_8(profile: str = "Стандарт") -> Canvas:
-    """Wireless Paper proposal: use all eight safe 12 px rows."""
+    """Actual FULL root menu, without redundant right-hand summaries."""
     c = Canvas("compact_settings_final")
     line_h = max(8, 8 + PROFILES[profile][1])
     c.text(2, 14, "Настройки", profile=profile, layer="title")
-    c.right(W - 2, 14, "<>OK", profile=profile, layer="hint")
+    c.right(W - 2, 14, "Открыть", profile=profile, layer="hint")
     rows = [
-        ("Избранное", "3 пункта"), ("Уведомления", "ЭКРАН"),
-        ("Экран", profile), ("Радио", "868.700"),
-        ("Система", "BLE ВКЛ"), ("Дополнительно", "СЕРВИС"),
+        ("Избранное", ""), ("Уведомления", ""),
+        ("Экран", ""), ("Радио", ""),
+        ("Система", ""), ("Дополнительно", ""),
         ("Закрыть", ""),
     ]
     row_y, row_h = 14 + line_h + 1, max(line_h, 12)
@@ -443,11 +443,8 @@ def render_settings_8(profile: str = "Стандарт") -> Canvas:
         selected = i == 0
         if selected:
             c.fill(0, y, W, row_h, layer="selection")
-        c.text(3, y, c.ellipsize(label, 176, profile=profile, bold=selected), profile=profile,
-               bold=selected, ink=not selected, layer=f"row{i}_label")
-        if value:
-            c.text(W - 66, y, c.ellipsize(value, 65, profile=profile), profile=profile,
-                   bold=selected, ink=not selected, layer=f"row{i}_value")
+        c.text(3,y,label,profile=profile,ink=not selected,layer=f"row{i}_label")
+        if label != "Закрыть": c.right(W-5,y,">",profile=profile,ink=not selected,layer=f"row{i}_open")
     return c
 
 
@@ -455,19 +452,17 @@ def render_font_picker(profile: str = "Стандарт") -> Canvas:
     c = Canvas("font_picker")
     line_h = max(8, 8 + PROFILES[profile][1])
     c.text(2, 14, "Шрифт", profile=profile, layer="title")
-    c.right(W - 2, 14, "<>OK", profile=profile, layer="hint")
-    items = list(PROFILES) + ["Назад"]
+    c.right(W - 2, 14, "Выбрать", profile=profile, layer="hint")
+    items = list(PROFILES) + ["Отмена"]
     row_y, row_h, visible = 14 + line_h + 1, max(line_h, 12), min(8, len(items))
     for row, label in enumerate(items[:visible]):
         y = row_y + row * row_h
         selected = row == 0
         if selected:
-            c.fill(0, y, W - 3, row_h, layer="selection")
-        c.text(3, y, label, profile=profile, bold=selected, ink=not selected, layer=f"font{row}")
+            c.fill(0, y, W, row_h, layer="selection")
+        c.text(3, y, label, profile=profile, ink=not selected, layer=f"font{row}")
         if row == 0:
-            c.right(W - 5, y, "OK", profile=profile, bold=True, ink=False, layer="active")
-    c.rect(W - 2, row_y, 2, visible * row_h - 2, layer="scroll_track")
-    c.fill(W - 2, row_y, 2, 28, layer="scroll_thumb")
+            c.right(W - 3, y, "OK", profile=profile, ink=False, layer="active")
     return c
 
 
@@ -532,7 +527,7 @@ def render_unread(profile: str = "Стандарт") -> Canvas:
 def render_keyboard(profile: str = "Стандарт") -> Canvas:
     c = Canvas("keyboard")
     c.rect(0, 0, W - 1, 14, layer="preview_frame")
-    c.text(3, 2, c.ellipsize("Встречаемся у северного входа", W - 6, profile=profile), profile=profile, layer="preview")
+    c.text(3, 2, "Выбрать адресата", profile=profile, layer="action_hint")
     keys = ["А", "Б", "В", "Г", "Д", "Е", "Ж", "З", "И", "Й", "К", "Л", "М", "Н", "О", "П", "Р", "С", "ТЯ", "_", "<-", "OK", "123", "X"]
     cell_w, grid_y = W // 6, 16
     cell_h = (H - grid_y) // 4
@@ -548,26 +543,52 @@ def render_keyboard(profile: str = "Стандарт") -> Canvas:
             c.fill(x + kw // 2 - 5, y + kh // 2 + 2, 10, 1, ink=not selected, layer="space")
         elif label == "<-":
             c.fill(x + kw // 2 - 4, y + kh // 2, 9, 1, ink=not selected, layer="delete")
+            c.fill(x + kw // 2 - 4, y + kh // 2 - 1, 1, 3, ink=not selected, layer="delete")
+            c.fill(x + kw // 2 - 3, y + kh // 2 - 2, 1, 1, ink=not selected, layer="delete")
+            c.fill(x + kw // 2 - 3, y + kh // 2 + 2, 1, 1, ink=not selected, layer="delete")
+        elif label == "X":
+            for delta in range(-3,4):
+                c.pixel(x+kw//2+delta,y+kh//2+delta,not selected,"back")
+                c.pixel(x+kw//2+delta,y+kh//2-delta,not selected,"back")
         else:
             ty = y + max(0, (kh - 8) // 2)
-            c.centered(x + kw // 2, ty, label, profile=profile, bold=selected, ink=not selected, layer=f"key{i}")
+            c.centered(x + kw // 2, ty, label, profile=profile, ink=not selected, layer=f"key{i}")
     return c
 
 
-def render_target(profile: str = "Стандарт") -> Canvas:
-    c = Canvas("target_picker")
+def render_target(profile: str = "Стандарт", mode: str = "all") -> Canvas:
+    c = Canvas("target_picker" if mode=="all" else f"target_{mode}")
     c.rect(0, 0, W - 1, 14, layer="header_frame")
-    c.centered(W // 2, 2, "Куда отправить: контакт", profile=profile, layer="header")
+    c.centered(W // 2, 2, {"all":"Контакт","home":"Контакты","initial":"Первая буква"}[mode], profile=profile, layer="header")
     labels = ["Александр Омск", "Мария поле", "ANX T114FIX", "Сергей / машина", "Командир группы", "Тестовый компаньон", "Назад"]
+    if mode=="home": labels=["* Александр Омск","* Мария поле","Все контакты >","По букве >","Назад"]
+    if mode=="initial": labels=["A","А","Е","М","Я","#","Назад"]
     for row, label in enumerate(labels):
         y = 16 + row * 14
         selected = row == 1
         if selected:
             c.fill(0, y, W, 14, layer="selection")
-        c.text(3, y + 2, c.ellipsize(label, W - 10, profile=profile, bold=selected), profile=profile,
-               bold=selected, ink=not selected, layer=f"target{row}")
-    c.rect(W - 2, 16, 2, 98, layer="scroll_track")
-    c.fill(W - 2, 32, 2, 28, layer="scroll_thumb")
+        c.text(3, y + 2, c.ellipsize(label, W - 6, profile=profile), profile=profile,
+               ink=not selected, layer=f"target{row}")
+    return c
+
+
+def render_confirmation(profile: str = "Стандарт") -> Canvas:
+    c=Canvas("send_confirmation")
+    row_h=H//4
+    line_h=8+PROFILES[profile][1]
+    dy=max(0,(row_h-line_h)//2)
+    identity="#A12F"
+    identity_w=c.text_width(identity,profile)
+    name=c.ellipsize("Александра Северная экспедиция",W-identity_w-8,profile=profile)
+    c.text(2,dy,name,profile=profile,layer="recipient")
+    c.right(W-2,dy,identity,profile=profile,layer="identity")
+    c.assert_gap("recipient",2+c.text_width(name,profile),"identity",W-2-identity_w,4)
+    c.text(2,row_h+dy,c.ellipsize("Встречаемся у северного входа",W-4,profile=profile),profile=profile,layer="preview")
+    for row,label in ((2,"Отправить"),(3,"Назад")):
+        selected=row==3
+        if selected: c.fill(0,row*row_h,W,row_h,layer="selection")
+        c.centered(W//2,row*row_h+dy,label,profile=profile,ink=not selected,layer=f"action{row}")
     return c
 
 
@@ -592,10 +613,13 @@ def main() -> None:
     args = parser.parse_args()
     out = args.out_dir.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    from ui_temporal_host import run_temporal_host
+    temporal = run_temporal_host(out / "temporal_host")
 
     canvases = [
         render_idle_clock(), render_main_clock(), render_ble_pin(), render_settings_8(), render_font_picker(),
         render_chat(), render_unread(), render_keyboard(), render_target(),
+        render_target(mode="home"),render_target(mode="initial"),render_confirmation(),
     ]
     for canvas in canvases:
         canvas.image().save(out / f"{canvas.name}.png")
@@ -605,7 +629,7 @@ def main() -> None:
     profile_matrix = []
     for profile in PROFILES:
         for renderer in (render_idle_clock, render_main_clock, render_ble_pin, render_settings_8, render_font_picker,
-                         render_chat, render_unread, render_keyboard, render_target):
+                         render_chat, render_unread, render_keyboard, render_target,render_confirmation):
             canvas = renderer(profile)
             stat = canvas.stats()
             stat["profile"] = profile
@@ -669,6 +693,12 @@ def main() -> None:
         "screens": [c.stats() for c in canvases],
         "profile_matrix": profile_matrix,
         "uptime_matrix": uptime_matrix,
+        "temporal_cpp": temporal,
+        "interaction_review_sequence": [
+            "clock", "keyboard: type", "target: choose companion",
+            "unread: incoming DM", "return to clock", "24th changed operation stream: full refresh",
+        ],
+        "proof_limits": "Static page geometry plus actual C++ endFrame refresh policy. The listed user-event sequence is an acceptance checklist, not executed UITask events. Panel BUSY latency/ghosting require hardware.",
         "summary": {
             "checks": checks_total,
             "passed": checks_total - len(failures),

@@ -4,7 +4,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 ## Где находится эталон
 
-Для Release `v2.1.0-beta.2` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2):
+Для экспериментального Release `v2.1.0-experimental.1` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1):
 
 - UF2 или BIN своей платы;
 - `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
@@ -21,14 +21,14 @@ GitHub хранит артефакт как ZIP. Распакуйте бинар
 Для одного файла:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-beta.2.uf2
+Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-experimental.1.uf2
 ```
 
 или:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-beta.2.uf2
-Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2
+Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-experimental.1.uf2
+Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2
 ```
 
 Скопируйте полученную 64-символьную строку и сравните её с соответствующей строкой своего манифеста. Регистр букв не важен; каждый символ важен.
@@ -62,7 +62,7 @@ if ($failed) { throw 'SHA-256 verification failed' }
 ## Windows без PowerShell
 
 ```text
-certutil -hashfile T096_FEM_SmartUI_2.1.0-beta.2.uf2 SHA256
+certutil -hashfile T096_FEM_SmartUI_2.1.0-experimental.1.uf2 SHA256
 ```
 
 ## Linux
@@ -78,7 +78,7 @@ sha256sum -c SHA256SUMS-ESP32.txt
 Для одного файла:
 
 ```bash
-shasum -a 256 T096_FEM_SmartUI_2.1.0-beta.2.uf2
+shasum -a 256 T096_FEM_SmartUI_2.1.0-experimental.1.uf2
 ```
 
 ## Если сумма не совпала
@@ -108,3 +108,19 @@ python tools/validate_release_esp32.py firmware
 UF2-проверка контролирует magic values, family ID, адрес `0x26000`, блоки и version marker. ESP32-проверка контролирует image header `0xE9`, наличие application image по адресу `0x10000`, точное совпадение app-slice merged-файла с update-файлом и version marker. Ни одна из этих проверок не доказывает работу на реальной плате.
 
 Перед публикацией проверьте манифест в чистой временной папке ровно теми файлами, которые будут приложены к GitHub Release.
+
+## Визуальная приёмка экспериментального UI
+
+Генераторы используют встроенные глифы, а не похожий системный шрифт. Проверяются полный короткий ID перед отправкой, наличие действий подтверждения, текст служебной клавиши, вся строка GPS/тишина/АКБ и нижняя строка OLED. На T114 все элементы одной темы имеют одну пару цветов, как в реальном драйвере.
+
+```text
+python tools/simulate_smartui_ps17_qa.py --out qa_outputs/experimental-ui/core
+python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/experimental-ui/oled
+python tools/simulate_wireless_paper_ps17_qa.py --out-dir qa_outputs/experimental-ui/paper
+python tools/simulate_dev2_settings.py
+python tools/generate_docs_assets.py
+```
+
+Чистые прямоугольные границы недостаточны: обязательный текст должен остаться полным, значок — видимым, а его смысл — понятным человеку. Сопоставляйте bbox и реальный ink, затем смотрите PNG в масштабе 1× и целочисленном увеличении.
+
+Paper-скрипт дополнительно компилирует оригинальные C++-фрагменты `uiMarqueeOffset` и `E213Display::endFrame` с записывающими заглушками; нужен `g++` (на Windows можно WSL). Проверка CRC-повторов и каждого 24-го refresh не измеряет BUSY, задержку кнопки или ghosting. Физическую последовательность «набор → адресат → входящее ЛС → часы → полный refresh» нужно проверить отдельно.

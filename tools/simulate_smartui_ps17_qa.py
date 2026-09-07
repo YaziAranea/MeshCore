@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from dataclasses import dataclass, field
+import re
+from functools import lru_cache
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -46,6 +48,23 @@ LABEL_FONT_PATH = TOOLS / "font_sources" / "noto_sans_2_015" / "NotoSans-Condens
 T114_SCALE_X = 1.875
 T114_SCALE_Y = 2.109375
 T114_Y_OFFSET = 1
+
+
+@lru_cache(maxsize=1)
+def t114_theme_colors() -> tuple[tuple[tuple[int, int, int], tuple[int, int, int]], ...]:
+    """The driver has one bit per pixel: semantic colours are NOT RGB layers."""
+    source = (ROOT / "src/helpers/ui/ST7789Display.cpp").read_text(encoding="utf-8")
+    constants = {"ST77XX_WHITE": 0xffff, "ST77XX_BLACK": 0,
+                 "ST77XX_CYAN": 0x07ff, "ST77XX_YELLOW": 0xffe0,
+                 "ST77XX_RED": 0xf800}
+    def table(name):
+        body = re.search(rf"{name}\[\]\s*=\s*\{{(.*?)\}};", source, re.S).group(1)
+        body = re.sub(r"//[^\n]*", "", body)
+        values = [constants[token] if token in constants else int(token, 0)
+                  for token in (s.strip() for s in body.split(",")) if token]
+        return [(((v >> 11) & 31) * 255 // 31,
+                 ((v >> 5) & 63) * 255 // 63, (v & 31) * 255 // 31) for v in values]
+    return tuple(zip(table("ST7789_THEME_FG"), table("ST7789_THEME_BG")))
 
 LONG_TYPED = (
     "Проверка очень длинного сообщения: батареи заряжены, координаты приняты, "
@@ -77,20 +96,24 @@ CURRENT_KEY_LABELS = (
     ),
 )
 
-DESIRED_KEY_LABELS = (
-    (
-        "А", "Б", "В", "Г", "Д", "Е", "Ж", "З", "И", "Й", "К", "Л",
-        "М", "Н", "О", "П", "Р", "С", "ТЯ", "", "", "ОК", "123", "",
-    ),
-    (
-        "Т", "У", "Ф", "Х", "Ц", "Ч", "Ш", "Щ", "Ъ", "Ы", "Ь", "Э",
-        "Ю", "Я", ".", ",", "?", "!", "АС", "", "", "ОК", "123", "",
-    ),
-    (
-        "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", ",",
-        "?", "!", ":", ";", "-", "+", "АС", "", "", "ОК", "ТЯ", "",
-    ),
-)
+@lru_cache(maxsize=1)
+def firmware_keyboard_keys():
+    source = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
+    table = source.split("quick_reply_keyboard_pages[][QR_KB_KEYS] = {",1)[1].split("\n};",1)[0]
+    values = re.findall(r'QR_KB_(TEXT|ACTION|PAGE)_KEY\("([^"]*)"(?:,\s*([A-Z_0-9]+))?\)', table)
+    assert len(values) == 72, "keyboard page shape changed"
+    return tuple(tuple(values[p*24:(p+1)*24]) for p in range(3))
+
+
+DESIRED_KEY_LABELS = tuple(tuple(key[1] for key in page) for page in firmware_keyboard_keys())
+
+
+def keyboard_action_hint(page: int, cursor: int) -> str | None:
+    kind, label, action = firmware_keyboard_keys()[page][cursor]
+    if kind == "TEXT": return None
+    if kind == "PAGE": return {"0":"Буквы А-С","1":"Буквы Т-Я","2":"Цифры и знаки"}[action]
+    return {"QR_KB_SPACE":"Пробел","QR_KB_DELETE":"Удалить символ",
+            "QR_KB_SEND":"Выбрать адресата","QR_KB_BACK":"Выйти из ввода"}[action]
 
 
 def glyph_ink_bounds(glyph: dict, bold: bool = False) -> tuple[int, int, int, int] | None:
@@ -287,6 +310,7 @@ class BoardProfile:
     y_offset: int = 0
     oled: bool = False
     font_id: int = 0
+    theme_id: int = 0
 
 
 @dataclass
@@ -312,9 +336,12 @@ class Frame:
         self.font = self.board.desired_font if self.desired else self.board.current_font
         self.image = Image.new("RGB", (self.board.physical_w, self.board.physical_h), self.color("bg"))
         self.draw = ImageDraw.Draw(self.image)
-        self.rect(0, 0, self.board.logical_w, self.board.logical_h, "border", outline=True, tag="screen")
+        # Do not invent a decorative frame absent from the firmware renderer.
 
     def color(self, name: str) -> tuple[int, int, int]:
+        if self.board.board == "T114":
+            fg, bg = t114_theme_colors()[self.board.theme_id]
+            return bg if name in ("bg", "dark") else fg
         if self.board.oled:
             return (0, 0, 0) if name in ("bg", "dark") else (255, 255, 255)
         palette = {
@@ -412,6 +439,15 @@ class Frame:
         self.elements.append(Element(tag, ink, shown))
         return shown
 
+    def marquee_text(self, x: int, y: int, value: str, max_w: int, millis: int,
+                      tag: str = "marquee") -> str:
+        from ui_temporal_host import marquee_window
+        shown = marquee_window(value, self.font.width, max_w, millis)
+        self.text(x, y, shown, max_w=max_w, tag=tag)
+        self.facts[tag] = {"millis": millis, "shown": shown, "source": value,
+                           "scope": "plain Unicode; global uptime phase, not page-entry phase"}
+        return shown
+
     def assert_element_inside(self, tag: str, logical_box: tuple[int, int, int, int]) -> None:
         container = self.logical_box_to_physical(*logical_box)
         cx1, cy1, cx2, cy2 = container
@@ -480,17 +516,15 @@ def draw_service_icon(frame: Frame, kind: str, x: int, y: int, w: int, h: int,
     cx = x + w // 2
     cy = y + h // 2
     if kind == "space":
-        frame.line(((cx - 4, cy + 2), (cx + 4, cy + 2)), color, tag=tag)
-        frame.line(((cx - 4, cy), (cx - 4, cy + 2)), color, tag=tag)
-        frame.line(((cx + 4, cy), (cx + 4, cy + 2)), color, tag=tag)
+        bar_w = 10 if w > 20 else 7
+        frame.rect(cx-bar_w//2,cy+2,bar_w,1,color,tag=tag)
     elif kind == "delete":
-        frame.line(((cx + 5, cy), (cx - 3, cy), (cx, cy - 3)), color, tag=tag)
-        frame.line(((cx - 3, cy), (cx, cy + 3)), color, tag=tag)
-        frame.line(((cx + 2, cy - 2), (cx + 5, cy + 2)), color, tag=tag)
-    else:  # visually distinct bent Back arrow
-        frame.line(((cx + 4, cy + 3), (cx + 4, cy - 2), (cx - 3, cy - 2)), color, tag=tag)
-        frame.line(((cx - 3, cy - 2), (cx, cy - 5)), color, tag=tag)
-        frame.line(((cx - 3, cy - 2), (cx, cy + 1)), color, tag=tag)
+        for dx,dy,rw,rh in ((-4,0,9,1),(-4,-1,1,3),(-3,-2,1,1),(-3,2,1,1)):
+            frame.rect(cx+dx,cy+dy,rw,rh,color,tag=tag)
+    else:
+        for delta in range(-3,4):
+            frame.rect(cx+delta,cy+delta,1,1,color,tag=tag)
+            frame.rect(cx+delta,cy-delta,1,1,color,tag=tag)
 
 
 def render_keyboard(profile: BoardProfile, *, desired: bool, text: str = LONG_TYPED,
@@ -498,7 +532,7 @@ def render_keyboard(profile: BoardProfile, *, desired: bool, text: str = LONG_TY
     frame = Frame(profile, f"{'desired' if desired else 'current'} keyboard", desired)
     w, h = profile.logical_w, profile.logical_h
     line_h = frame.font.logical_height
-    if desired and profile.board != "OLED":
+    if desired and profile.board in ("T096","T114"):
         preview_h = line_h + (2 if profile.board != "OLED" else 4)
         grid_y = preview_h
     elif profile.board == "T096":
@@ -511,16 +545,20 @@ def render_keyboard(profile: BoardProfile, *, desired: bool, text: str = LONG_TY
     frame.rect(0, 0, w - 1, preview_h, "blue", outline=True, tag="preview border")
     if desired:
         preview_y = max(0, (preview_h - line_h) // 2)
+        if profile.oled or profile.board == "Wireless Paper": preview_y = 2
         tail_w = w - 6
-        shown = frame.fit_tail(text, tail_w - 3, "")
-        frame.text(3, preview_y, shown, max_w=tail_w - 3, tag="typed tail")
-        caret_x = min(w - 2, 3 + frame.font.width(shown) + 1)
-        caret_h = max(5, line_h - 2)
-        frame.rect(caret_x, preview_y + 1, 1, min(caret_h, h - preview_y - 1), "light",
-                   tag="typed caret")
-        frame.facts["typed_shown"] = shown
-        frame.facts["tail_ok"] = shown.endswith(text[-6:])
-        frame.facts["caret"] = True
+        hint = keyboard_action_hint(page,cursor)
+        if hint:
+            shown = frame.text(3,preview_y,hint,max_w=tail_w,tag="action hint")
+            frame.facts.update(action_hint=hint,hint_full=shown==hint,caret=False,tail_ok=False)
+        else:
+            shown = frame.fit_tail(text, tail_w - 3, "")
+            frame.text(3, preview_y, shown, max_w=tail_w - 3, tag="typed tail")
+            caret_x = min(w - 2, 3 + frame.font.width(shown) + 1)
+            caret_h = max(5, line_h - 2)
+            frame.rect(caret_x, preview_y + 1, 1, min(caret_h, h - preview_y - 1), "light",
+                       tag="typed caret")
+            frame.facts.update(typed_shown=shown,tail_ok=shown.endswith(text[-6:]),caret=True)
     else:
         shown = frame.text(3, 2 if profile.board != "T096" else max(0, (preview_h - line_h) // 2),
                            text if text else "_", max_w=w - 6, tag="typed head")
@@ -528,7 +566,8 @@ def render_keyboard(profile: BoardProfile, *, desired: bool, text: str = LONG_TY
         frame.facts["tail_ok"] = shown.endswith(text[-6:])
         frame.facts["caret"] = False
 
-    edges = row_edges(grid_y, h, 4)
+    cell_h = max(10,(h-grid_y)//4)
+    edges = [grid_y+index*cell_h for index in range(4)] + [h] if desired else row_edges(grid_y,h,4)
     cell_w = w // 6
     labels = DESIRED_KEY_LABELS[page % 3] if desired else CURRENT_KEY_LABELS[page % 3]
     for row in range(4):
@@ -552,7 +591,7 @@ def render_keyboard(profile: BoardProfile, *, desired: bool, text: str = LONG_TY
                 draw_service_icon(frame, {19: "space", 20: "delete", 23: "back"}[index],
                                   x1, y1, key_w, key_h, color, tag)
             else:
-                frame.text(x1 + key_w // 2, text_y, label, color, center=True, bold=selected,
+                frame.text(x1 + key_w // 2, text_y, label, color, center=True, bold=selected and not desired,
                            # Air/Strong OLED need the complete 21px cell for
                            # the still-readable three-glyph labels (123, T-Я).
                            max_w=max(1, key_w if desired else key_w - 2), tag=tag)
@@ -589,7 +628,8 @@ def target_geometry(frame: Frame, desired: bool) -> tuple[int, list[int]]:
     header_h = 14
     list_y = header_h + 2
     row_h = 12 if h <= 64 else 14
-    return header_h, [list_y + row_h * index for index in range(5)]
+    visible = max(1,(h-list_y)//row_h)
+    return header_h, [list_y + row_h * index for index in range(visible+1)]
 
 
 def draw_scrollbar(frame: Frame, start: int, visible: int, total: int, y: int, h: int,
@@ -607,7 +647,7 @@ def draw_scrollbar(frame: Frame, start: int, visible: int, total: int, y: int, h
 
 
 def render_target(profile: BoardProfile, *, desired: bool, count: int, cursor: int | None = None,
-                  kind: str = "Контакт") -> Frame:
+                  kind: str = "Контакт", labels: Sequence[str] | None = None) -> Frame:
     frame = Frame(profile, f"{'desired' if desired else 'current'} target {count}", desired)
     w, h = profile.logical_w, profile.logical_h
     header_h, edges = target_geometry(frame, desired)
@@ -617,23 +657,12 @@ def render_target(profile: BoardProfile, *, desired: bool, count: int, cursor: i
         cursor = max(0, count - 1)
     cursor = min(max(0, cursor), total - 1)
     start = max(0, cursor - visible + 1) if total > visible else 0
-    if start + visible > total:
+    if not desired and start + visible > total:
         start = max(0, total - visible)
 
     frame.rect(0, 0, w - 1, header_h, "blue", outline=True, tag="target header")
-    title_y = max(0, (header_h - frame.font.logical_height) // 2)
+    title_y = max(0, (header_h - frame.font.logical_height) // 2) if profile.board in ("T096","T114") else 2
     frame.text(w // 2, title_y, kind, center=True, max_w=w - 8, tag="target title")
-
-    if desired and count == 0:
-        y1, y2 = edges[0], edges[1]
-        frame.text(w // 2, y1 + max(0, (y2 - y1 - frame.font.logical_height) // 2),
-                   "Нет контактов", "muted", center=True, max_w=w - 8, tag="empty state")
-        by1, by2 = edges[1], edges[2]
-        frame.rect(0, by1, w, by2 - by1, "yellow", tag="empty back fill")
-        frame.text(w // 2, by1 + max(0, (by2 - by1 - frame.font.logical_height) // 2),
-                   "Назад", "dark", center=True, max_w=w - 8, tag="empty back")
-        frame.facts.update({"empty_state": True, "scrollbar": False, "visible": visible})
-        return frame
 
     for row in range(visible):
         index = start + row
@@ -642,22 +671,48 @@ def render_target(profile: BoardProfile, *, desired: bool, count: int, cursor: i
         y1, y2 = edges[row], min(h, edges[row + 1])
         back = index >= count
         selected = index == cursor
-        label = "Назад" if back else contact_name(index)
+        label = "Назад" if back else (labels[index] if labels is not None else contact_name(index))
         if selected:
             frame.rect(0, y1, w, y2 - y1, "yellow" if back else "green", tag=f"target row {row} fill")
         color = "dark" if selected else ("yellow" if back else "light")
-        reserve = 5 if desired and total > visible else 0
+        reserve = 4 if desired and total > visible else 0
         tag = f"target row {row} text"
-        frame.text(3, y1 + max(0, (y2 - y1 - frame.font.logical_height) // 2), label, color,
-                   max_w=w - 6 - reserve, bold=selected, tag=tag)
+        dy = max(0,(y2-y1-frame.font.logical_height)//2) if profile.board in ("T096","T114") else 2
+        frame.text(3, y1 + dy, label, color,
+                   max_w=w - 6 - reserve, bold=selected and not desired, tag=tag)
         frame.assert_element_inside(tag, (0, y1, w - reserve, y2 - y1))
 
     if desired:
-        draw_scrollbar(frame, start, visible, total, edges[0], h - edges[0], "green")
+        draw_scrollbar(frame, start, visible, total, edges[0], edges[-1] - edges[0], "yellow")
     else:
         frame.facts["scrollbar"] = False
     frame.facts.update({"count": count, "total": total, "start": start, "cursor": cursor,
-                        "visible": visible, "empty_state": False})
+                        "visible": visible, "empty_state": count==0})
+    return frame
+
+
+def render_send_confirmation(profile: BoardProfile, *, name: str = LONG_CONTACT,
+                             identity: str = "#A12F", message: str = LONG_TYPED,
+                             send_selected: bool = False) -> Frame:
+    frame = Frame(profile,"send confirmation",True)
+    w,h = profile.logical_w,profile.logical_h
+    row_h = h//4
+    dy = max(0,(row_h-frame.font.logical_height)//2)
+    identity_w = frame.font.width(identity)
+    frame.text(2,dy,name,max_w=w-identity_w-8,tag="recipient")
+    shown = frame.text(w-2,dy,identity,right=True,max_w=identity_w,tag="identity")
+    frame.facts["identity_full"] = shown==identity
+    assert_tags_do_not_overlap(frame,"recipient","identity")
+    frame.text(2,row_h+dy,message,max_w=w-4,tag="message preview")
+    for row,label in ((2,"Отправить"),(3,"Назад")):
+        selected = (row==2)==send_selected
+        if selected: frame.rect(0,row*row_h,w,row_h,"light",tag="confirm selection")
+        shown = frame.text(w//2,row*row_h+dy,label,"dark" if selected else "light",
+                           center=True,max_w=w-4,tag=f"action{row}")
+        if shown != label: frame.violations.append(f"confirmation action truncated: {label}")
+        frame.assert_element_inside(f"action{row}",(0,row*row_h,w,row_h))
+    for tag,row in (("recipient",0),("identity",0),("message preview",1)):
+        frame.assert_element_inside(tag,(0,row*row_h,w,row_h))
     return frame
 
 
@@ -699,8 +754,10 @@ def render_compact(profile: BoardProfile, *, desired: bool, count: int = 350,
     if start + visible > count:
         start = max(0, count - visible)
 
-    frame.text(2, 14, "Настройки", "green", max_w=w - 40, tag="compact title")
-    frame.text(w - 2, 14, "<>OK", right=True, max_w=36, tag="compact hint")
+    action="Изменить" if desired else "<>OK"
+    hint_w=frame.font.width(action)
+    frame.text(2, 14, "Настройки", "green", max_w=w-hint_w-8, tag="compact title")
+    frame.text(w - 2, 14, action, right=True, max_w=hint_w, tag="compact hint")
     for row in range(visible):
         index = start + row
         if index >= count:
@@ -709,10 +766,10 @@ def render_compact(profile: BoardProfile, *, desired: bool, count: int = 350,
         y = row_y + row * row_h
         selected = index == cursor
         if desired and selected:
-            frame.rect(0, y, w - (2 if count > visible else 0), min(row_h, h - y), "yellow",
+            frame.rect(0, y, w - (3 if count > visible else 0), min(row_h, h - y), "yellow",
                        tag=f"compact row {row} fill")
         color = "dark" if desired and selected else ("yellow" if selected else "light")
-        value_width = 66 if w > 140 else 45
+        value_width = 66 if w > 140 else (50 if desired else 45)
         scrollbar_guard = 4 if count > visible else 0
         if desired:
             label_x = 3
@@ -720,14 +777,13 @@ def render_compact(profile: BoardProfile, *, desired: bool, count: int = 350,
             if selected:
                 frame.text(0, y, ">", color, max_w=7, tag=f"compact row {row} marker")
             label_x = 8 if selected else 2
-        value_x = w - value_width - scrollbar_guard
+        value_x = w - value_width - (0 if desired else scrollbar_guard)
         label_w = max(4, value_x - label_x - 2) if value else max(4, w - label_x - 2 - scrollbar_guard)
         tag = f"compact row {row} label"
-        frame.text(label_x, y, label, color, max_w=label_w, bold=desired and selected, tag=tag)
+        frame.text(label_x, y, label, color, max_w=label_w, tag=tag)
         if value:
             value_color = "dark" if desired and selected else ("yellow" if selected else "green")
-            frame.text(value_x, y, value, value_color, max_w=value_width - 2,
-                       bold=desired and selected,
+            frame.text(value_x, y, value, value_color, max_w=value_width - 1,
                        tag=f"compact row {row} value")
         frame.assert_element_inside(tag, (0, y, w - scrollbar_guard, min(row_h, h - y)))
     if count > visible:
@@ -757,9 +813,9 @@ def assert_tags_do_not_overlap(frame: Frame, left_tag: str, right_tag: str) -> N
 
 
 def render_appearance_picker(profile: BoardProfile, *, font_picker: bool, cursor: int,
-                             active: int) -> Frame:
+                             active: int, choices: Sequence[str] | None = None) -> Frame:
     frame = Frame(profile, f"T114 {'font' if font_picker else 'theme'} picker", True)
-    names = T114_FONT_CHOICE_NAMES if font_picker else T114_THEME_CHOICE_NAMES
+    names = choices if choices is not None else (T114_FONT_CHOICE_NAMES if font_picker else T114_THEME_CHOICE_NAMES)
     choice_count = len(names)
     item_count = choice_count + 1
     cursor = min(max(0, cursor), item_count - 1)
@@ -776,9 +832,11 @@ def render_appearance_picker(profile: BoardProfile, *, font_picker: bool, cursor
         start = max(0, item_count - visible)
     has_scrollbar = item_count > visible
 
-    frame.text(2, 14, "Шрифт" if font_picker else "Тема", "green", max_w=w - 38,
+    action="Выбрать" if cursor<choice_count else "Отмена"
+    hint_w=frame.font.width(action)
+    frame.text(2, 14, "Шрифт" if font_picker else "Тема", "green", max_w=w - hint_w - 8,
                tag="appearance title")
-    frame.text(w - 2, 14, "<>OK", right=True, max_w=36, tag="appearance hint")
+    frame.text(w - 2, 14, action, right=True, max_w=hint_w, tag="appearance hint")
     for row in range(visible):
         index = start + row
         if index >= item_count:
@@ -793,19 +851,19 @@ def render_appearance_picker(profile: BoardProfile, *, font_picker: bool, cursor
         right_guard = 5 if has_scrollbar else 3
         if index < choice_count:
             is_active = index == active
-            marker_width = frame.font.width("OK", selected) + 4 if is_active else 0
+            marker_width = frame.font.width("OK") + 4 if is_active else 0
             label_width = w - label_x - right_guard - marker_width
-            frame.text(label_x, y, names[index], color, max_w=label_width, bold=selected,
+            frame.text(label_x, y, names[index], color, max_w=label_width,
                        tag=f"appearance row {row} label")
             if is_active:
                 frame.text(w - right_guard, y, "OK", "dark" if selected else "green",
-                           right=True, max_w=marker_width, bold=selected,
+                           right=True, max_w=marker_width,
                            tag=f"appearance row {row} active")
                 assert_tags_do_not_overlap(frame, f"appearance row {row} label",
                                            f"appearance row {row} active")
         else:
-            frame.text(label_x, y, "Назад", color, max_w=w - label_x - right_guard,
-                       bold=selected, tag=f"appearance row {row} label")
+            frame.text(label_x, y, "Отмена", color, max_w=w - label_x - right_guard,
+                       tag=f"appearance row {row} label")
     if has_scrollbar:
         draw_scrollbar(frame, start, visible, item_count, row_y, visible * row_h - 2, "yellow")
     else:
@@ -822,31 +880,30 @@ def render_t114_gps(profile: BoardProfile, state: str) -> Frame:
     w, h = profile.logical_w, profile.logical_h
     line_h = frame.font.logical_height
     row_step = line_h
-    frame.line(((0, 12), (w - 1, 12)), "border", tag="chrome boundary")
     y = 18
     if h <= 64:
         gps_top = h - 4 * row_step
         if gps_top >= 14 and y > gps_top:
             y = gps_top
     icon_size = min(12, max(9, line_h - 1))
-    frame.rect(0, y + 1, 25, icon_size, "yellow" if state != "fix" else "green",
-               outline=True, tag="GPS badge bounds")
+    from simulate_icon_alignment_beta2 import draw_frame_icon
+    draw_frame_icon(frame,0,y+1,"gps_status_icon",icon_size,"yellow" if state != "fix" else "green")
     frame.text(29, y, "МОДУЛЬ", max_w=w - 29, tag="gps source")
     status = {"missing": "ВЫКЛ", "off": "ВЫКЛ", "search": "ПОИСК", "fix": "FIX"}[state]
     frame.text(w - 1, y, status, right=True, max_w=w, tag="gps status")
     assert_tags_do_not_overlap(frame, "gps source", "gps status")
 
     if state == "missing":
-        frame.text(0, y + row_step, "GPS-модуль не найден", max_w=w, tag="gps detail")
+        frame.marquee_text(0, y + row_step, "GPS-модуль не найден", w, 0, tag="gps detail")
     elif state == "off":
-        frame.text(0, y + row_step, "Нажмите для включения", max_w=w, tag="gps detail")
+        frame.marquee_text(0, y + row_step, "Нажмите для включения", w, 0, tag="gps detail")
     else:
         y += row_step
         frame.text(0, y, "СПУТН.", max_w=w, tag="gps sats label")
         frame.text(w - 1, y, "12", right=True, max_w=w, tag="gps sats value")
         assert_tags_do_not_overlap(frame, "gps sats label", "gps sats value")
         if state == "search":
-            frame.text(0, y + row_step, "Ожидание координат", max_w=w, tag="gps detail")
+            frame.marquee_text(0, y + row_step, "Ожидание координат", w, 0, tag="gps detail")
         else:
             frame.text(0, y + row_step, "ШИР", max_w=w, tag="gps latitude label")
             frame.text(w - 1, y + row_step, "55.1234", right=True, max_w=w, tag="gps latitude value")
@@ -1036,18 +1093,23 @@ def render_ble_pin(profile: BoardProfile) -> Frame:
 
 def canonical_scenes(profile: BoardProfile) -> list[tuple[str, Frame]]:
     return [
-        ("CURRENT keyboard: начало", render_keyboard(profile, desired=False, cursor=20)),
-        ("SmartUI PS17 keyboard: хвост+каретка", render_keyboard(profile, desired=True, cursor=20)),
-        ("CURRENT target 350: без scrollbar", render_target(profile, desired=False, count=350, cursor=349)),
+        ("Историческая модель keyboard", render_keyboard(profile, desired=False, cursor=20)),
+        ("Experimental keyboard: действие", render_keyboard(profile, desired=True, cursor=20)),
+        ("Историческая модель target", render_target(profile, desired=False, count=350, cursor=349)),
         ("SmartUI PS17 target: 0 контактов", render_target(profile, desired=True, count=0, cursor=0)),
         ("SmartUI PS17 target: 1 контакт", render_target(profile, desired=True, count=1, cursor=0)),
         ("SmartUI PS17 target: 350 контактов", render_target(profile, desired=True, count=350, cursor=349)),
-        ("CURRENT compact list", render_compact(profile, desired=False, count=350, cursor=349)),
+        ("Историческая модель compact", render_compact(profile, desired=False, count=350, cursor=349)),
         ("SmartUI PS17 compact list", render_compact(profile, desired=True, count=350, cursor=349)),
-        ("CURRENT unread: история", render_unread_current(profile)),
+        ("Историческая модель unread", render_unread_current(profile)),
         ("SmartUI PS17 unread: пусто", render_unread_senders(profile, count=0)),
         ("SmartUI PS17 unread: 1 отправитель", render_unread_senders(profile, count=1)),
         ("SmartUI PS17 unread: отправители", render_unread_senders(profile, count=12, cursor=11)),
+        ("Experimental: адресат + ID",render_send_confirmation(profile)),
+        ("Experimental: недавние",render_target(profile,desired=True,count=3,kind="Контакты",cursor=0,
+                    labels=["* Мария","Все контакты >","По букве >"])),
+        ("Experimental: первая буква",render_target(profile,desired=True,count=4,kind="Первая буква",cursor=2,
+                    labels=["A","Е","Я","#"])),
     ]
 
 
@@ -1084,7 +1146,7 @@ def make_matrix(scenes: Sequence[tuple[str, Frame]], out: Path, columns: int = 3
 
 def desired_sweep_scenes(profile: BoardProfile) -> list[tuple[str, Frame]]:
     return [
-        (f"{profile.profile}: keyboard tail", render_keyboard(profile, desired=True, cursor=23)),
+        (f"{profile.profile}: keyboard tail", render_keyboard(profile, desired=True, cursor=0)),
         (f"{profile.profile}: target 350", render_target(profile, desired=True, count=350, cursor=350)),
         (f"{profile.profile}: compact", render_compact(profile, desired=True, count=350, cursor=349)),
         (f"{profile.profile}: unread", render_unread_senders(profile, count=12, cursor=11)),
@@ -1111,11 +1173,36 @@ def run_release_assertions(profiles: dict[str, list[BoardProfile]]) -> tuple[lis
 
     for board_profiles in profiles.values():
         for profile in board_profiles:
+            from ui_temporal_host import marquee_parameters
+            step, pause = marquee_parameters()
+            for millis in (0, step * pause, 123456):
+                frame = Frame(profile, "actual marquee phase", True)
+                text = "Длинное имя пользователя Северная экспедиция"
+                shown = frame.marquee_text(1, 26, text, profile.logical_w-2, millis)
+                semantic = bool(shown) and shown in text
+                if millis == 0:
+                    semantic = semantic and text.startswith(shown)
+                record(frame, f"marquee plain-text millis={millis}", semantic)
             for page in range(3):
-                for cursor in (0, 18, 20, 21, 23):
+                for cursor in (0, 14, 18, 19, 20, 21, 22, 23):
                     frame = render_keyboard(profile, desired=True, page=page, cursor=cursor)
+                    semantic = bool(frame.facts.get("hint_full")) if keyboard_action_hint(page,cursor) else (
+                        bool(frame.facts.get("tail_ok")) and bool(frame.facts.get("caret")))
                     record(frame, f"keyboard page={page} cursor={cursor}",
-                           bool(frame.facts.get("tail_ok")) and bool(frame.facts.get("caret")))
+                           semantic)
+            for target_id in ("#A12F","CH8"):
+                for send_selected in (False,True):
+                    frame = render_send_confirmation(profile,identity=target_id,send_selected=send_selected)
+                    record(frame,f"send confirmation {target_id} selected={send_selected}",bool(frame.facts["identity_full"]))
+            for recent in (0,1,3):
+                labels = [f"* Компаньон {index+1}" for index in range(recent)] + ["Все контакты >","По букве >"]
+                for cursor in range(len(labels)+1):
+                    frame = render_target(profile,desired=True,count=len(labels),cursor=cursor,kind="Контакты",labels=labels)
+                    record(frame,f"recent contacts count={recent} cursor={cursor}")
+            labels = ["A","Z","А","Е","Я","#"]
+            for cursor in range(len(labels)+1):
+                frame = render_target(profile,desired=True,count=len(labels),cursor=cursor,kind="Первая буква",labels=labels)
+                record(frame,f"contact initial cursor={cursor}")
             for count, cursors in ((0, (0,)), (1, (0, 1)), (350, (0, 349, 350))):
                 for cursor in cursors:
                     frame = render_target(profile, desired=True, count=count, cursor=cursor)
@@ -1148,6 +1235,13 @@ def run_release_assertions(profiles: dict[str, list[BoardProfile]]) -> tuple[lis
         for state in ("missing", "off", "search", "fix"):
             frame = render_t114_gps(profile, state)
             record(frame, f"T114 GPS {state} physical", bool(frame.facts.get("physical_bounds")))
+
+    for theme_id, (foreground, background) in enumerate(t114_theme_colors()):
+        frame = render_target(replace(t114_active[0], theme_id=theme_id),
+                              desired=True, count=12, cursor=4)
+        colors = set(frame.image.getdata())
+        record(frame, f"T114 theme {theme_id}: actual two-colour framebuffer",
+               colors == {foreground, background})
 
     t114_dense = t114_active[0]
     for font_picker, names in ((True, T114_FONT_CHOICE_NAMES), (False, T114_THEME_CHOICE_NAMES)):

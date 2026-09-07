@@ -1,4 +1,4 @@
-"""Bounded dev.2 settings layout QA; not hardware screenshots/full UITask execution.
+"""Bounded experimental settings layout QA; not hardware/full UITask execution.
 
 Models renderNotifyPicker/renderCompactSettings geometry, with source-contract
 checks. TFT glyphs/advances come from the checked-in EmbeddedBitmapFonts.h,
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -95,9 +96,9 @@ def source_contract():
         "void applyNotifyPickerChoice", 1)[0]
     for token in (
         "int row_y = 14 + line_h + 1;", "row_y < 28) row_y = 28;",
-        "int row_h = line_h > 12 ? line_h : 12;", "display.width() - 38",
-        'display.width() - 2, 14, "<>OK"', '"Отмена"',
-        '"%d/10"', '"%d Гц"', '"D%d"',
+        "int row_h = line_h > 12 ? line_h : 12;",
+        'renderSettingsHeader(display, compactSettingsLabel(_notify_picker_page), cursor < _notify_picker.count() ? "Выбрать" : "Отмена")', '"Отмена"',
+        '"%d/10"', '"%d Гц"', '"GPIO%d"',
         "int right_guard = has_scrollbar ? 5 : 3;",
         'display.getTextWidth("OK") + 4', "visible_rows * row_h - 2",
     ):
@@ -121,12 +122,12 @@ def geometry(profile, count, cursor):
     return row_y, row_h, visible, start
 
 
-def heading(frame, title):
+def heading(frame, title, action="Выбрать"):
     w = frame.board.logical_w
-    frame.text(2, 14, title, "green", max_w=w - 38, tag="title")
-    # This firmware call is not ellipsized; measure it before drawing.
-    assert frame.font.width("<>OK") <= 36, "header hint exceeds reserved space"
-    frame.text(w - 2, 14, "<>OK", right=True, max_w=36, tag="hint")
+    hint_w = frame.font.width(action)
+    frame.text(2,14,title,"green",max_w=w-hint_w-8,tag="title")
+    shown = frame.text(w-2,14,action,right=True,max_w=hint_w,tag="hint")
+    assert shown == action, "required contextual hint truncated"
     assert_tags_do_not_overlap(frame, "title", "hint")
 
 
@@ -144,7 +145,7 @@ def picker(profile, title, labels, cursor, active):
     w = profile.logical_w
     row_y, row_h, visible, start = geometry(profile, len(labels) + 1, cursor)
     scrolling = len(labels) + 1 > visible
-    heading(frame, title)
+    heading(frame, title,"Выбрать" if cursor<len(labels) else "Отмена")
     for row, index in enumerate(range(start, min(start + visible, len(labels) + 1))):
         y, selected = row_y + row * row_h, index == cursor
         if selected:
@@ -152,15 +153,15 @@ def picker(profile, title, labels, cursor, active):
         color = "dark" if selected else "light"
         guard = 5 if scrolling else 3
         is_active = index == active and index < len(labels)
-        marker = frame.font.width("OK", selected) + 4 if is_active else 0
+        marker = frame.font.width("OK") + 4 if is_active else 0
         label = labels[index] if index < len(labels) else "Отмена"
         tag = f"row{row}"
         shown = frame.text(3, y, label, color, max_w=w - 3 - guard - marker,
-                           bold=selected, tag=tag)
+                           tag=tag)
         assert shown == label, f"{profile.board}/{profile.profile}: option unexpectedly truncated: {label} -> {shown}"
         frame.assert_element_inside(tag, (3, y, w - 3 - guard - marker, row_h))
         if is_active:
-            frame.text(w - guard, y, "OK", color, max_w=marker, right=True, bold=selected, tag=f"ok{row}")
+            frame.text(w - guard, y, "OK", color, max_w=marker, right=True, tag=f"ok{row}")
             frame.assert_element_inside(f"ok{row}", (w - guard - marker, y, marker, row_h))
             assert_tags_do_not_overlap(frame, tag, f"ok{row}")
     if scrolling:
@@ -171,7 +172,7 @@ def picker(profile, title, labels, cursor, active):
 
 def battery(profile, enabled):
     frame = SettingsFrame(profile, "Защита АКБ", True)
-    heading(frame, "Система")
+    heading(frame, "Система", "Изменить")
     w = profile.logical_w
     row_y, row_h, visible, _ = geometry(profile, 10, 3)
     value_width = 66 if w > 140 else 50
@@ -183,10 +184,10 @@ def battery(profile, enabled):
             frame.rect(0, y, w - 3, row_h, "yellow")
         color = "dark" if selected else "light"
         frame.text(3, y, label, color, max_w=w - value_width - 5 if value else w - 5,
-                   bold=selected, tag=f"label{row}")
+                   tag=f"label{row}")
         if value:
             shown = frame.text(w - value_width, y, value, color, max_w=value_width - 1,
-                               bold=selected, tag=f"value{row}")
+                               tag=f"value{row}")
             assert shown == value, f"battery value clipped: {profile.board}/{profile.profile}: {shown}"
             frame.assert_element_inside(f"value{row}", (w - value_width, y, value_width - 2, row_h))
             assert_tags_do_not_overlap(frame, f"label{row}", f"value{row}")
@@ -211,14 +212,69 @@ def docs_sheet(scenes, output):
     image.save(output)
 
 
+def auxiliary(profile,title,labels,cursor,hint="Выбрать",active=-1):
+    frame=SettingsFrame(profile,title,True)
+    heading(frame,title,hint)
+    w=profile.logical_w
+    row_y,row_h,visible,start=geometry(profile,len(labels),cursor)
+    scrolling=len(labels)>visible
+    for row,index in enumerate(range(start,min(start+visible,len(labels)))):
+        y=row_y+row*row_h
+        selected=index==cursor
+        if selected: frame.rect(0,y,w-(3 if scrolling else 0),row_h,"yellow")
+        color="dark" if selected else "light"
+        guard=5 if scrolling else 3
+        marker=frame.font.width("OK")+4 if index==active else 0
+        shown=frame.text(3,y,labels[index],color,max_w=w-3-guard-marker,tag=f"aux{row}")
+        if shown != labels[index]: frame.violations.append(f"required instruction truncated: {labels[index]} -> {shown}")
+        frame.assert_element_inside(f"aux{row}",(3,y,w-3-guard-marker,row_h))
+        if index==active:
+            frame.text(w-guard,y,"OK",color,right=True,max_w=marker,tag=f"active{row}")
+            assert_tags_do_not_overlap(frame,f"aux{row}",f"active{row}")
+    if scrolling: scrollbar(frame,row_y,row_h,visible,len(labels),start)
+    return frame
+
+
+def help_labels():
+    import re
+    body=UI.split('static const char* lines[] = {',1)[1].split('};',1)[0]
+    return re.findall(r'"([^"]+)"',body)
+
+
+def root_menu(profile,cursor=0):
+    labels=["Избранное","Уведомления","Звук и вибро","Экран",
+            "Радио" if profile.board in ("OLED","Wireless Paper") else "Радио и GPS",
+            "Система","Дополнительно","Закрыть"]
+    if profile.board in ("Wireless Paper","V4.3"): labels.remove("Звук и вибро")
+    frame=SettingsFrame(profile,"Настройки",True)
+    cursor=min(cursor,len(labels)-1)
+    heading(frame,"Настройки","Закрыть" if cursor==len(labels)-1 else "Открыть")
+    row_y,row_h,visible,start=geometry(profile,len(labels),cursor)
+    w=profile.logical_w
+    for row,index in enumerate(range(start,min(start+visible,len(labels)))):
+        y=row_y+row*row_h
+        selected=index==cursor
+        if selected: frame.rect(0,y,w-(3 if len(labels)>visible else 0),row_h,"yellow")
+        color="dark" if selected else "light"
+        marker=index<len(labels)-1
+        reserve=frame.font.width(">")+4 if marker else 0
+        shown=frame.text(3,y,labels[index],color,max_w=w-3-reserve-5,tag=f"root{row}")
+        if shown!=labels[index]: frame.violations.append(f"root label truncated: {labels[index]}")
+        if marker:
+            frame.text(w-5,y,">",color,right=True,max_w=frame.font.width(">"),tag=f"open{row}")
+            assert_tags_do_not_overlap(frame,f"root{row}",f"open{row}")
+    if len(labels)>visible: scrollbar(frame,row_y,row_h,visible,len(labels),start)
+    return frame
+
+
 def docs_previews(configurations):
     out = ROOT / "docs/assets/ui"
     t096 = next(p for p in configurations if p.board == "T096")
     pm = next(p for p in configurations if p.board == "OLED")
     t114 = next(p for p in configurations if p.board == "T114")
     paper = next(p for p in configurations if p.board == "Wireless Paper")
-    t096_pins = [f"D{x}" for x in (29, 31, 33, 34, 35, 36, 37, 39, 43, 45)]
-    pm_pins = [f"D{x}" for x in (0, 1, 9, 18, 19, 20, 22)]
+    t096_pins = [f"GPIO{x}" for x in (29, 31, 33, 34, 35, 36, 37, 39, 43, 45)]
+    pm_pins = [f"GPIO{x}" for x in (0, 1, 9, 18, 19, 20, 22)]
     resonance = [f"{hz} Гц" for hz in range(1800, 4201, 400)]
     docs_sheet([
         ("T096: GPIO, мост ВЫКЛ", picker(t096, "Выход звука", t096_pins, 1, 1)),
@@ -249,14 +305,18 @@ def main():
     OUT.mkdir(parents=True, exist_ok=True)
     configurations = profiles()
     lists = {
-        "Выход звука": [f"D{x}" for x in (29, 31, 33, 34, 35, 36, 37, 39, 43, 45)],
-        "Выход света": [f"D{x}" for x in range(32)],
-        "Вибрация": [f"D{x}" for x in (-1, 35, 40, 41, 47, 48)],
+        "Выход звука": [f"GPIO{x}" for x in (29, 31, 33, 34, 35, 36, 37, 39, 43, 45)],
+        "Выход света": [f"GPIO{x}" for x in range(32)],
+        "Вибрация": [f"GPIO{x}" for x in (-1, 35, 40, 41, 47, 48)],
         "Резонанс": [f"{x} Гц" for x in range(1800, 4201, 400)],
         "Громкость": [f"{x}/10" for x in range(1, 11)],
     }
     checks, failures = 0, []
     for profile in configurations:
+        for cursor in range(8):
+            frame=root_menu(profile,cursor)
+            checks+=1
+            failures.extend(f"{profile.board}/{profile.profile}/root: {x}" for x in frame.violations)
         for title, labels in lists.items():
             # All cursor positions; active marker both inside/outside selection.
             for cursor in range(len(labels) + 1):
@@ -268,8 +328,22 @@ def main():
             frame = battery(profile, enabled)
             checks += 1
             failures.extend(f"{profile.board}/{profile.profile}/battery: {x}" for x in frame.violations)
-    for board in ("T096", "T114", "OLED", "Wireless Paper"):
-        profile = next(p for p in configurations if p.board == board)
+        for cursor in range(8):
+            frame=auxiliary(profile,"Управление",help_labels(),cursor,"Назад")
+            checks+=1
+            failures.extend(f"{profile.board}/{profile.profile}/help: {x}" for x in frame.violations)
+        for cursor in (0,1):
+            frame=auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],cursor,"Сбросить" if cursor else "Отмена")
+            checks+=1
+            failures.extend(f"{profile.board}/{profile.profile}/ADC reset: {x}" for x in frame.violations)
+        choices=["Шрифт","Bluetooth","Защита АКБ","Калибр. АКБ","Отмена"]
+        for cursor in range(len(choices)):
+            frame=auxiliary(profile,"Избранное 1",choices,cursor,"Выбрать",active=2)
+            checks+=1
+            failures.extend(f"{profile.board}/{profile.profile}/favorites: {x}" for x in frame.violations)
+    for board in ("T096", "T114", "OLED", "V4.3", "Wireless Paper"):
+        profile = next(p for p in configurations if p.board == ("OLED" if board=="V4.3" else board))
+        if board=="V4.3": profile=replace(profile,board="V4.3")
         scenes = []
         for title in ("Выход звука", "Резонанс", "Громкость"):
             labels = lists[title]
@@ -277,6 +351,13 @@ def main():
             scenes.append((title + " — отмена", picker(profile, title, labels, len(labels), 0)))
         scenes.extend((label, battery(profile, enabled)) for label, enabled in (("Защита ВКЛ", True), ("Защита ВЫКЛ", False)))
         make_matrix(scenes, OUT / f"{board.replace(' ', '_')}.png", columns=2)
+        aux_scenes=[("Настройки: группы",root_menu(profile)),
+                    ("Настройки: закрыть",root_menu(profile,7)),
+                    ("Избранное: пример доступных функций",auxiliary(profile,"Избранное 1",choices,1,"Выбрать",active=2)),
+                    ("ADC: сначала отмена",auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],0,"Отмена")),
+                    ("Управление",auxiliary(profile,"Управление",help_labels(),0,"Назад")),
+                    ("Управление: CLI",auxiliary(profile,"Управление",help_labels(),6,"Назад"))]
+        docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")
     report = {
         "kind": "source-bound geometry model; real glyph tables; not full firmware/hardware execution",
         "renderNotifyPicker_sha256": fingerprint, "profiles": len(configurations),

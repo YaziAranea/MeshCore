@@ -41,11 +41,15 @@ from simulate_smartui_ps17_qa import (  # noqa: E402
     T096ExactFont,
     T114ExactFont,
     T114_FONT_CHOICE_NAMES,
+    T114_THEME_CHOICE_NAMES,
+    t114_theme_colors,
     draw_scrollbar,
     make_profiles,
     make_t114_active_profiles,
     render_keyboard,
     render_target,
+    render_send_confirmation,
+    render_appearance_picker,
     render_unread_senders,
 )
 from simulate_oled_128x64 import Oled, STYLES as OLED_STYLES  # noqa: E402
@@ -121,6 +125,9 @@ def generate_esp32_docs_assets() -> None:
         temp = Path(temp_dir)
         v4_dir = temp / "v4"
         paper_dir = temp / "wireless-paper"
+        core_dir = temp / "core"
+        subprocess.run([sys.executable,str(TOOLS/"simulate_smartui_ps17_qa.py"),
+                        "--out",str(core_dir)],check=True)
         subprocess.run(
             [sys.executable, str(TOOLS / "simulate_v4_3_oled_qa.py"),
              "--out-dir", str(v4_dir)],
@@ -140,9 +147,15 @@ def generate_esp32_docs_assets() -> None:
             paper_dir / "ble_pin.png": OUT / "wireless-paper-ble-pin.png",
             paper_dir / "compact_settings_final.png": OUT / "wireless-paper-settings.png",
             paper_dir / "keyboard.png": OUT / "wireless-paper-full-keyboard.png",
+            paper_dir / "send_confirmation.png": OUT / "wireless-paper-send-confirm.png",
+            paper_dir / "target_home.png": OUT / "wireless-paper-target-home.png",
+            paper_dir / "target_initial.png": OUT / "wireless-paper-target-initial.png",
             paper_dir / "contact_sheet_final.png":
                 QA_OUT / "WIRELESS_PAPER_SMARTUI_2_1_EXACT_QA_MATRIX.png",
         }
+        for name in ("T096_SMARTUI_PS17_EXACT_QA_MATRIX.png","T114_SMARTUI_PS17_EXACT_QA_MATRIX.png",
+                     "OLED_SMARTUI_PS17_EXACT_QA_MATRIX.png","T114_SMARTUI_PS17_GPS_APPEARANCE_PHYSICAL_QA.png"):
+            copies[core_dir/name]=QA_OUT/name
         for source, destination in copies.items():
             shutil.copyfile(source, destination)
 
@@ -192,7 +205,8 @@ def draw_page_dots(frame: Frame, active: int = 1, count: int = 6) -> None:
         x += step
 
 
-def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], selected: int) -> Frame:
+def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], selected: int,
+                *, root_menu: bool = False, action: str = "Выбрать") -> Frame:
     """Firmware-equivalent compact menu with caller-provided real labels."""
     frame = Frame(profile, title, True)
     w, h = profile.logical_w, profile.logical_h
@@ -201,15 +215,17 @@ def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], 
     if h <= 64 and row_y < 28:
         row_y = 28
     row_h = max(12, line_h)
-    visible = max(1, min(4, (h - row_y) // row_h))
+    visible = max(1, min(8 if profile.board=="Wireless Paper" else 4, (h - row_y) // row_h))
     item_count = len(rows)
     selected = min(max(0, selected), item_count - 1)
     start = max(0, selected - visible + 1) if selected >= visible else 0
     if item_count > visible and start + visible > item_count:
         start = item_count - visible
 
-    frame.text(2, 14, title, "green", max_w=w - 38, tag="menu title")
-    frame.text(w - 2, 14, "<>OK", "light", right=True, max_w=36, tag="menu hint")
+    if root_menu: action="Закрыть" if rows[selected][0]=="Закрыть" else "Открыть"
+    hint_w=frame.font.width(action)
+    frame.text(2, 14, title, "green", max_w=w-hint_w-8, tag="menu title")
+    frame.text(w - 2, 14, action, "light", right=True, max_w=hint_w, tag="menu hint")
     value_width = 66 if w > 140 else 50
     has_scrollbar = item_count > visible
     for row in range(visible):
@@ -217,6 +233,8 @@ def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], 
         if index >= item_count:
             break
         label, value = rows[index]
+        marker = ">" if root_menu and label!="Закрыть" else ""
+        if root_menu: value=""
         y = row_y + row * row_h
         chosen = index == selected
         if chosen:
@@ -224,11 +242,14 @@ def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], 
                        "yellow", tag=f"row {row} fill")
         color = "dark" if chosen else "light"
         value_x = w - value_width
-        label_w = value_x - 5 if value else w - 6
-        frame.text(3, y, label, color, max_w=label_w, bold=chosen, tag=f"row {row} label")
+        marker_w=frame.font.width(marker)+4 if marker else 0
+        label_w = value_x - 5 if value else w - 3 - marker_w - 5
+        frame.text(3, y, label, color, max_w=label_w, tag=f"row {row} label")
         if value:
             frame.text(value_x, y, value, "dark" if chosen else "green",
-                       max_w=value_width - 1, bold=chosen, tag=f"row {row} value")
+                       max_w=value_width - 1, tag=f"row {row} value")
+        if marker:
+            frame.text(w-5,y,marker,color,right=True,max_w=frame.font.width(marker),tag=f"row {row} open")
     if has_scrollbar:
         draw_scrollbar(frame, start, visible, item_count, row_y,
                        min(h - row_y, visible * row_h - 2), "yellow")
@@ -236,27 +257,31 @@ def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], 
 
 
 def render_picker(profile: BoardProfile, names: list[str], active: int = 0, cursor: int = 0) -> Frame:
-    rows = [(name, "OK" if index == active else "") for index, name in enumerate(names)]
-    rows.append(("Назад", ""))
-    return render_rows(profile, "Шрифт", rows, cursor)
+    return render_appearance_picker(profile,font_picker=True,cursor=cursor,active=active,choices=names)
 
 
-def render_status(profile: BoardProfile, *, gps: bool, fem: bool) -> Frame:
+def render_status(profile: BoardProfile, *, gps: bool, fem: bool,
+                  mv: int = 4096, ble: str = "СВЯЗЬ", rssi: int = -72,
+                  snr: float = 8.2, gps_state: str = "FIX") -> Frame:
     """Mirror the final DEVICE_STATUS branch, including GPS-less SX1262 text."""
     frame = Frame(profile, "Состояние", True)
     w, h = profile.logical_w, profile.logical_h
     frame.text(w // 2, 14, "Состояние", "green", center=True, max_w=w, tag="status title")
-    y = 27 if h > 64 else 28
-    row_h = 13 if h > 64 else 12
+    y=max(28,14+frame.font.logical_height+1)
+    row_h=max(12,frame.font.logical_height)
+    radio = f"RSSI {rssi}  SNR {snr:.1f}"
+    if frame.font.width(radio)>w-2: radio=f"R{rssi} S{snr:.1f}"
+    voltage = f"{mv/1000:.3f}V" if mv else "--V"
     lines = [
-        "АКБ 4.096В  BLE СВЯЗЬ",
-        "RSSI -72  SNR 8.2",
-        ("GPS ВКЛ  FEM " + ("ВКЛ" if fem else "НЕТ")) if gps
+        f"{voltage} BLE:{ble}",
+        radio,
+        (f"GPS {gps_state}  FEM " + ("ВКЛ" if fem else "НЕТ")) if gps
         else ("FEM ВКЛ" if fem else "Радио SX1262"),
     ]
     for index, line in enumerate(lines):
-        frame.text(1, y + row_h * index, line, "light", max_w=w - 2,
-                   tag=f"status line {index}")
+        shown=frame.text(1, y + row_h * index, line, "light", max_w=w - 2,
+                         tag=f"status line {index}")
+        if shown != line: frame.violations.append(f"critical status value truncated: {line} -> {shown}")
     return frame
 
 
@@ -271,11 +296,13 @@ def make_t096_clock_profiles() -> list[BoardProfile]:
 
 
 def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5 * 60,
-                      muted: bool = True) -> Frame:
+                      muted: bool = True, *, gps_state: str = "FIX", sats: int = 12,
+                      time_valid: bool = True) -> Frame:
     frame = Frame(profile, "T096 clock", True)
     w = profile.logical_w
-    gps = "GPS ON"
-    frame.text(1, 0, gps, "green", max_w=58, tag="gps")
+    gps = f"GPS {gps_state}"
+    if not muted and gps_state != "OFF" and sats>=0: gps += f" {min(sats,99)}"
+    frame.text(1, 0, gps, "green", max_w=10000, tag="gps")
     gps_right = 1 + frame.font.width(gps)
     icon_x, icon_y, icon_w, icon_h = w - 22 - 4, 1, 22, 13
     icon_y = aligned_icon_y(frame, 0, icon_h)
@@ -289,15 +316,17 @@ def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5
         if mute_x + 16 <= voltage_x - 3:
             draw_mute(frame, mute_x, aligned_icon_y(frame, 0, 16), 16)
             status_right = mute_x + 16
+        else:
+            frame.violations.append("required mute icon hidden")
 
     clock_font = T096ExactFont("clock", load_font(profile.font_id, "L"))
-    time = "17:08"
+    time = "17:08" if time_valid else "--:--"
     clock_font.draw(frame.image, (w - clock_font.width(time, True)) // 2, 15, time,
                     frame.color("green"), True)
     frame.elements.append(Element("time", clock_font.ink_box((w - clock_font.width(time, True)) // 2, 15, time, True), time))
     frame.font = T096ExactFont("metadata", load_compact_settings_font(profile.font_id))
     draw_frame_clock_uptime(frame, 0, w, 35, uptime_seconds)
-    frame.text(w // 2, 47, "07.09.2026", "light", center=True, max_w=w, tag="date")
+    frame.text(w // 2, 47, "07.09.2026" if time_valid else "--.--.----", "light", center=True, max_w=w, tag="date")
     frame.text(1, 47, "Н:3", "red", max_w=35, tag="unread")
 
     frame.rect(0, 63, 117, 17, "green", outline=True, tag="load box")
@@ -310,13 +339,13 @@ def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5
 
 
 def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5 * 60,
-                      muted: bool = True) -> Frame:
+                      muted: bool = True, *, gps_state: str = "FIX", time_valid: bool = True) -> Frame:
     # Chrome remains in the selected T114 font; it is not the forced compact
     # menu font.  This distinction is why the active-profile sweep is needed.
     frame = Frame(profile, "T114 clock", False)
     w = profile.logical_w
-    gps = "GPS ON"
-    frame.text(0, 0, gps, "green", max_w=48, tag="gps")
+    gps = f"GPS {gps_state}"
+    frame.text(0, 0, gps, "green", max_w=10000, tag="gps")
     gps_right = frame.font.width(gps)
     icon_x, icon_y, icon_w, icon_h = w - 18 - 2, 2, 18, 10
     icon_y = aligned_icon_y(frame, 0, icon_h)
@@ -332,17 +361,19 @@ def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5
         if mute_x + icon_size <= name_right:
             draw_mute(frame, mute_x, aligned_icon_y(frame, 0, icon_size), icon_size)
             status_right = mute_x + icon_size
+        else:
+            frame.violations.append("required mute icon hidden")
     draw_page_dots(frame)
 
     raw_clock = EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 15)
     clock_font = T114ExactFont("Roboto clock", raw_clock)
-    time = "17:08"
+    time = "17:08" if time_valid else "--:--"
     clock_font.draw(frame.image, (w - clock_font.width(time)) // 2, 17, time,
                     frame.color("green"))
     frame.elements.append(Element("time", clock_font.ink_box((w - clock_font.width(time)) // 2, 17, time), time))
     saved_font = frame.font
     frame.font = T114ExactFont("metadata", EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 0))
-    date = "07.09"
+    date = "07.09" if time_valid else "--.--"
     date_left = w - 1 - frame.font.width(date)
     frame.text(w - 1, 34, date, "light", right=True, max_w=frame.font.width(date), tag="date")
     draw_frame_clock_uptime(frame, 0, date_left - 4, 34, uptime_seconds)
@@ -386,44 +417,12 @@ def render_clock_oled(style: tuple[str, int, bool] = OLED_STYLES[0],
                       uptime_seconds: int = 40 * 3600 + 5 * 60,
                       muted: bool = True,
                       errors: list[str] | None = None) -> Image.Image:
-    oled = Oled(style)
-    # Final GPS-less contract: no permanent GPS OFF badge. Quiet-mode status
-    # stays useful and therefore occupies the left edge of clock chrome.
-    status_right = -3
-    if muted:
-        draw_firmware_mute(oled, 0, 0)
-        status_right = 8
-    battery_left = 108 - oled.text_width("4.09V") - 3
-    name_right = battery_left - 2
-    placement = clock_uptime_placement(oled.text_width, 0, 128, uptime_seconds)
-    if placement is not None:
-        uptime, left, right, gap = placement
-        if left < gap or right > 128 - gap:
-            oled.overflows.append(
-                f"{style[0]}: uptime {uptime} at {left}..{right} escapes "
-                f"{status_right}..{name_right} gap={gap}"
-            )
-        oled.text(right, 34, uptime, right=True)
-    else:
-        full = format_clock_uptime(uptime_seconds)
-        oled.overflows.append(f"{style[0]}: uptime unexpectedly hidden: {full}")
-    actual_battery_left = draw_firmware_battery(oled)
-    if actual_battery_left != battery_left:
-        oled.overflows.append(
-            f"{style[0]}: battery metric drift {actual_battery_left}!={battery_left}"
-        )
-    for index, x in enumerate((39, 49, 59, 69, 79, 89)):
-        if index == 1:
-            oled.draw.rectangle((x - 1, 13, x + 1, 15), fill=1)
-        else:
-            oled.draw.point((x, 14), fill=1)
-    oled.text(64, 18, "17:08", center=True, size=2)
-    oled.text(0, 45, "CH1.2% A0.03%", max_width=128)
-    oled.text(0, 55, "MSG/h 5", max_width=76)
-    oled.text(127, 55, "29C", right=True)
+    from simulate_v4_3_oled_qa import clock_scene
+    # Same measured OLED path on ProMicro, with no invented GPS badge.
+    image, failures = clock_scene(style, "", muted, uptime_seconds)
     if errors is not None:
-        errors.extend(oled.overflows)
-    return oled.img.convert("RGB")
+        errors.extend(failures)
+    return image.convert("RGB")
 
 
 def t096_font_samples() -> Image.Image:
@@ -451,12 +450,13 @@ def t096_font_samples() -> Image.Image:
 def t114_font_samples() -> Image.Image:
     cells: list[tuple[str, Image.Image]] = []
     for name, family, size_px, height_px in T114_PROFILES:
-        image = Image.new("RGB", (240, 135), T114_COLORS["bg"])
+        foreground, background = t114_theme_colors()[0]
+        image = Image.new("RGB", (240, 135), background)
         draw = ImageDraw.Draw(image)
         font = FirmwareT114Font(family, size_px, height_px, height_px - 4, 4)
-        font.draw_logical(draw, 2, 3, name, T114_COLORS["yellow"])
-        font.draw_logical(draw, 2, 25, "Связь 123", T114_COLORS["light"])
-        font.draw_logical(draw, 2, 47, "ЛС принято", T114_COLORS["green"])
+        font.draw_logical(draw, 2, 3, name, foreground)
+        font.draw_logical(draw, 2, 25, "Связь 123", foreground)
+        font.draw_logical(draw, 2, 47, "ЛС принято", foreground)
         cells.append((name, image))
     return make_catalog(cells, columns=2, native_scale=1)
 
@@ -552,6 +552,11 @@ def validate_clock_asset_layouts() -> int:
                 if (seconds == 12 * 3600 and not muted and
                         frame.facts.get("clock_uptime") == "hidden-no-room"):
                     failures.append(f"T096 / {profile.profile}: representative uptime is hidden")
+        for gps_state,sats in (("OFF",-1),("...",0),("FIX",99)):
+            for muted in (False,True):
+                frame=render_clock_t096(profile,muted=muted,gps_state=gps_state,sats=sats,time_valid=False)
+                checks+=1
+                failures.extend(f"T096/{profile.profile}/{gps_state}/mute={muted}: {e}" for e in chrome_violations(frame))
 
     for profile in make_t114_active_profiles():
         for seconds in UPTIME_SAMPLES:
@@ -565,6 +570,11 @@ def validate_clock_asset_layouts() -> int:
                 if (seconds == 12 * 3600 and not muted and
                         frame.facts.get("clock_uptime") == "hidden-no-room"):
                     failures.append(f"T114 / {profile.profile}: representative uptime is hidden")
+        for gps_state in ("OFF","...","FIX"):
+            for muted in (False,True):
+                frame=render_clock_t114(profile,muted=muted,gps_state=gps_state,time_valid=False)
+                checks+=1
+                failures.extend(f"T114/{profile.profile}/{gps_state}/mute={muted}: {e}" for e in chrome_violations(frame))
 
     for style in OLED_STYLES:
         for seconds in UPTIME_SAMPLES:
@@ -590,6 +600,13 @@ def validate_clock_asset_layouts() -> int:
         shown = " ".join(element.shown for element in frame.elements)
         if "Аптайм" in shown or "Работа 12" in shown or "U 12h" in shown:
             failures.append(f"{profile.board} status: stale uptime text remains")
+    for board,profiles in make_profiles().items():
+        for profile in profiles:
+            for ble,mv in (("СВЯЗЬ",4096),("ЖДЁТ",0),("ВЫКЛ",2700)):
+                frame=render_status(profile,gps=board!="OLED",fem=board=="T096",
+                                    ble=ble,mv=mv,rssi=-130,snr=-20.0)
+                checks+=1
+                failures.extend(f"status/{board}/{profile.profile}/{ble}: {e}" for e in frame.violations)
 
     if failures:
         raise RuntimeError("clock asset QA failed:\n" + "\n".join(failures))
@@ -606,23 +623,23 @@ def main() -> None:
     oled = profiles["OLED"][0]
 
     common_root = [
-        ("Избранное", "3 пункта"),
-        ("Уведомления", "Звук"),
-        ("Звук и вибро", "МАКС"),
-        ("Экран", "Roboto L"),
-        ("Радио и GPS", "GPS ВКЛ"),
-        ("Система", "BLE ВКЛ"),
-        ("Дополнительно", "СЕРВИС"),
+        ("Избранное", ""),
+        ("Уведомления", ""),
+        ("Звук и вибро", ""),
+        ("Экран", ""),
+        ("Радио и GPS", ""),
+        ("Система", ""),
+        ("Дополнительно", ""),
         ("Закрыть", ""),
     ]
     promicro_root = [
-        ("Избранное", "3 пункта"),
-        ("Уведомления", "Звук"),
-        ("Звук и вибро", "МАКС"),
-        ("Экран", "Classic"),
-        ("Радио", "869.618"),
-        ("Система", "BLE ВКЛ"),
-        ("Дополнительно", "СЕРВИС"),
+        ("Избранное", ""),
+        ("Уведомления", ""),
+        ("Звук и вибро", ""),
+        ("Экран", ""),
+        ("Радио", ""),
+        ("Система", ""),
+        ("Дополнительно", ""),
         ("Закрыть", ""),
     ]
     t096_names = [profile_name(index) for index in range(VISIBLE_FONT_FIRST,
@@ -632,7 +649,7 @@ def main() -> None:
     board_scenes: dict[str, list[tuple[str, Image.Image]]] = {
         "T096 FEM": [
             ("clock", render_clock_t096(make_t096_clock_profiles()[5]).image),
-            ("settings", render_rows(t096, "Настройки", common_root, 0).image),
+            ("settings", render_rows(t096, "Настройки", common_root, 0,root_menu=True).image),
             ("fonts", render_picker(t096, t096_names, 0, 0).image),
             ("keyboard", render_keyboard(t096, desired=True, cursor=21).image),
             ("target", render_target(t096, desired=True, count=12, cursor=4).image),
@@ -640,7 +657,7 @@ def main() -> None:
         ],
         "T114": [
             ("clock", render_clock_t114(t114).image),
-            ("settings", render_rows(t114, "Настройки", common_root, 0).image),
+            ("settings", render_rows(t114, "Настройки", common_root, 0,root_menu=True).image),
             ("fonts", render_picker(t114, list(T114_FONT_CHOICE_NAMES), 0, 0).image),
             ("keyboard", render_keyboard(t114, desired=True, cursor=21).image),
             ("target", render_target(t114, desired=True, count=12, cursor=4).image),
@@ -648,7 +665,7 @@ def main() -> None:
         ],
         "ProMicro RA62": [
             ("clock", render_clock_oled()),
-            ("settings", render_rows(oled, "Настройки", promicro_root, 0).image),
+            ("settings", render_rows(oled, "Настройки", promicro_root, 0,root_menu=True).image),
             ("fonts", render_picker(oled, oled_names, 0, 0).image),
             ("keyboard", render_keyboard(oled, desired=True, cursor=21).image),
             ("target", render_target(oled, desired=True, count=12, cursor=4).image),
@@ -662,6 +679,19 @@ def main() -> None:
         for scene, image in scenes:
             save_preview(image, f"{slugs[board]}-{scene}", scales[board])
 
+    for board,profile in (("T096 FEM",t096),("T114",t114),("ProMicro RA62",oled)):
+        extra = (
+            ("send-confirm",render_send_confirmation(profile)),
+            ("keyboard-typing",render_keyboard(profile,desired=True,page=1,cursor=14)),
+            ("target-home",render_target(profile,desired=True,count=4,cursor=0,kind="Контакты",
+                         labels=["* Мария","* Александр","Все контакты >","По букве >"])),
+            ("target-initial",render_target(profile,desired=True,count=5,cursor=2,kind="Первая буква",
+                         labels=["A","А","Е","М","#"])),
+        )
+        for scene,frame in extra:
+            if frame.violations: raise RuntimeError(f"{board}/{scene}: {frame.violations}")
+            save_preview(frame.image,f"{slugs[board]}-{scene}",scales[board])
+
     unread = {
         "t096-unread-dm": (render_unread_senders(t096, count=1, cursor=0).image, 4),
         "t114-unread-dm": (render_unread_senders(t114, count=1, cursor=0).image, 3),
@@ -673,6 +703,9 @@ def main() -> None:
     make_overview(board_scenes).save(OUT / "ui-overview-three-boards.png")
     t096_font_samples().save(OUT / "font-catalog-t096.png")
     t114_font_samples().save(OUT / "font-catalog-t114.png")
+    make_catalog([(name, render_clock_t114(replace(t114, theme_id=index)).image)
+                  for index, name in enumerate(T114_THEME_CHOICE_NAMES)],
+                 columns=2, native_scale=2).save(OUT / "theme-catalog-t114.png")
     oled_font_samples().save(OUT / "font-catalog-promicro-ra62.png")
     generate_esp32_docs_assets()
     print(OUT)

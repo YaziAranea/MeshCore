@@ -96,12 +96,43 @@ class Oled:
         self.img = Image.new("1", (W, H), 0)
         self.draw = ImageDraw.Draw(self.img)
         self.overflows: list[str] = []
+        self.elements: dict[str, dict] = {}
+
+    def element(self, tag: str, box: tuple[int, int, int, int],
+                pixels: set[tuple[int, int]], shown: str = "", expected: str | None = None) -> None:
+        """Keep three separate proofs: allocation bbox, actual ink, required meaning."""
+        if tag in self.elements:
+            self.overflows.append(f"duplicate semantic element: {tag}")
+        self.elements[tag] = {"box": box, "pixels": pixels, "shown": shown}
+        x1, y1, x2, y2 = box
+        if x1 < 0 or y1 < 0 or x2 > W or y2 > H:
+            self.overflows.append(f"{tag}: bbox {box} outside {W}x{H}")
+        if any(x < 0 or y < 0 or x >= W or y >= H for x, y in pixels):
+            self.overflows.append(f"{tag}: lit pixels outside framebuffer")
+        if expected is not None and shown != expected:
+            self.overflows.append(f"{tag}: required text {expected!r} became {shown!r}")
+        if expected and not pixels:
+            self.overflows.append(f"{tag}: required text has no visible ink")
+
+    def validate_elements(self, required: tuple[str, ...]) -> None:
+        for tag in required:
+            if tag not in self.elements or not self.elements[tag]["pixels"]:
+                self.overflows.append(f"required element missing/blank: {tag}")
+        entries = list(self.elements.items())
+        for index, (name, item) in enumerate(entries):
+            for other, other_item in entries[index + 1:]:
+                a, b = item["box"], other_item["box"]
+                if max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3]):
+                    self.overflows.append(f"bbox overlap: {name} / {other}")
+                if item["pixels"] & other_item["pixels"]:
+                    self.overflows.append(f"ink overlap: {name} / {other}")
 
     def text_width(self, text: str, size: int = 1) -> int:
         return len(text) * self.advance * size
 
     def text(self, x: int, y: int, text: str, *, right: bool = False, center: bool = False,
-             max_width: int | None = None, size: int = 1) -> None:
+             max_width: int | None = None, size: int = 1, tag: str | None = None,
+             expected: str | None = None) -> None:
         text = clean_text(text)
         if max_width is not None:
             max_chars = max(1, max_width // (self.advance * size))
@@ -114,6 +145,7 @@ class Oled:
         if x < 0 or x + width > W or y < 0 or y + 8 * size > H:
             self.overflows.append(f"{self.name}: '{text}' at {x},{y}")
         cursor_x = x
+        pixels = set()
         for char in text:
             for col, bits in enumerate(glyph_for(char)):
                 for row in range(8):
@@ -121,9 +153,13 @@ class Oled:
                         px = cursor_x + col * size
                         py = y + row * size
                         self.draw.rectangle((px, py, px + size - 1, py + size - 1), fill=1)
+                        pixels.update((xx, yy) for xx in range(px, px + size) for yy in range(py, py + size))
                         if self.bold and size == 1:
                             self.draw.point((px + 1, py), fill=1)
+                            pixels.add((px + 1, py))
             cursor_x += self.advance * size
+        if tag:
+            self.element(tag, (x, y, x + width, y + 8 * size), pixels, text, expected)
 
     def battery(self, x: int, y: int, level: int = 75) -> None:
         self.draw.rectangle((x, y, x + 13, y + 7), outline=1)

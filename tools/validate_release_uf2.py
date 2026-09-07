@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the three nRF52 UF2 artifacts for SmartUI 2.1 beta 2."""
+"""Validate the three nRF52 UF2 artifacts for SmartUI experimental 1."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ NRF52840_FAMILY = 0xADA52840
 APP_START = 0x26000
 
 EXPECTED = {
-    "T096_FEM_SmartUI_2.1.0-beta.2.uf2": b"T096 SmartUI 2.1.0-beta.2",
-    "T114_SmartUI_2.1.0-beta.2.uf2": b"T114 SmartUI 2.1.0-beta.2",
-    "ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2": b"ProMicro SmartUI 2.1.0-beta.2",
+    "T096_FEM_SmartUI_2.1.0-experimental.1.uf2": b"T096 SmartUI 2.1.0-experimental.1",
+    "T114_SmartUI_2.1.0-experimental.1.uf2": b"T114 SmartUI 2.1.0-experimental.1",
+    "ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2": b"ProMicro SmartUI 2.1.0-experimental.1",
 }
 
 

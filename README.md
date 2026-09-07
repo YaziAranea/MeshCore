@@ -1,5 +1,12 @@
 # MeshCore Smart UI — PowerSaving17
 
+> [!WARNING]
+> **Эта ветка — отдельный экспериментальный UI `2.1.0-experimental.1`.**
+> [Скачать эксперимент](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1)
+> · [Что изменилось и какой файл выбрать](RELEASE_NOTES_v2.1.0-experimental.1_RU.md).
+> Прежняя [beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2)
+> сохранена и остаётся Latest. Эксперимент не объявляется стабильным.
+
 Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для пяти плат:
 
 - Heltec T096 с включённым FEM/LNA;
@@ -8,9 +15,9 @@
 - Heltec V4.3 OLED с включённым FEM/LNA;
 - Heltec Wireless Paper с e-paper 250×122.
 
-Текущий выпуск — `SmartUI 2.1.0-beta.2`: доработка экрана часов, понятности пиктограмм, выравнивания строк и отображения напряжения АКБ. Это публичный релиз с явной пометкой **БЕТА**; аппаратная проверка каждого экземпляра не заявляется. `v2.1.0-beta.1` сохранён для отката; RC-линия `v2.0.0-rc1` не изменена.
+Основа эксперимента — `SmartUI 2.1.0-beta.2`. В `experimental.1` доработаны действия меню, выбор избранного, безопасная калибровка/отмена, адресная отправка с подтверждением, поиск контактов и пиктограммы. Разделы не переставлялись, черновики не добавлены. Изображения ниже показывают экспериментальную ветку, а не старую beta.2; аппаратная проверка каждого экземпляра не заявляется.
 
-[⬇ Скачать SmartUI v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-beta.2_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-experimental.1_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
@@ -24,6 +31,9 @@
 
 Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущая beta находится в [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
 
+Эксперимент — [`smartui-2.1-experimental.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-experimental.1).
+[Разница с beta.2](https://github.com/YaziAranea/MeshCore/compare/v2.1.0-beta.2...smartui-2.1-experimental.1).
+
 ## Что умеет интерфейс
 
 - Часы, сеть, чат, непрочитанные ЛС, анонс, настройки и выключение без пустых страниц.
@@ -35,7 +45,7 @@
 - Одна общая мелодия важных уведомлений; серия ограничена двумя проигрываниями.
 - Ночной запрос тишины в 23:30 с отключением звука до 07:30.
 - Выбор шрифта и темы отдельными списками.
-- Аппаратный GPS на T096/T114/V4.3 с понятными состояниями `GPS ON/OFF`; на ProMicro и Wireless Paper GPS скрыт.
+- Аппаратный GPS на T096/T114/V4.3 с состояниями `GPS OFF` (выключен), `GPS ...` (поиск), `GPS FIX` (позиция получена); на ProMicro и Wireless Paper GPS скрыт.
 - Исправлен выход ProMicro из сна: первое нажатие будит OLED без обязательного Reset.
 - Калибровка измерения АКБ доступна на всех поддерживаемых платах.
 - Исправлены потерянные при PS17-переносе настройки зуммера, чтение ключей `prefs.json`, содержащих цифры, и полная синхронизация времени назад вместе с timestamp сообщений.
@@ -61,7 +71,7 @@
 
 ## Быстрый старт
 
-Используйте [Release v2.1.0-beta.2 — БЕТА](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2). Файлы доступны на обычной странице Release; предыдущая `v2.1.0-beta.1` остаётся на своей странице для отката.
+Для проверки нового UI используйте [Release v2.1.0-experimental.1 — ЭКСПЕРИМЕНТ](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1). Файлы доступны на обычной странице Release. Для возврата к предыдущему интерфейсу сохранена [v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2); она остаётся Latest.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
@@ -114,7 +124,7 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Результаты, размеры и контрольные суммы именно `v2.1.0-beta.2` публикуются в [примечаниях к выпуску](RELEASE_NOTES_v2.1.0-beta.2_RU.md). Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты beta.
+Изменения и границы проверки `v2.1.0-experimental.1` описаны в [примечаниях к эксперименту](RELEASE_NOTES_v2.1.0-experimental.1_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
 
 CI собирает пять релизных конфигураций, проверяет UF2/BIN, native-тесты и точные модели дисплеев. Дополнительная матрица display-драйверов использует `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это контроль совместимости, не добавление этих плат в Release.
 
@@ -133,6 +143,7 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
+- [Примечания к v2.1.0-experimental.1](RELEASE_NOTES_v2.1.0-experimental.1_RU.md)
 - [Примечания к v2.1.0-beta.2](RELEASE_NOTES_v2.1.0-beta.2_RU.md)
 - [Примечания к v2.1.0-dev.2](RELEASE_NOTES_v2.1.0-dev.2_RU.md)
 - [Примечания к v2.1.0-dev.1](RELEASE_NOTES_v2.1.0-dev.1_RU.md)

@@ -25,12 +25,12 @@ class ImagePair:
 
 EXPECTED = (
     ImagePair(
-        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2",
-        b"V4.3 OLED SmartUI 2.1.0-beta.2",
+        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1",
+        b"V4.3 OLED SmartUI 2.1.0-experimental.1",
     ),
     ImagePair(
-        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2",
-        b"Wireless Paper SmartUI 2.1.0-beta.2 FULL",
+        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1",
+        b"Wireless Paper SmartUI 2.1.0-experimental.1 FULL",
     ),
 )
 

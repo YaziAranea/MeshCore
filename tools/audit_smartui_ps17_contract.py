@@ -279,8 +279,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-beta.2" in block,
-        "every public profile must use DM-only unread and carry the 2.1 beta marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-experimental.1" in block,
+        "every public profile must use DM-only unread and carry the experimental.1 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -440,15 +440,15 @@ check(
     and has_all(
         adc_ui_policy + adc_factory_reset + native_policy_tests,
         (
-            "adcFactoryResetGesture",
-            "click_count == 2",
+            "adcFactoryResetConfirmed",
+            "settings_open && reset_page && !editing && confirmed",
             "_task->setAdcMultiplier(0.0f, true)",
-            "FactoryResetHasDistinctNonDestructiveGesture",
+            "FactoryResetRequiresSeparatePageAndExplicitConfirmation",
             "AcceptsResetAndSaneBoardSpecificWindow",
             "ConversionIsRoundedAndSaturating",
         ),
     ),
-    "preview/cancel must not persist, accepted calibration stays within +/-25%, and only the dedicated 2x gesture stores the board-default sentinel",
+    "preview/cancel must not persist; only an explicitly confirmed separate reset page stores the board-default sentinel",
 )
 
 check(
@@ -1251,10 +1251,10 @@ check(
             "drawRichTextStaticEllipsized",
             "display.drawTextRightAlign(display.width() - right_guard, y, \"OK\");",
             "display.fillRect(display.width() - 2, thumb_y, 2, thumb_h);",
-            '"Назад"',
+            '"Отмена"',
         ),
     ),
-    "font/theme settings must open measured lists with active marker, Back and scrollbar",
+    "font/theme settings must open measured lists with active marker, Cancel and scrollbar",
 )
 
 gps_page = between(
@@ -1396,6 +1396,41 @@ check(
         ),
     ),
     "do not replace exact bitmap/driver QA with a generic TrueType 5x7 mock-up",
+)
+
+check(
+    "Experimental keyboard explains action keys and confirms immutable recipient before send",
+    has_all(uitask, ('"Выбрать адресата"', 'QR_KB_TEXT_KEY("Ё")',
+                    '"Написать..."', 'if (_quick_confirm_open)',
+                    '"#%02X%02X"', 'w - id_w - 8',
+                    'row == 2 ? "Отправить" : "Назад"',
+                    'QR_TARGET_CONTACT_HOME', 'QR_TARGET_INITIAL'))
+    and has_all(simulator, ('render_send_confirmation', 'identity_full',
+                           'keyboard_action_hint', 'hint_full', 'contact initial cursor')),
+    "action preview differs from typed-tail preview; confirmation reserves full short ID and both actions",
+)
+check(
+    "T114 simulation uses actual two-colour themes rather than independent RGB badges",
+    has_all(simulator, ('t114_theme_colors', 'src/helpers/ui/ST7789Display.cpp',
+                       'ST7789_THEME_FG', 'ST7789_THEME_BG', 'colors == {foreground, background}')),
+    "a semantic RED/GREEN difference must not be promised on a one-bit TFT framebuffer",
+)
+check(
+    "OLED QA verifies complete bottom row, required values, allocation and ink",
+    has_all(oled_simulator, ('draw_firmware_gps', 'satellite badge', 'satellites',
+                            'validate_clock_states', 'oled.validate_elements(required)',
+                            'expected=message'))
+    and has_all(read('tools/simulate_oled_128x64.py'),
+                ('bbox overlap:', 'ink overlap:', 'required text', 'required element missing/blank')),
+    "fit-only checks cannot silently drop mute, satellites, uptime or critical values",
+)
+check(
+    "Paper temporal proof executes actual refresh policy and states its hardware limits",
+    has_all(wireless_simulator, ('run_temporal_host', 'temporal_cpp', 'proof_limits'))
+    and has_all(read('tools/ui_temporal_host.py'),
+                ('void E213Display::endFrame()', 'static uint16_t uiMarqueeOffset(',
+                 'change//every', 'panel BUSY', 'not reset on page entry')),
+    "recording stubs prove CRC skip/count policy, not physical refresh duration or ghosting",
 )
 
 passed = sum(result.ok for result in results)

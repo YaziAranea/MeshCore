@@ -79,12 +79,12 @@ TEST(AdcCalibration, ConversionIsRoundedAndSaturating) {
   EXPECT_EQ(65535U, mesh::saturatingBatteryMilliVolts(100000.0f));
 }
 
-TEST(AdcCalibration, FactoryResetHasDistinctNonDestructiveGesture) {
-  EXPECT_TRUE(smartui::adcFactoryResetGesture(true, true, false, 2));
-  EXPECT_FALSE(smartui::adcFactoryResetGesture(true, true, false, 1));
-  EXPECT_FALSE(smartui::adcFactoryResetGesture(true, true, true, 2));
-  EXPECT_FALSE(smartui::adcFactoryResetGesture(false, true, false, 2));
-  EXPECT_FALSE(smartui::adcFactoryResetGesture(true, false, false, 2));
+TEST(AdcCalibration, FactoryResetRequiresSeparatePageAndExplicitConfirmation) {
+  EXPECT_TRUE(smartui::adcFactoryResetConfirmed(true, true, false, true));
+  EXPECT_FALSE(smartui::adcFactoryResetConfirmed(true, true, false, false));
+  EXPECT_FALSE(smartui::adcFactoryResetConfirmed(true, true, true, true));
+  EXPECT_FALSE(smartui::adcFactoryResetConfirmed(false, true, false, true));
+  EXPECT_FALSE(smartui::adcFactoryResetConfirmed(true, false, false, true));
 }
 
 int main(int argc, char** argv) {

@@ -1,8 +1,10 @@
 """MeshCore SMART icon pack experiment.
 
 The firmware has to render monochrome symbols on very small displays.  This
-script deliberately designs on a 12x12 integer grid and previews the exact
-nearest-neighbour result at the sizes used by T114 and T096.
+script generates coordinated 8/11/12/16px masters. Compact faces and key
+semantic families use destination-size primitives; simple silhouettes retain
+their reviewed pixel geometry. Actual C++ replay lives in
+simulate_icon_alignment_beta2.py, including T114 physical scaling.
 """
 
 from pathlib import Path
@@ -131,6 +133,10 @@ def face(kind: str) -> Image.Image:
 
 
 def make_icon(kind: str) -> Image.Image:
+    if kind in NATIVE_FAMILIES:
+        return native_icon(kind, 12)
+    if kind in PIXEL_FAMILIES:
+        return pattern8_image(SMALL8_PATTERNS[kind]).resize((12,12),Image.Resampling.NEAREST)
     if kind in {
         "smile", "grin", "laugh", "wink", "cool", "love", "think",
         "neutral", "wow", "sleep", "party", "cry", "angry", "unknown",
@@ -500,6 +506,17 @@ CATEGORIES = [
 ]
 
 NEW_LEGACY_ICONS = [
+    ("gps_status_icon", "unsupported"),
+    ("emoji_unsupported_icon", "unsupported"),
+    ("emoji_safety_pin_icon", "safety_pin"),
+    ("emoji_ok_hand_icon", "ok_hand"),
+    ("emoji_victory_icon", "victory"),
+    ("emoji_crossed_fingers_icon", "crossed_fingers"),
+    ("emoji_fist_icon", "fist"),
+    ("emoji_clap_icon", "clap"),
+    ("emoji_handshake_icon", "handshake"),
+    ("emoji_horns_icon", "horns"),
+    ("emoji_love_hand_icon", "love_hand"),
     ("emoji_pray_icon", "pray"),
     ("emoji_office_icon", "office"),
     ("emoji_shop_icon", "shop"),
@@ -531,10 +548,11 @@ FIRMWARE_ICON_MAP = [
     ("love", ["emoji_love_face_icon"]),
     ("think", ["emoji_think_icon"]),
     ("neutral", ["emoji_neutral_icon"]),
-    ("wow", ["emoji_surprise_icon", "client_repeat_unknown_icon"]),
+    ("wow", ["emoji_surprise_icon"]),
     ("sleep", ["emoji_sleep_icon"]),
     ("party", ["emoji_party_icon"]),
-    ("cry", ["emoji_cry_icon", "emoji_sad_icon"]),
+    ("cry", ["emoji_cry_icon"]),
+    ("frown", ["emoji_sad_icon"]),
     ("angry", ["emoji_angry_icon"]),
     ("unknown", ["emoji_unknown_icon"]),
     ("skull", ["emoji_skull_icon"]),
@@ -562,7 +580,9 @@ FIRMWARE_ICON_MAP = [
     ("factory", ["emoji_factory_icon"]),
     ("home", ["emoji_home_icon"]),
     ("camp", ["emoji_camp_icon"]),
-    ("pin", ["emoji_pin_icon", "emoji_location_icon"]),
+    ("pin", ["emoji_location_icon"]),
+    ("pushpin", ["emoji_pin_icon"]),
+    ("safety_pin", ["emoji_safety_pin_icon"]),
     ("clip", ["emoji_clip_icon"]),
     ("sofa", ["emoji_sofa_icon"]),
     ("gear", ["emoji_gear_icon"]),
@@ -611,6 +631,17 @@ FIRMWARE_ICON_MAP = [
     ("football", ["emoji_football_icon"]),
     ("basketball", ["emoji_basketball_icon"]),
     ("tennis", ["emoji_tennis_icon"]),
+    ("unsupported", ["emoji_unsupported_icon", "client_repeat_unknown_icon"]),
+    ("ok_hand", ["emoji_ok_hand_icon"]),
+    ("victory", ["emoji_victory_icon"]),
+    ("crossed_fingers", ["emoji_crossed_fingers_icon"]),
+    ("fist", ["emoji_fist_icon"]),
+    ("clap", ["emoji_clap_icon"]),
+    ("handshake", ["emoji_handshake_icon"]),
+    ("horns", ["emoji_horns_icon"]),
+    ("love_hand", ["emoji_love_hand_icon"]),
+    ("route_relay", ["tower_route_icon", "relay_status_icon"]),
+    ("forward", ["relay_packet_icon"]),
 ]
 
 SMALL8_PATTERNS = {
@@ -757,6 +788,256 @@ SMALL8_PATTERNS = {
 }
 
 
+# Native-size primitives retain 1px strokes and semantic features at 8, 11,
+# 12 and 16px. These are drawn at their destination size, not enlarged masks.
+FACE_KINDS = {"smile", "grin", "laugh", "wink", "cool", "love", "think", "neutral",
+              "wow", "sleep", "party", "cry", "frown", "angry", "unknown"}
+NATIVE_FAMILIES = FACE_KINDS | {"battery", "signal", "hospital", "temperature", "map",
+    "ball", "football", "basketball", "tennis", "clock", "unsupported", "satellite",
+    "route_relay", "forward", "snow", "sun", "cloud", "rain", "box", "clover", "note",
+    "ok_hand", "victory", "crossed_fingers", "fist", "clap", "handshake", "horns", "love_hand"}
+PIXEL_FAMILIES = {"pushpin","safety_pin","ok_hand","victory","crossed_fingers",
+                  "fist","clap","handshake","horns","love_hand"}
+
+
+def native_icon(kind: str, size: int) -> Image.Image:
+    im = Image.new("1", (size, size), 0)
+    d = ImageDraw.Draw(im)
+    n = size - 1
+    def p(v): return round(v * n / 11)
+    def line(points, width=1): d.line([(p(x),p(y)) for x,y in points], fill=1, width=width)
+    def rect(box, fill=False):
+        d.rectangle(tuple(p(v) for v in box), outline=1, fill=1 if fill else None)
+    if kind in FACE_KINDS:
+        d.ellipse((0, 0, n, n), outline=1)
+        if size == 8:
+            # An 8px face has only six interior columns. Keep eyes on row2
+            # and mouth on rows4/5: row6 belongs to the rounded outline.
+            if kind == "cool":
+                d.line((1,2,6,2),fill=1); d.point((2,3),fill=1); d.point((5,3),fill=1)
+            elif kind == "sleep":
+                d.line((1,3,2,3),fill=1); d.line((5,3,6,3),fill=1)
+            elif kind == "love":
+                for x in (1,3,4,6): d.point((x,2),fill=1)
+                d.line((1,3,6,3),fill=1)
+                d.point((2,4),fill=1); d.point((5,4),fill=1)
+            elif kind == "wink":
+                d.line((1,2,2,2),fill=1); d.point((5,2),fill=1)
+            else:
+                d.point((2,2),fill=1); d.point((5,2),fill=1)
+            if kind in ("smile","wink","cool","love","party"):
+                if kind == "love": d.line((3,5,4,5),fill=1)
+                else:
+                    d.point((2,4),fill=1); d.point((5,4),fill=1); d.line((3,5,4,5),fill=1)
+            elif kind == "grin":
+                d.line((2,4,5,4),fill=1); d.line((3,5,4,5),fill=1)
+            elif kind == "laugh":
+                d.rectangle((2,3,5,4),outline=1); d.line((3,5,4,5),fill=1)
+            elif kind in ("frown","cry","angry"):
+                d.point((2,5),fill=1); d.point((5,5),fill=1); d.line((3,4,4,4),fill=1)
+                if kind == "cry": d.line((6,3,6,4),fill=1)
+                if kind == "angry": d.point((3,3),fill=1); d.point((4,3),fill=1)
+            elif kind == "wow": d.rectangle((3,4,4,5),outline=1)
+            elif kind == "think": d.line((3,5,4,4),fill=1); d.point((5,6),fill=1)
+            elif kind == "unknown": d.line((3,4,4,4),fill=1); d.point((4,6),fill=1)
+            else: d.line((2,5,5,5),fill=1)
+            if kind == "party": d.point((3,1),fill=1)
+            return im
+        ex1,ex2,ey = p(3),p(8),p(4)
+        if kind == "cool":
+            rect((2,3,5,5)); rect((7,3,10,5)); line(((5,4),(7,4)))
+        elif kind == "sleep":
+            line(((2,4),(4,4))); line(((7,4),(9,4)))
+        elif kind == "love":
+            for x in (ex1,ex2):
+                d.line((x-1,ey-1,x+1,ey-1), fill=1); d.point((x,ey),fill=1)
+        elif kind == "wink":
+            line(((2,4),(4,4))); d.point((ex2,ey),fill=1)
+        else:
+            d.point((ex1,ey),fill=1); d.point((ex2,ey),fill=1)
+        if kind in ("smile","wink","cool","love","party"):
+            line(((3,7),(4,8),(7,8),(8,7)))
+        elif kind == "grin":
+            line(((3,7),(8,7),(8,8),(3,8),(3,7)))
+        elif kind == "laugh":
+            line(((3,7),(4,9),(7,9),(8,7)))
+        elif kind in ("frown","cry","angry"):
+            line(((3,8),(4,7),(7,7),(8,8)))
+            if kind == "cry": line(((9,5),(9,7)))
+            if kind == "angry":
+                line(((2,2),(4,3))); line(((7,3),(9,2)))
+        elif kind == "wow":
+            d.ellipse((p(4),p(7),p(7),p(9)),outline=1)
+        elif kind == "think":
+            line(((4,8),(7,7))); d.point((p(8),p(9)),fill=1)
+        elif kind == "unknown":
+            line(((5,6),(7,6),(7,7),(6,7))); d.point((p(6),p(9)),fill=1)
+        else:
+            line(((3,8),(8,8)))
+        if kind == "party":
+            line(((5,1),(7,0),(8,2)))
+    elif kind == "battery":
+        top=max(1,size//4); bottom=size-1-top
+        d.rectangle((0,top,size-2,bottom),outline=1)
+        d.line((size-1,top+1,size-1,bottom-1),fill=1)
+        if bottom-top>=4: d.rectangle((2,top+2,size-4,bottom-2),fill=1)
+    elif kind == "signal":
+        width=max(1,size//5); gap=max(1,(size-width*3)//2)
+        for i,frac in enumerate((.28,.55,.85)):
+            x=i*(width+gap); h=max(2,round(size*frac))
+            d.rectangle((x,size-h,x+width-1,size-1),fill=1)
+    elif kind == "hospital":
+        a=max(1,size//3); b=size-1-a
+        d.rectangle((a,1,b,size-2),fill=1); d.rectangle((1,a,size-2,b),fill=1)
+    elif kind == "temperature":
+        x=size//2; radius=max(2,size//4)
+        d.ellipse((x-radius,size-2*radius-1,x+radius,size-1),outline=1)
+        d.rectangle((x-1,0,x+1,size-radius-1),outline=1)
+        d.line((x,max(2,size//3),x,size-2),fill=1)
+    elif kind == "map":
+        line(((0,2),(4,0),(7,2),(11,0),(11,9),(7,11),(4,9),(0,11),(0,2)))
+        line(((4,1),(4,9))); line(((7,2),(7,10)))
+    elif kind in ("ball","football","basketball","tennis","clock"):
+        d.ellipse((0,0,n,n),outline=1)
+        if kind == "football":
+            d.polygon([(p(x),p(y)) for x,y in ((5,3),(8,5),(7,8),(4,8),(3,5))],fill=1)
+        elif kind == "basketball":
+            line(((5,1),(5,10))); line(((1,5),(10,5)))
+        elif kind == "tennis":
+            # Inset seams do not extend outside the circular silhouette.
+            line(((3,1),(4,3),(4,8),(3,10)))
+            line(((8,1),(7,3),(7,8),(8,10)))
+        elif kind == "clock":
+            line(((5,2),(5,6),(8,7)))
+        else:
+            # A short curved seam, never a detached dot in a broken circle.
+            d.arc((max(1,size//4),1,n-1,n-1),30,140,fill=1)
+    elif kind == "unsupported":
+        d.rectangle((0,0,n,n),outline=1)
+        for x in range(2,size-1,2): d.point((x,size//2),fill=1)
+    elif kind in ("satellite","route_relay"):
+        # Intentionally textual: SAT cannot be confused with GPS module state;
+        # R denotes a relay, without an abstract branching totem.
+        letters = {"S":(7,4,7,1,7),"A":(2,5,7,5,5),"T":(7,2,2,2,2),
+                   "R":(6,5,6,5,5)}
+        word="SAT" if kind=="satellite" else "R"
+        if size<11 and kind=="satellite": word="S"
+        scale=2 if size>=16 and len(word)==1 else 1
+        width=(len(word)*4-1)*scale; x0=(size-width)//2; y0=(size-5*scale)//2
+        for i,char in enumerate(word):
+            for y,row in enumerate(letters[char]):
+                for x in range(3):
+                    if row & (1<<(2-x)):
+                        d.rectangle((x0+(i*4+x)*scale,y0+y*scale,
+                                     x0+(i*4+x+1)*scale-1,y0+(y+1)*scale-1),fill=1)
+        if kind=="satellite" and size<11: d.rectangle((0,0,n,n),outline=1)
+    elif kind == "forward":
+        line(((1,5),(10,5))); line(((6,1),(10,5),(6,9)))
+    elif kind in ("snow","sun"):
+        line(((5,0),(5,11))); line(((0,5),(11,5)))
+        line(((1,1),(10,10))); line(((1,10),(10,1)))
+        if kind=="sun": d.ellipse((p(3),p(3),p(8),p(8)),fill=1)
+        elif size>=11:
+            for a,b in (((3,1),(5,3)),((7,1),(5,3)),((3,10),(5,8)),((7,10),(5,8))): line((a,b))
+    elif kind in ("cloud","rain"):
+        bottom=8 if kind=="rain" else 10
+        d.ellipse((p(0),p(4),p(11),p(bottom)),fill=1)
+        d.ellipse((p(3),p(1),p(8),p(bottom)),fill=1)
+        if kind=="rain":
+            for x in (2,5,8): line(((x,10),(x-1,11)))
+    elif kind == "box":
+        line(((5,0),(11,3),(11,8),(5,11),(0,8),(0,3),(5,0)))
+        line(((0,3),(5,6),(11,3))); line(((5,6),(5,11)))
+    elif kind == "clover":
+        # Four distinct leaves with a dark central cross, not a solid blob.
+        for a,b,c,e in ((1,0,4,3),(6,0,9,3),(1,5,4,8),(6,5,9,8)):
+            d.ellipse((p(a),p(b),p(c),p(e)),fill=1)
+        line(((5,7),(5,9),(7,11)))
+    elif kind == "note":
+        d.rectangle((1,0,size-2,size-1),outline=1)
+        for yy in (size//3,2*size//3):
+            d.line((3,yy,size-4,yy),fill=1)
+    elif kind in ("horns","love_hand"):
+        line(((3,0),(3,7),(4,9),(8,9),(10,7),(10,0)))
+        line(((5,4),(5,6))); line(((7,4),(7,6)))
+        line(((4,9),(4,11),(8,11),(8,9)))
+        if kind=="love_hand": line(((3,7),(0,4),(0,7),(4,10)))
+        else: line(((3,7),(5,7),(5,8)))
+    elif kind == "victory":
+        line(((1,0),(4,6),(3,8),(5,11),(8,11),(9,8),(7,6),(10,0)))
+        line(((3,0),(5,5),(6,5),(8,0)))
+        line(((5,7),(7,7)))
+    elif kind == "ok_hand":
+        d.ellipse((0,p(4),p(4),p(8)),outline=1)
+        line(((4,6),(5,2),(5,7))); line(((7,0),(7,7))); line(((9,1),(9,7)))
+        line(((4,8),(5,10),(8,10),(10,7))); line(((5,10),(5,11),(8,11),(8,10)))
+    elif kind == "crossed_fingers":
+        line(((4,0),(8,6))); line(((7,0),(3,6)))
+        line(((3,5),(2,7),(4,10),(8,10),(9,7),(7,5)))
+        line(((4,10),(4,11),(8,11),(8,10)))
+    elif kind == "fist":
+        line(((1,3),(2,1),(9,1),(10,3),(10,7),(8,10),(3,10),(1,7),(1,3)))
+        for x in (4,6,8): line(((x,2),(x,4)))
+        line(((1,6),(7,6),(7,8))); line(((3,10),(3,11),(8,11),(8,10)))
+    elif kind == "clap":
+        # Two offset sloping palms, plus two attention rays.
+        line(((2,3),(6,7),(6,9),(4,10),(0,6),(0,4),(2,3)))
+        line(((6,2),(10,6),(10,8),(8,9),(4,5),(4,3),(6,2)))
+        line(((1,0),(2,1))); line(((8,0),(9,1)))
+    elif kind == "handshake":
+        line(((0,3),(2,3),(4,5),(3,8),(0,6),(0,3)))
+        line(((11,3),(9,3),(7,5),(8,8),(11,6),(11,3)))
+        line(((3,4),(5,3),(8,5),(6,8),(4,8),(2,6)))
+        line(((5,4),(4,5),(6,6)))
+    else:
+        raise KeyError(kind)
+    return im
+
+
+# Reviewed low-resolution silhouettes for the remaining families. No fallback
+# to unrelated historical bytes: every shipped small glyph is explicit/native.
+for _kind,_pattern in {
+ "skull":"..####../.######./##.##.##/##.##.##/.######./..#..#../..####../........",
+ "ghost":"..####../.#....#./#.#..#.#/#......#/#..##..#/#......#/#.#..#.#/##.##.##",
+ "heart":".##..##./########/########/.######./..####../...##.../......../........",
+ "hundred":"#..#..#./#.#.##.#/#.#.##.#/#.#.##.#/#..#..#./......../########/........",
+ "thumb_up":"...#..../...##.../...##.../.#######/##.#####/##.#####/.######./........",
+ "thumb_down":"......../.######./##.#####/##.#####/.#######/...##.../...##.../...#....",
+ "plug":"..#..#../..#..#../.######./.######./..####../...##.../...##.../...##...",
+ "power":"...#..../...#..../.#.#.#../#..#..#./#.....#./#.....#./.#...#../..###...",
+ "lamp":"..####../.#....#./#......#/#......#/.#....#./..#..#../..####../...##...",
+ "clover":".##..##./#######./.#####../..###.../.#####../#######./.##.###./.....#..",
+ "pushpin":"..#####./...###../...###../..#####./....#.../...#..../..#...../........",
+ "safety_pin":"..####../.#....#./.#.##.#./.#.#..#./.#.#..#./.#.#.#../..###.../........",
+ "sofa":"......../.######./.#....#./##....##/#.####.#/#......#/########/.#....#.",
+ "gear":"...##.../.#.##.#./.######./##.##.##/##.##.##/.######./.#.##.#./...##...",
+ "wrench":"#..#..../#..#..../.###..../..###.../...###../....###./.....#.#/......#.",
+ "pick":"..####../.#....#./#..#...#/...#..../...#..../..#...../..#...../........",
+ "antenna":".#....#./#..##..#/#..##..#/.#.##.#./...##.../...##.../...##.../.######.",
+ "radio":".....#../....#.../.######./.#....#./.#.##.#./.#.#..#./.######./........",
+ "phone":"..####../..#..#../..#..#../..#..#../..#..#../..#..#../..#.##../..####..",
+ "pc":"########/#......#/#......#/#......#/########/...##.../.######./........",
+ "camera":"..###.../.#####../##...###/#..##..#/#.#..#.#/#..##..#/########/........",
+ "cross":"......../.#....#./..#..#../...##.../...##.../..#..#../.#....#./........",
+ "star":"...#..../...#..../..###.../########/..####../..#..#../.#....#./........",
+ "fire":"....#.../...##.../..#.#.../.#..##../.#.#..#./#..##.#./#.....#./.#####..",
+ "rocket":".....##./....#.#./...#..#./..#..#../.##.#.../#..#..../.##...../#.......",
+ "car":"..####../.#....#./########/#.#..#.#/########/.#....#./......../........",
+ "bike":"....#.../..###.../.#..#.../.###.#../#..#..#./#..#..#./.##.##../........",
+ "walk":"...##.../...##.../....#.../..###.../.#.#.#../...#..../..#.#.../.#...#..",
+ "key":".###..../#...#.../#...#.../.###..../...#..../....###./.....#../........",
+ "ok_hand":".##...../#..#..../#..#.#../.##.##../..####../..####../...##.../........",
+ "victory":".#...#../.#...#../..#.#.../..#.#.../..###.../..###.../...##.../........",
+ "crossed_fingers":"...#..../..#.#.../...#.#../...##.../..####../..####../...##.../........",
+ "fist":"......../.######./.#.#.#.#/########/#......#/.######./..####../........",
+ "clap":".....#../.#.#..#./..#.#.../..#..#../...#..#./..##.#../...##.../........",
+ "handshake":"......../##....##/#.####.#/.##..##./..#.#.../...#..../......../........",
+ "horns":".#....#./.#....#./.#.##.#./.######./..####../..####../...##.../........",
+ "love_hand":".#....#./.#.#..#./.#.#..#./.######./..####../..####../...##.../........",
+}.items():
+    SMALL8_PATTERNS[_kind] = tuple(_pattern.split("/"))
+
+
 def pattern8_image(rows: tuple[str, ...]) -> Image.Image:
     if len(rows) != 8 or any(len(row) != 8 for row in rows):
         raise ValueError("Every SMALL8 pattern must be exactly 8x8")
@@ -780,17 +1061,16 @@ def source_legacy_bytes() -> dict[str, list[int]]:
 
 
 def firmware_small8(kind: str, legacy: dict[str, list[int]]) -> list[int]:
+    if kind in NATIVE_FAMILIES:
+        pixels = native_icon(kind, 8)
+        return [sum(0x80 >> x for x in range(8) if pixels.getpixel((x,y))) for y in range(8)]
     if kind in SMALL8_PATTERNS:
         pixels = pattern8_image(SMALL8_PATTERNS[kind])
         return [
             sum((0x80 >> x) for x in range(8) if pixels.getpixel((x, y)))
             for y in range(8)
         ]
-    symbols = dict(FIRMWARE_ICON_MAP)[kind]
-    for symbol in symbols:
-        if symbol in legacy:
-            return legacy[symbol]
-    return firmware_xbm8(kind)
+    raise ValueError(f"Unreviewed small icon: {kind}")
 
 
 def firmware_rows(kind: str) -> list[int]:
@@ -801,12 +1081,13 @@ def firmware_rows(kind: str) -> list[int]:
     ]
 
 
+def firmware_native_rows(kind: str, size: int) -> list[int]:
+    pixels = native_icon(kind,size) if kind in NATIVE_FAMILIES else make_icon(kind).resize((size,size),Image.Resampling.NEAREST)
+    return [sum(1 << (size-1-x) for x in range(size) if pixels.getpixel((x,y))) for y in range(size)]
+
+
 def firmware_xbm8(kind: str) -> list[int]:
-    pixels = make_icon(kind).resize((8, 8), Image.Resampling.NEAREST)
-    return [
-        sum((0x80 >> x) for x in range(8) if pixels.getpixel((x, y)))
-        for y in range(8)
-    ]
+    return firmware_small8(kind, {})
 
 
 def export_firmware_header():
@@ -815,7 +1096,7 @@ def export_firmware_header():
         "#pragma once",
         "",
         "// Generated by tools/simulate_iconpack_v1.py.",
-        "// Shared monochrome 12x12 masters and hand-tuned 8x8 glyphs for all displays.",
+        "// Reviewed 8px, native 11px T114, 12px and 16px T096 icon family.",
         "",
     ]
     for symbol, kind in NEW_LEGACY_ICONS:
@@ -843,16 +1124,23 @@ def export_firmware_header():
             "};",
             "",
         ]
+    for size in (11,16):
+        for kind,_ in FIRMWARE_ICON_MAP:
+            values=", ".join(f"0x{value:04x}" for value in firmware_native_rows(kind,size))
+            lines += [f"static const uint16_t iconpack_native{size}_{kind}[{size}] PROGMEM = {{",
+                      f"  {values}","};", ""]
     lines += [
         "struct MeshcoreIconpackV2Glyph {",
         "  const uint8_t* small;",
         "  const uint16_t* large;",
+        "  const uint16_t* native11;",
+        "  const uint16_t* native16;",
         "};",
         "",
         "static const MeshcoreIconpackV2Glyph iconpack_v2_glyphs[] = {",
     ]
     for kind, _ in FIRMWARE_ICON_MAP:
-        lines.append(f"  {{iconpack_v2_small_{kind}, iconpack_v1_{kind}}},")
+        lines.append(f"  {{iconpack_v2_small_{kind}, iconpack_v1_{kind}, iconpack_native11_{kind}, iconpack_native16_{kind}}},")
     lines += [
         "};",
         "",
@@ -1055,8 +1343,8 @@ def gps_badge_mask(size: int) -> Image.Image:
     def block(px: int, py: int):
         d.rectangle((px, py, px + scale - 1, py + scale - 1), fill=1)
 
-    waves_left = (0x24, 0x12, 0x12, 0x12, 0x24)
-    waves_right = (0x09, 0x12, 0x12, 0x12, 0x09)
+    waves_left = (0x12, 0x24, 0x24, 0x24, 0x12)
+    waves_right = (0x12, 0x09, 0x09, 0x09, 0x12)
     for row, bits in enumerate(waves_left):
         for col in range(6):
             if bits & (1 << (5 - col)):
@@ -1313,17 +1601,12 @@ def draw_screen(title: str, physical: tuple[int, int], icon_size: int, scale: in
 
 def main():
     export_firmware_header()
-    draw_catalog()
-    draw_grid_audit()
-    draw_semantic_split()
-    draw_hardware_scale_audit()
-    draw_hardware_catalog()
-    draw_hybrid_hardware_catalog()
-    draw_gps_badge_audit()
-    draw_dish_candidates()
-    draw_screen("T096 / Чат", (160, 80), 16, 4, "ICONPACK_V1_T096_CHAT.png")
-    draw_screen("T114 / Чат", (240, 135), 22, 3, "ICONPACK_V1_T114_CHAT.png")
-    print(f"Written to {OUT}")
+    # The historical concept-render functions above are not hardware proofs:
+    # their chat fonts and T114 icon sizes predate the current UI. Never emit
+    # them as current screenshots. Compile and replay actual firmware instead.
+    import subprocess, sys
+    subprocess.run([sys.executable,str(ROOT/"tools/simulate_icon_alignment_beta2.py"),
+                    "--out",str(ROOT/"qa_outputs/iconpack_current")],check=True)
 
 
 if __name__ == "__main__":
