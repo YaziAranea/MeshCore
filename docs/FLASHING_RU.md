@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-`v2.1.0-beta.2` — текущий публичный бета-релиз для пяти плат. `v2.1.0-beta.1` сохранён для быстрого отката. `v2.0.0-rc1` остаётся прежним baseline для трёх nRF52-плат. Прошивайте только файл, рядом с которым опубликован соответствующий checksum-манифест: `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
+Эта ветка описывает экспериментальный `v2.1.0-experimental.1` с дополнением Heltec V3 OLED — шесть плат. Предыдущая `v2.1.0-beta.2` для пяти плат остаётся Latest. Прошивайте только файл с соответствующими контрольными суммами: `SHA256SUMS.txt` для UF2, `SHA256SUMS-ESP32.txt` для исходных V4.3/Paper, `SHA256SUMS-V3.txt` для дополнения V3. В общем архиве шести плат есть `SHA256SUMS-ALL-SIX.txt`.
 
 ## Перед началом
 
@@ -15,20 +15,21 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-beta.2.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-beta.2.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-experimental.1.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-experimental.1.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.1-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1-update.bin` |
+| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
-## ESP32-S3: V4.3 OLED и Wireless Paper
+## ESP32-S3: V3 OLED, V4.3 OLED и Wireless Paper
 
 - Для первой установки и Web Flasher берите только `freshInstall-merged.bin`; он записывается с адреса `0x00000`.
 - Для обновления уже установленной совместимой прошивки берите `update.bin`; application offset — `0x10000`.
@@ -36,7 +37,7 @@
 - Команда `esptool` для чистой установки: `esptool.py --chip esp32s3 write_flash 0x00000 <freshInstall-merged.bin>`.
 - Команда для update: `esptool.py --chip esp32s3 write_flash 0x10000 <update.bin>`.
 
-Web Flasher должен работать с merged-файлом. Если сервис предлагает выбрать плату, выбирайте точную V4.3 OLED или Wireless Paper, а не Heltec V3 «на глаз».
+Web Flasher должен работать с merged-файлом. Если сервис предлагает выбрать плату, выбирайте свою точную модель V3 OLED, V4.3 OLED или Wireless Paper — они не взаимозаменяемы. На V3 кнопка навигации PRG/BOOT — GPIO0, не RST; удержание PRG/BOOT во время сброса переводит ESP32-S3 в загрузчик.
 
 ## Вход в UF2-загрузчик
 
@@ -80,7 +81,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии: стабильный `2.0.0-rc1` либо текущий `2.1.0-beta.2`.
+- На странице версии виден маркер нужной платы и линии `2.1.0-experimental.1`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.
@@ -88,6 +89,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 - На T096/T114 GPS включается как аппаратный; на ProMicro GPS не показывается.
 - На T096 статус FEM/LNA соответствует целевой сборке FEM ON.
 - На V4.3 OLED видны аппаратный GPS и FEM/LNA; выдуманного меню зуммера нет.
+- На V3 нет пунктов несуществующего GPS/FEM/зуммера; экран и кнопка работают после пробуждения.
 - На Wireless Paper радио не пропадает при бездействии, а экран не перерисовывается без изменения framebuffer.
 - В `Дополнительно → Калибр. АКБ` отображается реальный коэффициент, который следует сверять мультиметром.
 - Защита АКБ показывает порог 3,2 В во включённом состоянии и резервные 2,7 В при выключении. На чистых настройках включена защита 3,2 В; ранее сохранённое выключенное состояние остаётся выключенным.

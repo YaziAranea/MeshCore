@@ -7,17 +7,20 @@
 > Прежняя [beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2)
 > сохранена и остаётся Latest. Эксперимент не объявляется стабильным.
 
-Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для пяти плат:
+Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для шести плат:
 
 - Heltec T096 с включённым FEM/LNA;
 - Heltec T114 с цветным TFT;
 - ProMicro nRF52840 + Heltec RA62 + OLED 128×64;
+- Heltec WiFi LoRa 32 V3 с OLED 128×64;
 - Heltec V4.3 OLED с включённым FEM/LNA;
 - Heltec Wireless Paper с e-paper 250×122.
 
 Основа эксперимента — `SmartUI 2.1.0-beta.2`. В `experimental.1` доработаны действия меню, выбор избранного, безопасная калибровка/отмена, адресная отправка с подтверждением, поиск контактов и пиктограммы. Разделы не переставлялись, черновики не добавлены. Изображения ниже показывают экспериментальную ветку, а не старую beta.2; аппаратная проверка каждого экземпляра не заявляется.
 
 [⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-experimental.1_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+
+**Добавлен Heltec V3 OLED:** [файлы и инструкция V3](V3_ADDENDUM_v2.1.0-experimental.1_RU.md). На той же странице Release доступен новый `all-six-boards.zip`; прежний архив пяти плат сохранён. Для исходников V3 используйте эту ветку или точный SHA из `RELEASE-MANIFEST-V3.json`: исходный тег первых пяти плат не перемещался.
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
@@ -64,6 +67,7 @@
 | Heltec T096 FEM ON | TFT 160×80 | Аппаратный | UF2 |
 | Heltec T114 с дисплеем | ST7789 240×135 | Аппаратный | UF2 |
 | ProMicro nRF52840 + Heltec RA62 | SSD1306 OLED 128×64 | Нет | UF2 |
+| Heltec WiFi LoRa 32 V3 | SSD1306 OLED 128×64 | Нет | merged + update BIN |
 | Heltec V4.3 OLED FEM ON | SSD1306 OLED 128×64 | Аппаратный | merged + update BIN |
 | Heltec Wireless Paper | e-paper 250×122 | Нет | merged + update BIN |
 
@@ -77,7 +81,7 @@
 2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
 3. Подключите плату исправным USB-кабелем с передачей данных.
 4. Для nRF52 переведите плату в UF2-загрузчик быстрым двойным нажатием **Reset**. Для ESP32-S3 используйте Web Flasher или `esptool`.
-5. На nRF52 скопируйте UF2 на USB-диск. На V4.3/Wireless Paper используйте `freshInstall-merged.bin` по адресу `0x0` или `update.bin` по адресу `0x10000`.
+5. На nRF52 скопируйте UF2 на USB-диск. На V3/V4.3/Wireless Paper используйте `freshInstall-merged.bin` по адресу `0x0` или `update.bin` по адресу `0x10000`.
 6. Подключитесь из совместимого MeshCore-клиента. Если клиент просит PIN/passkey, с экрана часов сделайте один переход вперёд и введите показанные шесть цифр.
 
 Полная инструкция: [прошивка](docs/FLASHING_RU.md) и [проверка SHA-256](docs/VERIFY_RU.md).
@@ -102,6 +106,7 @@
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
+pio run -e Heltec_v3_companion_radio_ble_smartui -t mergebin
 pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
 pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 ```
@@ -126,7 +131,7 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 Изменения и границы проверки `v2.1.0-experimental.1` описаны в [примечаниях к эксперименту](RELEASE_NOTES_v2.1.0-experimental.1_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
 
-CI собирает пять релизных конфигураций, проверяет UF2/BIN, native-тесты и точные модели дисплеев. Дополнительная матрица display-драйверов использует `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это контроль совместимости, не добавление этих плат в Release.
+Основной CI проверяет исходные пять релизных конфигураций. Дополнение V3 имеет отдельный CI для `Heltec_v3_companion_radio_ble_smartui`: полная сборка BIN, проверка образов и OLED-раскладки. Старый `Heltec_v3_companion_radio_ble` остаётся compile-only представителем общего драйвера, а не V3-файлом SmartUI. Xiao S3 WIO и Heltec T1 не добавляются в Release.
 
 Heltec T1 остаётся нерелизной контрольной платой. Её USB-вариант в CI проверяет общий UI/display-код; обе companion-конфигурации T1 используют `-Os` и помещаются в штатную flash-разметку с ExtraFS. Это не добавляет T1 в список поддерживаемых файлов Release. RAK4631 также не является релизной или обязательной compatibility-целью beta. Все пять публикуемых конфигураций собираются отдельно; [подробности](docs/BUILD_RU.md#целевые-сборки).
 
@@ -144,6 +149,7 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
 - [Примечания к v2.1.0-experimental.1](RELEASE_NOTES_v2.1.0-experimental.1_RU.md)
+- [Дополнение Heltec V3 OLED](V3_ADDENDUM_v2.1.0-experimental.1_RU.md)
 - [Примечания к v2.1.0-beta.2](RELEASE_NOTES_v2.1.0-beta.2_RU.md)
 - [Примечания к v2.1.0-dev.2](RELEASE_NOTES_v2.1.0-dev.2_RU.md)
 - [Примечания к v2.1.0-dev.1](RELEASE_NOTES_v2.1.0-dev.1_RU.md)

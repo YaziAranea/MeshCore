@@ -184,13 +184,13 @@ def adc_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]:
     return oled.img, oled.overflows
 
 
-def ble_pin_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]:
+def ble_pin_scene(style: tuple[str, int, bool], node_name: str = "Heltec V4.3") -> tuple[Image.Image, list[str]]:
     """Exact shared 128x64 onboarding page used by V4.3 and ProMicro."""
     oled = Oled(style)
     voltage = "4.09V"
     voltage_width = oled.text_width(voltage)
     name_right = BATTERY_ICON_X - voltage_width - 5
-    oled.ellipsized(0, 0, "Heltec V4.3", name_right)
+    oled.ellipsized(0, 0, node_name, name_right)
     draw_firmware_battery(oled)
 
     page_count, active = 7, 1

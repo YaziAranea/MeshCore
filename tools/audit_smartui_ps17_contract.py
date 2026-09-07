@@ -1433,9 +1433,45 @@ check(
     "recording stubs prove CRC skip/count policy, not physical refresh duration or ghosting",
 )
 
+# The original tag's five-board publisher is immutable. V3 is an additive
+# build with a separate source revision, manifest, assets and workflow.
+v3_config = read("variants/heltec_v3/platformio.ini")
+v3_addon = effective_ini_section(v3_config, "env:Heltec_v3_companion_radio_ble_smartui")
+check(
+    "V3 addon enables the shared UI without rewriting the five-board publication scope",
+    has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
+                       "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 2.1.0-experimental.1")),
+    "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
+)
+check(
+    "V3 addon is GPS-less OLED with no invented FEM or buzzer",
+    has_all(v3_addon, ("-DENV_INCLUDE_GPS=1", "-D ENV_INCLUDE_GPS=0", "UI_PHONE_GPS=0", "UI_SOUND_SETTINGS_GROUP=0",
+                       "UI_TONE_FALLBACK_TO_ALERT=0"))
+    and "-D RADIO_FEM_RXGAIN" not in v3_addon and "-D PIN_MSG_TONE" not in v3_addon
+    and "defined(HELTEC_LORA_V3)" in read("src/helpers/ui/SSD1306Display.h"),
+    "the compact five-style 128x64 renderer must not show nonexistent GPS/sound hardware",
+)
+check(
+    "V3 addon retains manual stable BLE PIN, real ADC and the established protection thresholds",
+    has_all(v3_addon, ("UI_BLE_PIN_PAGE=1", "BLE_PIN_PERSIST_RANDOM=1",
+                       "UI_ADC_MULTIPLIER_PAGE=1", "AUTO_SHUTDOWN_MILLIVOLTS=3200",
+                       "LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS=2700"))
+    and "normalizeAdcMultiplier" in read("variants/heltec_v3/HeltecV3Board.h"),
+    "V3 shares the real ADC-capable board implementation; UI presence is not an electrical calibration proof",
+)
+check(
+    "V3 addon QA checks all five real OLED styles and explicit V3 screenshots",
+    has_all(read("tools/simulate_heltec_v3_smartui_qa.py"),
+            ("source_contract", "zip(make_profiles()[\"OLED\"],STYLES)",
+             "render_send_confirmation", "root_menu", "identity_full", "hint_full",
+             "HELTEC_V3_SMARTUI_UI_MATRIX.png", "qa_outputs/v3-addon")),
+    "the addon must exercise its GPS-less clock, keyboard, recipients and capability-correct settings",
+)
+
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"Smart UI 2.1 five-board contract audit: {passed} passed, {failed} failed")
+print(f"Smart UI 2.1 five-board baseline + V3 addon contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:

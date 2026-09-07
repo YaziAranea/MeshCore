@@ -17,10 +17,10 @@
 ```powershell
 git clone https://github.com/YaziAranea/MeshCore.git
 Set-Location MeshCore
-git switch smartui-2.1-beta.2
+git switch smartui-2.1-experimental.1
 ```
 
-Стабильный RC находится в `smartui-ps17.1`; текущая beta для пяти плат — в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Текущий эксперимент для шести плат находится в `smartui-2.1-experimental.1`; предыдущая beta для пяти плат без V3 сохранена в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -29,12 +29,13 @@ git switch smartui-2.1-beta.2
 | T096 FEM ON | `Heltec_t096_companion_radio_ble_femon` | UF2 |
 | T114 | `Heltec_t114_companion_radio_ble` | UF2 |
 | ProMicro RA62 | `ProMicro_ra62_companion_radio_ble` | UF2 |
+| Heltec V3 OLED | `Heltec_v3_companion_radio_ble_smartui` | merged + update BIN |
 | Heltec V4.3 OLED FEM ON | `heltec_v4_3_companion_radio_ble_femon_smartui` | merged + update BIN |
 | Wireless Paper FULL | `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` | merged + update BIN |
 
-FakeTec, V4 TFT и обычный Heltec V3 не входят в набор релизных файлов. Отдельная compile-only матрица CI проверяет общие display-драйверы на `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это не заявление поддержки этих плат в Release.
+FakeTec и V4 TFT не входят в набор релизных файлов. Для V3 нужен новый `Heltec_v3_companion_radio_ble_smartui`: старый environment без `_smartui` сохраняет прежний набор возможностей и не заменяет его. Отдельная compile-only матрица CI проверяет общие display-драйверы; контрольные `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb` не заявлены как релизные платы.
 
-Heltec T1 остаётся нерелизной контрольной платой. CI использует USB-вариант только для компиляции общего UI/display-бэкенда; USB и BLE companion-конфигурации T1 переведены с `-Ofast` на `-Os` и помещаются в штатный лимит `712704` байта без изменения ExtraFS-разметки. RAK4631 удалён из обязательной beta-матрицы после переполнения нерелизной контрольной сборки; это не дефект заявленных плат и не обещание поддержки RAK4631. Шесть релизных конфигураций остаются неизменными.
+Heltec T1 остаётся нерелизной контрольной платой. CI использует USB-вариант только для компиляции общего UI/display-бэкенда; USB и BLE companion-конфигурации T1 переведены с `-Ofast` на `-Os` и помещаются в штатный лимит `712704` байта без изменения ExtraFS-разметки. RAK4631 удалён из обязательной beta-матрицы после переполнения нерелизной контрольной сборки; это не дефект заявленных плат и не обещание поддержки RAK4631. Добавление V3 OLED не расширяет поддержку на T1 или RAK4631.
 
 ## Сборка UF2
 
@@ -63,6 +64,7 @@ pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 Собирайте последовательно; особенно Wireless Paper безопаснее собирать с `-j 1`:
 
 ```powershell
+pio run -e Heltec_v3_companion_radio_ble_smartui -t mergebin
 pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
 pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j 1
 ```
@@ -76,14 +78,17 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
 
-Публичные stems `v2.1.0-beta.2`:
+Публичные stems `v2.1.0-experimental.1`:
 
 ```text
-Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2
-Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2
+Heltec_V3_OLED_SmartUI_2.1.0-experimental.1
+Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1
+Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1
 ```
 
 К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
+V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/зуммер. Не подменяйте его
+сборкой V4.3 только потому, что дисплеи одинакового размера.
 
 ## Сразу писать публичные имена
 
@@ -92,13 +97,13 @@ Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-beta.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-experimental.1.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-beta.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-experimental.1.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -108,11 +113,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-beta.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-experimental.1.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-beta.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-experimental.1.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -128,13 +133,21 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Готовые результаты всех пяти сборок можно собрать одним действием. Укажите новую, ещё не существующую папку:
+Старый упаковщик предназначен только для исходной матрицы пяти плат
+(T096/T114/ProMicro/V4.3/Paper), без V3. Укажите новую, ещё не существующую папку:
 
 ```powershell
-python tools/package_smartui_release.py ../SmartUI-dev2-release
+python tools/package_smartui_release.py ../SmartUI-experimental1-baseline-five
 ```
 
-Скрипт берёт файлы из `.pio/build`, проверяет UF2 и пары BIN, создаёт оба SHA-256 манифеста и общий ZIP. Он не прошивает платы и не публикует ничего на GitHub. Существующую папку не перезаписывает.
+Скрипт берёт файлы из `.pio/build`, проверяет UF2 и пары BIN, создаёт оба SHA-256 манифеста и ZIP пяти плат. Он не прошивает платы и не публикует ничего на GitHub. Существующую папку не перезаписывает.
+
+V3 добавляется отдельной парой BIN и проверяется `tools/validate_release_v3.py`;
+его дополнение упаковывается отдельным `tools/package_smartui_v3_addon.py`.
+При дополнении уже опубликованного эксперимента не пересобирайте и не заменяйте
+пять исходных файловых наборов. Дополнение имеет собственный commit; общий
+архив шести плат должен указывать происхождение каждого набора, а не выдавать
+все бинарники за сборку одного исходного тега.
 
 PowerShell:
 
@@ -182,6 +195,7 @@ SmartUI использует особые модели дисплеев. Для 
 - T096: 160×80, реальные glyph bitmap и `xAdvance`, threshold 104;
 - T114: logical 128×64 → physical 240×135, scale `1.875 × 2.109375`, `Y_OFFSET=1`, threshold 92;
 - ProMicro: 128×64, реальные массивы `Utf8Cyrillic5x7.h`, пять spacing styles.
+- V3 OLED: 128×64, тот же реальный компактный драйвер и пять стилей; отдельная матрица без GPS/FEM/зуммера, не подмена GPS-сценой V4.3.
 - V4.3 OLED: та же реальная OLED glyph-table, но отдельная GPS/mute/battery матрица.
 - Wireless Paper: физические 250×122, 1-bit, реальные пять E213 renderer-profile и e-paper clipping.
 

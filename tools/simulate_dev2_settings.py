@@ -243,9 +243,9 @@ def help_labels():
 
 def root_menu(profile,cursor=0):
     labels=["Избранное","Уведомления","Звук и вибро","Экран",
-            "Радио" if profile.board in ("OLED","Wireless Paper") else "Радио и GPS",
+            "Радио" if profile.board in ("OLED","Wireless Paper","Heltec V3") else "Радио и GPS",
             "Система","Дополнительно","Закрыть"]
-    if profile.board in ("Wireless Paper","V4.3"): labels.remove("Звук и вибро")
+    if profile.board in ("Wireless Paper","V4.3","Heltec V3"): labels.remove("Звук и вибро")
     frame=SettingsFrame(profile,"Настройки",True)
     cursor=min(cursor,len(labels)-1)
     heading(frame,"Настройки","Закрыть" if cursor==len(labels)-1 else "Открыть")

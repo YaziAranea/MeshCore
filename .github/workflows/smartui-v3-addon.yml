@@ -1,0 +1,100 @@
+name: SmartUI experimental Heltec V3 add-on
+
+on:
+  push:
+    branches: [smartui-2.1-experimental.1]
+    paths:
+      - .github/workflows/smartui-v3-addon.yml
+      - variants/heltec_v3/**
+      - tools/validate_release_v3.py
+      - tools/simulate_heltec_v3_smartui_qa.py
+      - tools/package_smartui_v3_addon.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: smartui-v3-addon-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-v3:
+    name: Heltec V3 OLED merged and update BIN
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11'
+      - name: Restore PlatformIO dependencies
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            ~/.cache/pip
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            .pio/libdeps/Heltec_v3_companion_radio_ble_smartui
+          key: ${{ runner.os }}-${{ runner.arch }}-pio-6.1.19-Heltec_v3_companion_radio_ble_smartui-${{ hashFiles('platformio.ini', 'variants/**/*.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-pio-6.1.19-Heltec_v3_companion_radio_ble_smartui-
+            ${{ runner.os }}-${{ runner.arch }}-pio-6.1.19-Heltec_v3_companion_radio_ble-
+            ${{ runner.os }}-${{ runner.arch }}-pio-6.1.19-
+      - name: Install PlatformIO
+        run: python -m pip install --disable-pip-version-check platformio==6.1.19
+      - name: Build the board-specific images
+        shell: bash
+        run: |
+          set -euo pipefail
+          pio run -e Heltec_v3_companion_radio_ble_smartui -t mergebin
+          mkdir -p firmware
+          build_dir=.pio/build/Heltec_v3_companion_radio_ble_smartui
+          stem=Heltec_V3_OLED_SmartUI_2.1.0-experimental.1
+          cp "${build_dir}/firmware-merged.bin" "firmware/${stem}-freshInstall-merged.bin"
+          cp "${build_dir}/firmware.bin" "firmware/${stem}-update.bin"
+          python tools/validate_release_v3.py firmware
+      - name: Upload validated V3 pair
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: smartui-experimental-v3-validated-bin
+          path: firmware/*
+          if-no-files-found: error
+          retention-days: 30
+
+  v3-ui-qa:
+    name: V3 OLED profiles and interaction geometry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11'
+      - name: Install QA dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-qa.txt platformio==6.1.19
+      - name: Check V3 profile and simulate all five OLED fonts
+        run: |
+          python tools/audit_smartui_ps17_contract.py
+          python tools/simulate_heltec_v3_smartui_qa.py
+      - name: Exercise actual UI handlers
+        run: |
+          python tools/test_quick_target_flow.py
+          python tools/test_settings_flow.py
+      - name: Upload V3 pixel checks
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: smartui-experimental-v3-ui-qa
+          path: qa_outputs/v3-addon
+          if-no-files-found: error
+          retention-days: 14
+
+  addon-gate:
+    name: V3 add-on ready for existing release
+    needs: [build-v3, v3-ui-qa]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'V3 pair and UI checks passed; existing tag and five-board assets stay immutable.'

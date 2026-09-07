@@ -708,6 +708,8 @@ def main() -> None:
                  columns=2, native_scale=2).save(OUT / "theme-catalog-t114.png")
     oled_font_samples().save(OUT / "font-catalog-promicro-ra62.png")
     generate_esp32_docs_assets()
+    from simulate_heltec_v3_smartui_qa import run as generate_v3_addon
+    generate_v3_addon(ROOT / "qa_outputs/v3-addon", OUT)
     print(OUT)
 
 
