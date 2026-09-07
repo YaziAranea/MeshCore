@@ -2,6 +2,7 @@
 
 #include "ST7789Display.h"
 #include "EmbeddedBitmapFonts.h"
+#include "BitmapTextMetrics.h"
 #include "Utf8Cyrillic5x7.h"
 
 #ifndef X_OFFSET
@@ -247,6 +248,16 @@ const MeshcoreBitmapGlyph* ST7789Display::glyphForCodepoint(uint16_t codepoint) 
 
 uint8_t ST7789Display::fontLineHeight() const {
   return physicalToLogicalY(currentFont()->height * fontRenderScale());
+}
+
+int16_t ST7789Display::getTextInkTop() const {
+  int top = meshcoreBitmapCapitalInk(currentFont()).top * fontRenderScale();
+  // Metrics are logical offsets; Y_OFFSET belongs to setCursor(), not here.
+  return (int16_t)((float)top / SCALE_Y);
+}
+
+uint8_t ST7789Display::getTextInkHeight() const {
+  return physicalToLogicalY(meshcoreBitmapCapitalInk(currentFont()).height * fontRenderScale());
 }
 
 void ST7789Display::setUiFont(uint8_t font_id) {

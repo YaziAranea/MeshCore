@@ -39,6 +39,10 @@ public:
   virtual void setTextSize(int sz) = 0;
   virtual void setBold(bool bold) { (void)bold; }
   virtual uint8_t getTextLineHeight() const { return 11; }
+  // Visible capital-letter band relative to setCursor(y), not line spacing.
+  // Inline symbols use this to align with text instead of its bottom padding.
+  virtual int16_t getTextInkTop() const { return 0; }
+  virtual uint8_t getTextInkHeight() const { return getTextLineHeight(); }
   virtual void setUiFont(uint8_t font_id) { (void)font_id; }
   virtual uint8_t getUiFont() const { return 0; }
   virtual uint8_t getUiFontCount() const { return 1; }

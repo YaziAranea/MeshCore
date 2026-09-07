@@ -25,16 +25,12 @@ class ImagePair:
 
 EXPECTED = (
     ImagePair(
-        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1",
-        b"V4.3 OLED SmartUI 2.1.0-beta.1",
+        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2",
+        b"V4.3 OLED SmartUI 2.1.0-beta.2",
     ),
     ImagePair(
-        "Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1",
-        b"Wireless Paper SmartUI 2.1.0-beta.1 WOOD",
-    ),
-    ImagePair(
-        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1",
-        b"Wireless Paper SmartUI 2.1.0-beta.1 FULL",
+        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2",
+        b"Wireless Paper SmartUI 2.1.0-beta.2 FULL",
     ),
 )
 
@@ -81,7 +77,7 @@ def main() -> int:
         nargs="?",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "firmware",
-        help="directory containing the three ESP32-S3 BIN pairs",
+        help="directory containing the two ESP32-S3 BIN pairs",
     )
     args = parser.parse_args()
 

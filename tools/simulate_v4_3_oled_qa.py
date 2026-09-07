@@ -9,6 +9,8 @@ from the GPS-less ProMicro profile.
 from __future__ import annotations
 
 import argparse
+import re
+from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -17,39 +19,35 @@ from simulate_oled_128x64 import H, SCALE, STYLES, W, Oled, font
 
 
 SCENES = ("GPS OFF + mute", "GPS ON + mute", "GPS ON", "ADC calibration", "BLE PIN")
-UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 12 * 3600, 3 * 86400, 2000 * 86400)
+UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 40 * 3600 + 5 * 60,
+                  3 * 86400, 2000 * 86400, 999999 * 3600 + 59 * 60)
 STATUS_ICON_SIZE = 8
 BATTERY_ICON_X = W - 18 - 2
 
 
 def format_clock_uptime(seconds: int) -> str:
     """Exact host equivalent of smartui::formatClockUptime()."""
-    if seconds < 3600:
-        return f"U {seconds // 60}m"
-    if seconds < 86400:
-        return f"U {seconds // 3600}h"
-    days = seconds // 86400
-    return "U 999+d" if days > 999 else f"U {days}d"
+    return f"U {seconds // 3600}h{seconds // 60 % 60:02d}m"
 
 
 def clock_uptime_placement(
     oled: Oled, left_used: int, right_used: int, seconds: int
 ) -> tuple[str, int, int, int] | None:
-    """Mirror drawClockUptimeBetween(), including its no-space fallback."""
+    """Full-width row under the clock; neighbors no longer steal its space."""
     full = format_clock_uptime(seconds)
     for text, gap in ((full, 3), (full.replace(" ", "", 1), 2)):
         width = oled.text_width(text)
-        right = right_used - gap
-        left = right - width
-        if left >= left_used + gap:
+        left = (W - width) // 2
+        right = left + width
+        if left >= gap and right <= W - gap:
             return text, left, right, gap
     return None
 
 
 def draw_firmware_battery(oled: Oled, milli_volts: int = 4090) -> int:
     """Generic HomeScreen battery geometry used by V4.3 and ProMicro."""
-    icon_w, icon_h = 18, 10
-    icon_x, icon_y = W - icon_w - 2, 2
+    icon_w, icon_h = 18, 8
+    icon_x, icon_y = W - icon_w - 2, 0
     voltage = f"{milli_volts // 1000}.{(milli_volts % 1000) // 10:02d}V"
     voltage_x = icon_x - oled.text_width(voltage) - 3
     oled.text(voltage_x, 0, voltage)
@@ -62,23 +60,35 @@ def draw_firmware_battery(oled: Oled, milli_volts: int = 4090) -> int:
     return voltage_x
 
 
+@lru_cache(maxsize=16)
+def firmware_mute_pixels(size: int) -> tuple[tuple[int, int], ...]:
+    """Read the checked-in pack, never a visually similar replacement."""
+    header = (Path(__file__).resolve().parents[1] /
+              "examples/companion_radio/ui-new/iconpack_v1.h").read_text(encoding="utf-8")
+    small = size < 12
+    name = "iconpack_v2_small_mute" if small else "iconpack_v1_mute"
+    match = re.search(rf"{name}\[\d+\] PROGMEM = \{{(.*?)\}};", header, re.S)
+    assert match, name
+    rows = [int(v, 16) for v in re.findall(r"0x[0-9a-fA-F]+", match.group(1))]
+    grid = 8 if small else 12
+    pixels = []
+    for yy in range(size):
+        sy = min(grid-1, ((yy*2+1)*grid)//(size*2))
+        for xx in range(size):
+            sx = min(grid-1, ((xx*2+1)*grid)//(size*2))
+            if rows[sy] & (1 << (grid-1-sx)):
+                pixels.append((xx, yy))
+    return tuple(pixels)
+
+
 def draw_firmware_mute(oled: Oled, x: int, y: int, size: int = STATUS_ICON_SIZE) -> None:
-    """Exact procedural uiIconDrawMute() raster."""
-    grid = 12
-    for gx, gy, gw, gh in ((1, 5, 3, 3), (4, 4, 2, 5)):
-        x1 = x + (gx * size) // grid
-        y1 = y + (gy * size) // grid
-        x2 = x + ((gx + gw) * size + grid - 1) // grid
-        y2 = y + ((gy + gh) * size + grid - 1) // grid
-        oled.draw.rectangle((x1, y1, max(x1, x2 - 1), max(y1, y2 - 1)), fill=1)
-    diag_size = size - 2
-    for index in range(diag_size):
-        oled.draw.point((x + 1 + index, y + 1 + diag_size - 1 - index), fill=1)
+    for xx, yy in firmware_mute_pixels(size):
+        oled.draw.point((x+xx, y+yy), fill=1)
 
 
 def clock_scene(
     style: tuple[str, int, bool], gps_label: str, muted: bool,
-    uptime_seconds: int = 12 * 3600,
+    uptime_seconds: int = 40 * 3600 + 5 * 60,
 ) -> tuple[Image.Image, list[str]]:
     oled = Oled(style)
     voltage_x = BATTERY_ICON_X - oled.text_width("4.09V") - 3
@@ -96,26 +106,16 @@ def clock_scene(
 
     oled.text(0, 0, gps_label)
     if muted and mute_x + STATUS_ICON_SIZE <= name_right:
-        draw_firmware_mute(oled, mute_x, 1)
+        draw_firmware_mute(oled, mute_x, 0)
         status_right = mute_x + STATUS_ICON_SIZE
     placement = clock_uptime_placement(oled, status_right, name_right, uptime_seconds)
     if placement is not None:
         uptime, uptime_left, uptime_right, gap = placement
-        if uptime_left < status_right + gap:
-            oled.overflows.append(
-                f"{style[0]}: uptime starts at {uptime_left}, status ends at {status_right}, gap={gap}"
-            )
-        if uptime_right > name_right - gap:
-            oled.overflows.append(
-                f"{style[0]}: uptime ends at {uptime_right}, battery starts at {name_right}, gap={gap}"
-            )
-        oled.text(uptime_right, 0, uptime, right=True)
+        if uptime_left < gap or uptime_right > W - gap:
+            oled.overflows.append(f"{style[0]}: uptime row escapes screen")
+        oled.text(uptime_right, 34, uptime, right=True)
     else:
-        # Hiding is valid only if both exact firmware candidates really do not fit.
-        full = format_clock_uptime(uptime_seconds)
-        if (name_right - 3 - oled.text_width(full) >= status_right + 3 or
-                name_right - 2 - oled.text_width(full.replace(" ", "", 1)) >= status_right + 2):
-            oled.overflows.append(f"{style[0]}: uptime hidden despite available room")
+        oled.overflows.append(f"{style[0]}: uptime unexpectedly hidden under clock")
     actual_battery_left = draw_firmware_battery(oled)
     if actual_battery_left != voltage_x:
         oled.overflows.append(
@@ -127,8 +127,9 @@ def clock_scene(
             oled.draw.rectangle((x - 1, 13, x + 1, 15), fill=1)
         else:
             oled.draw.point((x, 14), fill=1)
-    oled.text(W // 2, 18, "17:08", center=True, size=3)
+    oled.text(W // 2, 18, "17:08", center=True, size=2)
     oled.text(0, 45, "CH1.2% A0.03%", max_width=96)
+    oled.text(0, 55, "MSG/h 5", max_width=76)
     oled.text(W - 1, 55, "29C", right=True)
     return oled.img, oled.overflows
 
@@ -149,8 +150,7 @@ def ble_pin_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]
     voltage_width = oled.text_width(voltage)
     name_right = BATTERY_ICON_X - voltage_width - 5
     oled.ellipsized(0, 0, "Heltec V4.3", name_right)
-    oled.text(BATTERY_ICON_X - 3, 0, voltage, right=True)
-    oled.battery(W - 16, 1, 82)
+    draw_firmware_battery(oled)
 
     page_count, active = 7, 1
     step = 10
@@ -181,7 +181,7 @@ def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, 
 
 
 def validate_uptime_sweep() -> tuple[int, list[str]]:
-    """Exercise every compact value against V4.3 and GPS-less ProMicro chrome."""
+    """Hours/minutes must remain visible in their own row on both OLED boards."""
     checks = 0
     failures: list[str] = []
     for style in STYLES:
@@ -203,20 +203,13 @@ def validate_uptime_sweep() -> tuple[int, list[str]]:
                     placement = clock_uptime_placement(oled, status_right, right_used, seconds)
                     checks += 1
                     if placement is None:
-                        full = format_clock_uptime(seconds)
-                        full_fits = right_used - 3 - oled.text_width(full) >= status_right + 3
-                        compact = full.replace(" ", "", 1)
-                        compact_fits = right_used - 2 - oled.text_width(compact) >= status_right + 2
-                        if full_fits or compact_fits:
-                            failures.append(
-                                f"{board} / {style[0]} / {seconds}s: hidden though a candidate fits"
-                            )
+                        failures.append(f"{board} / {style[0]} / {seconds}s: uptime hidden")
                         continue
                     text, left, right, gap = placement
-                    if left < status_right + gap or right > right_used - gap:
+                    if left < gap or right > W - gap:
                         failures.append(
                             f"{board} / {style[0]} / {seconds}s: {text} at {left}..{right} "
-                            f"escapes {status_right}..{right_used} with gap {gap}"
+                            f"escapes screen with gap {gap}"
                         )
     return checks, failures
 

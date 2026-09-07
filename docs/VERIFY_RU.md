@@ -4,7 +4,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 ## Где находится эталон
 
-Для Release `v2.1.0-beta.1` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.1):
+Для Release `v2.1.0-beta.2` скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2):
 
 - UF2 или BIN своей платы;
 - `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
@@ -12,7 +12,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 Неопубликованные development-сборки можно взять из [GitHub Actions](https://github.com/YaziAranea/MeshCore/actions/workflows/smartui-ci.yml):
 
 - артефакт `smartui-ps17-validated-uf2` содержит три UF2 и `SHA256SUMS.txt`;
-- артефакт `smartui-ps17-validated-esp32-bin` содержит V4.3/оба Wireless Paper профиля и `SHA256SUMS-ESP32.txt`.
+- артефакт `smartui-ps17-validated-esp32-bin` содержит V4.3/Wireless Paper FULL и `SHA256SUMS-ESP32.txt`.
 
 GitHub хранит артефакт как ZIP. Распакуйте бинарники и их манифест в одну папку. Не сравнивайте файл одного Release/CI-run с манифестом другого.
 
@@ -21,14 +21,14 @@ GitHub хранит артефакт как ZIP. Распакуйте бинар
 Для одного файла:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-beta.1.uf2
+Get-FileHash -Algorithm SHA256 .\T096_FEM_SmartUI_2.1.0-beta.2.uf2
 ```
 
 или:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-beta.1.uf2
-Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2
+Get-FileHash -Algorithm SHA256 .\T114_SmartUI_2.1.0-beta.2.uf2
+Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2
 ```
 
 Скопируйте полученную 64-символьную строку и сравните её с соответствующей строкой своего манифеста. Регистр букв не важен; каждый символ важен.
@@ -62,7 +62,7 @@ if ($failed) { throw 'SHA-256 verification failed' }
 ## Windows без PowerShell
 
 ```text
-certutil -hashfile T096_FEM_SmartUI_2.1.0-beta.1.uf2 SHA256
+certutil -hashfile T096_FEM_SmartUI_2.1.0-beta.2.uf2 SHA256
 ```
 
 ## Linux
@@ -78,7 +78,7 @@ sha256sum -c SHA256SUMS-ESP32.txt
 Для одного файла:
 
 ```bash
-shasum -a 256 T096_FEM_SmartUI_2.1.0-beta.1.uf2
+shasum -a 256 T096_FEM_SmartUI_2.1.0-beta.2.uf2
 ```
 
 ## Если сумма не совпала

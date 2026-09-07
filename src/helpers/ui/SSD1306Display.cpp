@@ -1,6 +1,7 @@
 #include "SSD1306Display.h"
 #if SSD1306_USE_EMBEDDED_FONTS
 #include "EmbeddedBitmapFonts.h"
+#include "BitmapTextMetrics.h"
 #endif
 #include "Utf8Cyrillic5x7.h"
 
@@ -380,6 +381,24 @@ uint8_t SSD1306Display::fontLineHeight() const {
   if (!useLegacyFont()) return currentFont()->height * _text_size;
 #endif
   return 8 * _text_size;
+}
+
+int16_t SSD1306Display::getTextInkTop() const {
+#if SSD1306_USE_EMBEDDED_FONTS
+  if (!useLegacyFont()) {
+    return meshcoreBitmapCapitalInk(currentFont()).top * _text_size;
+  }
+#endif
+  return 0;
+}
+
+uint8_t SSD1306Display::getTextInkHeight() const {
+#if SSD1306_USE_EMBEDDED_FONTS
+  if (!useLegacyFont()) {
+    return meshcoreBitmapCapitalInk(currentFont()).height * _text_size;
+  }
+#endif
+  return 7 * _text_size;
 }
 
 void SSD1306Display::setUiFont(uint8_t font_id) {

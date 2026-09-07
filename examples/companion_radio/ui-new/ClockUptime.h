@@ -6,22 +6,22 @@
 
 namespace smartui {
 
-// Compact, deliberately low-churn text for small and e-paper clock screens.
-// The value changes once a minute/hour/day instead of every second.
+// Hours never wrap at midnight or turn into days. Minute precision avoids
+// unnecessary second-by-second e-paper updates.
 inline void formatClockUptime(char* out, size_t out_len, uint64_t uptime_seconds) {
   if (out == NULL || out_len == 0) return;
-  if (uptime_seconds < 3600ULL) {
-    snprintf(out, out_len, "U %lum", (unsigned long)(uptime_seconds / 60ULL));
-  } else if (uptime_seconds < 86400ULL) {
-    snprintf(out, out_len, "U %luh", (unsigned long)(uptime_seconds / 3600ULL));
-  } else {
-    uint64_t days = uptime_seconds / 86400ULL;
-    if (days > 999ULL) {
-      snprintf(out, out_len, "U 999+d");
-    } else {
-      snprintf(out, out_len, "U %lud", (unsigned long)days);
-    }
-  }
+  // nRF builds link newlib-nano without printf long-long support. Convert
+  // the hours ourselves instead of relying on a host-only working %llu.
+  char hours[21];
+  unsigned pos = sizeof(hours) - 1;
+  hours[pos] = '\0';
+  uint64_t value = uptime_seconds / 3600ULL;
+  do {
+    hours[--pos] = char('0' + value % 10ULL);
+    value /= 10ULL;
+  } while (value != 0);
+  snprintf(out, out_len, "U %sh%02um", hours + pos,
+           (unsigned)((uptime_seconds / 60ULL) % 60ULL));
 }
 
 // Returns the x coordinate for drawTextRightAlign(), or -1 if the real font

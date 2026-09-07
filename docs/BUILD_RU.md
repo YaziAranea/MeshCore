@@ -17,10 +17,10 @@
 ```powershell
 git clone https://github.com/YaziAranea/MeshCore.git
 Set-Location MeshCore
-git switch smartui-2.1-beta.1
+git switch smartui-2.1-beta.2
 ```
 
-Стабильный RC находится в `smartui-ps17.1`; текущая beta для пяти плат — в `smartui-2.1-beta.1`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Стабильный RC находится в `smartui-ps17.1`; текущая beta для пяти плат — в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -30,7 +30,6 @@ git switch smartui-2.1-beta.1
 | T114 | `Heltec_t114_companion_radio_ble` | UF2 |
 | ProMicro RA62 | `ProMicro_ra62_companion_radio_ble` | UF2 |
 | Heltec V4.3 OLED FEM ON | `heltec_v4_3_companion_radio_ble_femon_smartui` | merged + update BIN |
-| Wireless Paper WOOD | `Heltec_Wireless_Paper_companion_radio_ble_smartui_wood` | merged + update BIN |
 | Wireless Paper FULL | `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` | merged + update BIN |
 
 FakeTec, V4 TFT и обычный Heltec V3 не входят в набор релизных файлов. Отдельная compile-only матрица CI проверяет общие display-драйверы на `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это не заявление поддержки этих плат в Release.
@@ -65,7 +64,6 @@ pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 ```powershell
 pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
-pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_wood -t mergebin -j 1
 pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j 1
 ```
 
@@ -78,12 +76,11 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
 
-Публичные stems `v2.1.0-beta.1`:
+Публичные stems `v2.1.0-beta.2`:
 
 ```text
-Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1
-Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1
-Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1
+Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2
+Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2
 ```
 
 К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
@@ -95,13 +92,13 @@ Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-beta.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-beta.2.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-beta.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-beta.2.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -111,11 +108,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-beta.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-beta.2.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-beta.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-beta.2.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -131,7 +128,7 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Готовые результаты всех шести сборок можно собрать одним действием. Укажите новую, ещё не существующую папку:
+Готовые результаты всех пяти сборок можно собрать одним действием. Укажите новую, ещё не существующую папку:
 
 ```powershell
 python tools/package_smartui_release.py ../SmartUI-dev2-release
@@ -229,7 +226,7 @@ python tools/generate_docs_assets.py
 
 ## Размеры текущего выпуска
 
-Размеры `v2.1.0-beta.1` берите из [его release notes](../RELEASE_NOTES_v2.1.0-beta.1_RU.md) и финального отчёта линковщика. Число изменённых байт исходников не равно автоматически изменению всего бинарника: код и выравнивание тоже меняются. История предыдущих размеров сохранена в примечаниях соответствующих версий.
+Размеры `v2.1.0-beta.2` берите из [его release notes](../RELEASE_NOTES_v2.1.0-beta.2_RU.md) и финального отчёта линковщика. Число изменённых байт исходников не равно автоматически изменению всего бинарника: код и выравнивание тоже меняются. История предыдущих размеров сохранена в примечаниях соответствующих версий.
 
 ## Стабильный baseline: размеры v2.0.0-rc1
 

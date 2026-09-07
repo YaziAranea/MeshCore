@@ -27,18 +27,24 @@ TEST(UiTiming, OptionalAndImmediateDeadlinesKeepZeroSemantics) {
   EXPECT_TRUE(smartui::deadlineDueOrImmediate(0xFFFFFFF0U, 0U));
 }
 
-TEST(ClockUptime, UsesCompactLowChurnUnits) {
-  char text[12];
+TEST(ClockUptime, AlwaysShowsTotalHoursAndMinutes) {
+  char text[32];
   smartui::formatClockUptime(text, sizeof(text), 59);
-  EXPECT_STREQ("U 0m", text);
+  EXPECT_STREQ("U 0h00m", text);
   smartui::formatClockUptime(text, sizeof(text), 12 * 60);
-  EXPECT_STREQ("U 12m", text);
+  EXPECT_STREQ("U 0h12m", text);
   smartui::formatClockUptime(text, sizeof(text), 7 * 3600);
-  EXPECT_STREQ("U 7h", text);
+  EXPECT_STREQ("U 7h00m", text);
   smartui::formatClockUptime(text, sizeof(text), 3 * 86400);
-  EXPECT_STREQ("U 3d", text);
+  EXPECT_STREQ("U 72h00m", text);
   smartui::formatClockUptime(text, sizeof(text), 2000ULL * 86400ULL);
-  EXPECT_STREQ("U 999+d", text);
+  EXPECT_STREQ("U 48000h00m", text);
+  smartui::formatClockUptime(text, sizeof(text), 40ULL * 3600 + 5 * 60 + 59);
+  EXPECT_STREQ("U 40h05m", text);
+  smartui::formatClockUptime(text, sizeof(text), 0x100000000ULL / 1000);
+  EXPECT_STREQ("U 1193h02m", text);
+  smartui::formatClockUptime(text, sizeof(text), UINT64_MAX);
+  EXPECT_STREQ("U 5124095576030431h00m", text);
 }
 
 TEST(ClockUptime, PlacementUsesMeasuredWidthAndNeverOverlapsNeighbours) {

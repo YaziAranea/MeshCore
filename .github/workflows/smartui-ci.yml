@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - smartui-ps17.2-dev
-      - smartui-2.1-beta.1
+      # Release branches are validated once, by their immutable release tag.
     tags:
-      - v2.1.0-beta.1
+      - v2.1.0-beta.2
   pull_request:
   workflow_dispatch:
 
@@ -32,15 +32,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-beta.1.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-beta.2.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-beta.1.uf2
+            uf2_name: T114_SmartUI_2.1.0-beta.2.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-beta.1.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-beta.2.uf2
 
     steps:
       - name: Check out source
@@ -137,15 +137,11 @@ jobs:
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.1
-          - board: Heltec Wireless Paper WOOD
-            artifact_id: wireless-paper-wood
-            environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_wood
-            stem: Heltec_Wireless_Paper_WOOD_SmartUI_2.1.0-beta.1
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-beta.2
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.1
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-beta.2
 
     steps:
       - name: Check out source
@@ -328,6 +324,8 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
+          # The actual C++ icon regression renderer compares with the beta.1 tag.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -344,6 +342,12 @@ jobs:
 
       - name: Check SSD1306 font profile guards
         run: python tools/test_ssd1306_font_profiles.py
+
+      - name: Check actual C++ icons on every display backend
+        run: python tools/simulate_icon_alignment_beta2.py --out qa_outputs/icon_alignment_beta2
+
+      - name: Check clock rows with every real T096 and T114 font
+        run: python -c "import sys; sys.path.insert(0,'tools'); from generate_docs_assets import validate_clock_asset_layouts; validate_clock_asset_layouts()"
 
       - name: Run exact display simulation
         run: python tools/simulate_smartui_ps17_qa.py --out-dir qa_outputs/ci
@@ -380,11 +384,11 @@ jobs:
 
   publish-beta-release:
     name: Publish or update beta release
-    if: github.ref == 'refs/tags/v2.1.0-beta.1'
+    if: github.ref == 'refs/tags/v2.1.0-beta.2'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-beta-release-v2.1.0-beta.1
+      group: publish-beta-release-v2.1.0-beta.2
       cancel-in-progress: false
     permissions:
       contents: write
@@ -412,7 +416,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp RELEASE_NOTES_v2.1.0-beta.1_RU.md release/
+          cp RELEASE_NOTES_v2.1.0-beta.2_RU.md release/
           python - <<'PY'
           import hashlib
           import json
@@ -420,6 +424,9 @@ jobs:
           import zipfile
 
           root = Path("release")
+          notes = root / "RELEASE_NOTES_v2.1.0-beta.2_RU.md"
+          assert notes.is_file(), "Release notes are required"
+          assert "RELEASE_FINALIZATION" not in notes.read_text(encoding="utf-8"), "Release notes are unfinished"
           payloads = sorted(
               p for p in root.iterdir()
               if p.suffix in {".uf2", ".bin", ".txt", ".md"}
@@ -438,7 +445,7 @@ jobs:
           }
           manifest_path = root / "RELEASE-MANIFEST.json"
           manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-          archive = root / "MeshCore_SmartUI_2.1.0-beta.1_all-five-boards.zip"
+          archive = root / "MeshCore_SmartUI_2.1.0-beta.2_all-five-boards.zip"
           with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
               for path in payloads + [manifest_path]:
                   zf.write(path, path.name)
@@ -451,8 +458,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          title="MeshCore SmartUI v2.1.0-beta.1"
-          notes="RELEASE_NOTES_v2.1.0-beta.1_RU.md"
+          title="MeshCore SmartUI v2.1.0-beta.2 (БЕТА)"
+          notes="RELEASE_NOTES_v2.1.0-beta.2_RU.md"
           release_json="$(mktemp)"
           trap 'rm -f "$release_json"' EXIT
           status="$({
@@ -467,37 +474,16 @@ jobs:
 
           case "$status" in
             200)
-              # Keep the same release page for this tag and explicitly retain
-              # its published prerelease state before replacing its assets.
-              gh release edit "$tag" \
-                --title "$title" \
-                --notes-file "$notes" \
-                --prerelease \
-                --draft=false \
-                --verify-tag \
-                --repo "$GITHUB_REPOSITORY"
-
-              release_id="$(python -c \
-                'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["id"])' \
-                "$release_json")"
-              old_asset_ids="$(gh api --paginate \
-                "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
-                --jq '.[].id')"
-              if [[ -n "$old_asset_ids" ]]; then
-                while IFS= read -r asset_id; do
-                  gh api --method DELETE \
-                    "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
-                done <<< "$old_asset_ids"
-              fi
-
-              gh release upload "$tag" release/* \
+              # A rerun updates this tag's existing page. Replace matching files
+              # one by one; do not empty the entire published release first.
+              gh release upload "$tag" release/* --clobber \
                 --repo "$GITHUB_REPOSITORY"
               ;;
             404)
               gh release create "$tag" release/* \
                 --title "$title" \
                 --notes-file "$notes" \
-                --prerelease \
+                --draft \
                 --verify-tag \
                 --repo "$GITHUB_REPOSITORY"
               ;;
@@ -507,3 +493,42 @@ jobs:
               exit 1
               ;;
           esac
+
+          # New releases remain drafts until all 12 expected assets have arrived.
+          # A beta is public and Latest, with the warning in its title and notes;
+          # it deliberately does not use GitHub's prerelease visibility flag.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "$release_json"
+          python - "$release_json" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+
+          local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
+          remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assets = {a["name"]: a for a in remote["assets"]}
+          assert len(local) == 12, f"Expected 12 local assets, got {len(local)}"
+          assert len(remote["assets"]) == len(assets), "Duplicate asset names"
+          assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
+          for name, path in local.items():
+              asset = assets[name]
+              assert asset["state"] == "uploaded", f"Incomplete upload: {name}"
+              assert asset["size"] == path.stat().st_size > 0, f"Asset size mismatch: {name}"
+              if asset.get("digest"):
+                  expected = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+                  assert asset["digest"] == expected, f"Asset digest mismatch: {name}"
+          PY
+
+          gh release edit "$tag" \
+            --title "$title" \
+            --notes-file "$notes" \
+            --prerelease=false \
+            --draft=false \
+            --latest \
+            --verify-tag \
+            --repo "$GITHUB_REPOSITORY"
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+            --jq 'if .draft == false and .prerelease == false then .html_url else error("Release is not public") end'
+          latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          test "$latest_tag" = "$tag"

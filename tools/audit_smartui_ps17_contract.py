@@ -93,6 +93,8 @@ meshcore_h = read("src/MeshCore.h")
 nodeprefs = read("examples/companion_radio/NodePrefs.h")
 datastore = read("examples/companion_radio/DataStore.cpp")
 battery_policy = read("examples/companion_radio/ui-new/BatteryShutdownPolicy.h")
+battery_display_cache = read("examples/companion_radio/ui-new/BatteryDisplayCache.h")
+battery_display_tests = read("test/test_battery_display_cache/test_battery_display_cache.cpp")
 clock_uptime = read("examples/companion_radio/ui-new/ClockUptime.h")
 ui_timing = read("examples/companion_radio/ui-new/UiTiming.h")
 adc_ui_policy = read("examples/companion_radio/ui-new/AdcCalibrationUi.h")
@@ -137,7 +139,6 @@ config_sources = {
     "T114": read("variants/heltec_t114/platformio.ini"),
     "ProMicro": read("variants/promicro/platformio.ini"),
     "V4.3 OLED": read("variants/heltec_v4/platformio.ini"),
-    "Wireless Paper WOOD": read("variants/heltec_wireless_paper/platformio.ini"),
     "Wireless Paper FULL": read("variants/heltec_wireless_paper/platformio.ini"),
 }
 
@@ -146,7 +147,6 @@ target_sections = {
     "T114": "env:Heltec_t114_companion_radio_ble",
     "ProMicro": "env:ProMicro_ra62_companion_radio_ble",
     "V4.3 OLED": "env:heltec_v4_3_companion_radio_ble_femon_smartui",
-    "Wireless Paper WOOD": "env:Heltec_Wireless_Paper_companion_radio_ble_smartui_wood",
     "Wireless Paper FULL": "env:Heltec_Wireless_Paper_companion_radio_ble_smartui_full",
 }
 
@@ -279,7 +279,7 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-beta.1" in block,
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-beta.2" in block,
         "every public profile must use DM-only unread and carry the 2.1 beta marker",
     )
     check(
@@ -296,17 +296,18 @@ for name in keyboard_targets:
     )
 
 check(
-    "Wireless Paper WOOD avoids per-keystroke e-paper refresh",
-    "UI_QUICK_REPLY_KEYBOARD=1" not in effective["Wireless Paper WOOD"],
-    "the recommended WOOD profile deliberately omits the e-paper keyboard",
+    "Wireless Paper publishes one FULL keyboard profile without forest decoration",
+    "UI_QUICK_REPLY_KEYBOARD=1" in effective["Wireless Paper FULL"]
+    and "UI_EINK_FOREST_BACKDROP=0" in effective["Wireless Paper FULL"],
+    "the single Paper release must keep targeted typing and plain clock background",
 )
 
 check(
-    "Publication scope is five boards with two explicit Wireless Paper profiles",
+    "Publication scope is five boards with one Wireless Paper FULL profile",
     tuple(target_sections) == (
-        "T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper WOOD", "Wireless Paper FULL"
+        "T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FULL"
     ),
-    "keep the three nRF52 targets, V4.3 OLED and the two documented e-paper profiles",
+    "keep the three nRF52 targets, V4.3 OLED and one documented e-paper profile",
 )
 
 check(
@@ -333,7 +334,7 @@ check(
         gpsless_clock_guard + device_status,
         (
             "#if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1",
-            "drawUiIcon(display, name_x, 1, muted_icon, icon_size);",
+            "drawUiIcon(display, name_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);",
             "#elif defined(RADIO_FEM_RXGAIN)",
             'snprintf(tmp, sizeof(tmp), "Радио SX1262");',
         ),
@@ -384,7 +385,7 @@ check(
     "the requested target is the 128x64 OLED V4.3 with LNA/FEM, not TFT and not a fake tone pin",
 )
 
-for name in ("Wireless Paper WOOD", "Wireless Paper FULL"):
+for name in ("Wireless Paper FULL",):
     check(
         f"{name}: shared e-paper/LoRa rail is protected",
         has_all(
@@ -471,7 +472,7 @@ check(
 
 check(
     "Notification pages and favorite fallbacks follow board capabilities",
-    all("UI_NOTIFICATION_SETTINGS=0" in effective[name] for name in ("Wireless Paper WOOD", "Wireless Paper FULL"))
+    "UI_NOTIFICATION_SETTINGS=0" in effective["Wireless Paper FULL"]
     and has_all(
         uitask,
         (
@@ -776,15 +777,17 @@ paper_idle_clock = between(
     uitask, "static int renderPaperIdleClock", "class PaperIdleClockScreen"
 )
 check(
-    "Uptime exists only as collision-aware secondary text on every clock layout",
+    "Uptime uses total hours and minutes below the clock on every display layout",
     has_all(
         clock_uptime,
         (
             "formatClockUptime",
-            '"U %lum"',
-            '"U %luh"',
-            '"U %lud"',
-            '"U 999+d"',
+            '"U %sh%02um"',
+            "uptime_seconds / 3600ULL",
+            "hours[--pos] = char('0' + value % 10ULL);",
+            "value /= 10ULL;",
+            "while (value != 0);",
+            "(uptime_seconds / 60ULL) % 60ULL",
             "clockUptimeRightEdge",
             "if (left < (int32_t)left_used + gap) return -1;",
         ),
@@ -798,14 +801,25 @@ check(
             "display.drawTextRightAlign(right, y, text);",
         ),
     )
-    and uitask.count("drawClockUptimeBetween(display, _task") >= 6
+    and "86400" not in clock_uptime
+    and has_all(
+        uitask,
+        (
+            "drawClockUptimeBetween(display, _task, 0, display.width(), 35);",
+            "drawClockUptimeBetween(display, _task, 0, display.width(), 57);",
+            "int date_y = compact_clock ? 34 : 38;",
+            "drawClockUptimeBetween(display, _task, 0, date_left - 4, date_y);",
+            "int uptime_y = date_y;",
+            "drawClockUptimeBetween(display, _task, 0, display.width(), uptime_y);",
+        ),
+    )
     and has_all(
         paper_idle_clock,
         (
-            "formatClockUptime",
-            "display.getTextWidth(uptime_text)",
-            "int node_width = uptime_left - 8;",
-            "display.drawTextRightAlign(uptime_right, 4, uptime_text);",
+            "int node_width = battery_left - 8;",
+            "display.drawTextCentered(display.width() / 2, 34, tmp);",
+            "drawClockUptimeBetween(display, task, 45, 206, 67);",
+            "display.drawTextCentered(display.width() / 2, 83, tmp);",
         ),
     )
     and has_all(
@@ -814,13 +828,15 @@ check(
             "uint64_t _uptime_accumulated_ms;",
             "_uptime_accumulated_ms += (uint32_t)(now - _uptime_last_millis);",
             "updateUptime((uint32_t)millis());",
-            "UsesCompactLowChurnUnits",
+            "AlwaysShowsTotalHoursAndMinutes",
+            '"U 40h05m"',
+            '"U 1193h02m"',
             "PlacementUsesMeasuredWidthAndNeverOverlapsNeighbours",
         ),
     )
     and "HomePage::UPTIME" not in uitask
     and '"Аптайм"' not in uitask,
-    "T096/T114/ProMicro/V4 and both Wireless Paper clock paths must reserve real-font space; uptime must not consume a carousel/menu page",
+    "all five displays must reserve a below-clock measured text lane; 40 hours stays 40 hours, including millis rollover, with no uptime menu page",
 )
 
 check(
@@ -1037,7 +1053,8 @@ check(
             "medianBatteryReading(a, b, c)",
         ),
     )
-    and uitask.count("_board->getBattMilliVolts();") >= 4
+    and between(uitask, "smartui::BatteryReading UITask::readSafetyBattery", "bool UITask::hasTrustedTime").count("_board->getBattMilliVolts();") == 3
+    and "_battery_display" not in between(uitask, "smartui::BatteryReading UITask::readSafetyBattery", "bool UITask::hasTrustedTime")
     and has_all(
         native_policy_tests,
         (
@@ -1047,7 +1064,43 @@ check(
             "DeadlineComparisonSurvivesMillisWrap",
         ),
     ),
-    "0 alone means unavailable; every nonzero undervoltage must count, display EMA must not feed shutdown, and the 3.2/2.7 V policy must survive millis rollover",
+    "0 alone means unavailable; every nonzero undervoltage must count, the display cache must not feed shutdown, and the 3.2/2.7 V policy must survive millis rollover",
+)
+
+check(
+    "Display voltage uses a fresh median within one second and invalidates on wake/calibration",
+    has_all(
+        battery_display_cache,
+        (
+            "if (!_sampled || static_cast<uint32_t>(now - _sampled_at) >= interval_ms)",
+            "const uint16_t a = read_mv();",
+            "const uint16_t b = read_mv();",
+            "const uint16_t c = read_mv();",
+            "_millivolts = medianBatteryReading(a, b, c).millivolts;",
+            "_sampled = false;",
+        ),
+    )
+    and "#define UI_BATTERY_SAMPLE_MILLIS 1000UL" in uitask_h
+    and all(int(interval) <= 1000 for block in effective.values()
+            for interval in re.findall(r"UI_BATTERY_SAMPLE_MILLIS=(\d+)", block))
+    and has_all(
+        between(uitask, "uint16_t UITask::getBattMilliVolts() const", "smartui::BatteryReading UITask::readSafetyBattery"),
+        ("_battery_display.read((uint32_t)millis(), UI_BATTERY_SAMPLE_MILLIS,",
+         "_board ? _board->getBattMilliVolts() : 0"),
+    )
+    and "invalidateBatteryCache();" in wake_block
+    and between(uitask, "bool UITask::setAdcMultiplier", "void UITask::toggleBuzzer").count("invalidateBatteryCache();") >= 3
+    and has_all(
+        battery_display_tests,
+        (
+            "RisingAndFallingStepsHaveNoHistoricSmoothing",
+            "SlowPaperRefreshUsesPresentVoltageImmediately",
+            "WakeAndCalibrationInvalidationBypassCacheInterval",
+            "OneHighOrLowAdcSpikeDoesNotMoveTheDisplay",
+            "MillisWrapKeepsTheOneSecondCacheInterval",
+        ),
+    ),
+    "the display must not average historical frames into a fresh voltage; sleeping screens and e-paper must use current voltage on the next actual frame",
 )
 
 check(

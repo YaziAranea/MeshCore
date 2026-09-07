@@ -565,6 +565,10 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
   #define UI_EINK_IDLE_SCREENSAVER 0
 #endif
 
+#ifndef UI_EINK_FOREST_BACKDROP
+  #define UI_EINK_FOREST_BACKDROP 1
+#endif
+
 #ifndef UI_EINK_IDLE_SCREENSAVER_MILLIS
   #define UI_EINK_IDLE_SCREENSAVER_MILLIS 60000UL
 #endif
@@ -1685,7 +1689,6 @@ static bool drawUiProceduralIcon(DisplayDriver& display, int x, int y, const uin
   return false;
 }
 
-#if UI_T096_PREMIUM_TFT || defined(HELTEC_T114_WITH_DISPLAY)
 static bool drawUiIconpackV1(DisplayDriver& display, int x, int y, const uint16_t* rows, int size) {
   if (rows == NULL || size <= 0) return false;
   const int grid = 12;
@@ -1714,7 +1717,6 @@ static bool drawUiIconpackV1(DisplayDriver& display, int x, int y, const uint16_
   }
   return true;
 }
-#endif
 
 static int uiGpsBadgeScale(int size) {
   return size >= 14 ? 2 : 1;
@@ -1769,16 +1771,15 @@ static void drawUiIcon(DisplayDriver& display, int x, int y, const uint8_t* icon
     drawUiGpsBadge(display, x, y, size);
     return;
   }
-#if UI_T096_PREMIUM_TFT || defined(HELTEC_T114_WITH_DISPLAY)
   const MeshcoreIconpackV2Glyph* glyph = meshcoreIconpackV2Glyph(icon);
-  // T114 status/chrome icons can be only 9-11 logical pixels high.  An
-  // explicit 8x8 glyph survives that size better than downsampling 12x12.
+  // The same meanings and hand-tuned small silhouettes on TFT, OLED and
+  // Paper. Procedural downsampling used to merge holes on mono displays,
+  // and even mapped sound to mute, locations to satellites and offices to homes.
   if (glyph != NULL && size < 12) {
     drawUiXbmFitted(display, x, y, glyph->small, 8, 8, size, size);
     return;
   }
   if (glyph != NULL && drawUiIconpackV1(display, x, y, glyph->large, size)) return;
-#endif
   if (!drawUiProceduralIcon(display, x, y, icon, size)) {
     drawUiXbmFitted(display, x, y, icon, 8, 8, size, size);
   }
@@ -1974,12 +1975,17 @@ static int uiLineIconAdvance(DisplayDriver& display, const uint8_t* icon = NULL)
   return width + (size > 8 ? 2 : 1);
 }
 
-static int uiLineIconY(DisplayDriver& display, int y) {
+static int uiTextAlignedIconY(DisplayDriver& display, int y, int icon_h) {
   int line_h = display.getTextLineHeight();
-  int icon_h = uiLineIconSize(display);
-  int dy = (line_h - icon_h) / 2;
+  int dy = display.getTextInkTop() + (display.getTextInkHeight() - icon_h) / 2;
+  int max_dy = line_h > icon_h ? line_h - icon_h : 0;
   if (dy < 0) dy = 0;
+  if (dy > max_dy) dy = max_dy;
   return y + dy;
+}
+
+static int uiLineIconY(DisplayDriver& display, int y) {
+  return uiTextAlignedIconY(display, y, uiLineIconSize(display));
 }
 
 static void drawUiLineIcon(DisplayDriver& display, int x, int y, const uint8_t* icon) {
@@ -2011,11 +2017,7 @@ static int uiRouteIconGap(DisplayDriver& display) {
 }
 
 static int uiRouteIconY(DisplayDriver& display, int y) {
-  int line_h = display.getTextLineHeight();
-  int icon_h = uiRouteIconSize(display);
-  int dy = (line_h - icon_h) / 2;
-  if (dy < 0) dy = 0;
-  return y + dy;
+  return uiTextAlignedIconY(display, y, uiRouteIconSize(display));
 }
 
 static bool richSupportedCodepoint(uint16_t cp) {
@@ -3244,7 +3246,7 @@ static uint32_t uiApplyTimezoneOffset(uint32_t now, int32_t offset_seconds) {
 
 static bool drawClockUptimeBetween(DisplayDriver& display, const UITask* task,
                                    int left_used, int right_used, int y) {
-  char text[12];
+  char text[32];
   smartui::formatClockUptime(text, sizeof(text), task->getUptimeSeconds());
   int text_width = display.getTextWidth(text);
   int right = smartui::clockUptimeRightEdge((int16_t)left_used,
@@ -3259,6 +3261,9 @@ static bool drawClockUptimeBetween(DisplayDriver& display, const UITask* task,
                                            2);
   }
   if (right < 0) return false;
+  // A full-width lane sits directly below the clock. Short side lanes leave
+  // room for the short date on 128x64 TFT without shrinking the hour digits.
+  right = left_used + (right_used - left_used + text_width) / 2;
   display.drawTextRightAlign(right, y, text);
   return true;
 }
@@ -3465,13 +3470,8 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
   bool time_valid = task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
   DateTime dt(time_valid ? task->getLocalClockTime(rtc_now) : 0);
   display.setTextSize(1);
-  char uptime_text[12];
-  smartui::formatClockUptime(uptime_text, sizeof(uptime_text), task->getUptimeSeconds());
   const uint16_t battery_mv = task->getBattMilliVolts();
   const int battery_left = paperBatteryLeftEdge(display, battery_mv);
-  const int uptime_right = battery_left - 3;
-  const int uptime_width = display.getTextWidth(uptime_text);
-  const int uptime_left = uptime_right - uptime_width;
 
   if (with_backdrop) {
     // Keep the decorative pixels stable.  Only the clock/date/status should
@@ -3481,9 +3481,9 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
     // Reserve two clean paper-white islands while keeping the forest frame.
     if (display.width() >= 240 && display.height() >= 120) {
       display.setColor(DisplayDriver::DARK);
-      display.fillRect(45, 34, 161, 64);
-      display.fillRect(display.width() - 60, 0, 60, 15);
-      display.fillRect(uptime_left - 2, 0, uptime_width + 4, 15);
+      display.fillRect(45, 29, 161, 75);
+      display.fillRect(2, 2, battery_left - 4, 11);
+      display.fillRect(battery_left - 2, 0, display.width() - battery_left + 2, 15);
     }
   }
 
@@ -3491,10 +3491,9 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
   display.setColor(DisplayDriver::LIGHT);
   display.setBold(false);
   display.setTextSize(1);
-  int node_width = uptime_left - 8;
+  int node_width = battery_left - 8;
   if (node_width < 24) node_width = 24;
   drawRichTextEllipsized(display, 4, 4, node_width, task->getNodeName());
-  display.drawTextRightAlign(uptime_right, 4, uptime_text);
   drawPaperBatteryIndicator(display, battery_mv);
 
   display.setBold(true);
@@ -3504,20 +3503,22 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
   } else {
     strcpy(tmp, "--:--");
   }
-  display.drawTextCentered(display.width() / 2, 39, tmp);
+  display.drawTextCentered(display.width() / 2, 34, tmp);
 
   display.setBold(false);
+  display.setTextSize(1);
+  drawClockUptimeBetween(display, task, 45, 206, 67);
   display.setTextSize(2);
   if (time_valid) {
     snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
   } else {
     strcpy(tmp, "нет времени");
   }
-  display.drawTextCentered(display.width() / 2, 78, tmp);
+  display.drawTextCentered(display.width() / 2, 83, tmp);
 
   display.setTextSize(1);
   snprintf(tmp, sizeof(tmp), "Непроч: %d", task->getMsgCount());
-  display.drawTextCentered(display.width() / 2, 101, tmp);
+  display.drawTextCentered(display.width() / 2, 106, tmp);
 
   if (time_valid) {
     uint8_t sec = dt.second();
@@ -3623,7 +3624,7 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-    return renderPaperIdleClock(display, _task, _rtc, true);
+    return renderPaperIdleClock(display, _task, _rtc, UI_EINK_FOREST_BACKDROP != 0);
   }
 };
 #endif
@@ -4174,22 +4175,23 @@ class HomeScreen : public UIScreen {
     const int iconWidth = 22;
     const int iconHeight = 13;
     const int iconX = display.width() - iconWidth - 4;
-    const int iconY = 1;
 #else
     const int iconWidth = 18;
+#if UI_NATIVE_TFT_PROFILE
     const int iconHeight = 10;
-    const int iconX = display.width() - iconWidth - 2;
-    const int iconY = 2;
+#else
+    const int iconHeight = 8;
 #endif
+    const int iconX = display.width() - iconWidth - 2;
+#endif
+    const int iconY = uiTextAlignedIconY(display, 0, iconHeight);
     ColorVal batteryColor = uiBatteryStatusColor(batteryMilliVolts);
     bool showMutedIcon = false;
 #ifdef PIN_BUZZER
     showMutedIcon = showMutedStatus && _task->isBuzzerQuiet();
 #endif
     int mutedIconReserve = 0;
-#if UI_NATIVE_TFT_PROFILE && !UI_T096_PREMIUM_TFT
     if (showMutedIcon) mutedIconReserve = uiStatusIconSize(display) + 3;
-#endif
     int leftmostX = iconX;
 
     if (batteryMilliVolts > 0) {
@@ -4211,20 +4213,11 @@ class HomeScreen : public UIScreen {
 #ifdef PIN_BUZZER
     if (showMutedIcon) {
       display.setColor(DisplayDriver::RED);
-#if UI_T096_PREMIUM_TFT
-      if (iconX - 18 < leftmostX) leftmostX = iconX - 18;
-      drawUiIcon(display, iconX - 18, iconY, muted_icon, 16);
-#elif UI_NATIVE_TFT_PROFILE
       int mutedSize = uiStatusIconSize(display);
       int mutedX = iconX - mutedSize - 3;
-      int mutedY = iconY + (iconHeight - mutedSize) / 2;
-      if (mutedY < 0) mutedY = 0;
+      int mutedY = uiTextAlignedIconY(display, 0, mutedSize);
       if (mutedX < leftmostX) leftmostX = mutedX;
       drawUiIcon(display, mutedX, mutedY, muted_icon, mutedSize);
-#else
-      if (iconX - 9 < leftmostX) leftmostX = iconX - 9;
-      display.drawXbm(iconX - 9, iconY + 1, muted_icon, 8, 8);
-#endif
     }
 #endif
     return leftmostX;
@@ -7002,18 +6995,15 @@ public:
         int gps_count = -1;
         readGpsUiState(gps_enabled, gps_valid, gps_count);
         int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
-        int status_right = gps_right;
         if (_task->areNotificationsMuted()) {
           int icon_size = uiStatusIconSize(display);
           int mute_x = gps_right + 3;
           if (mute_x + icon_size <= name_right) {
             display.setColor(DisplayDriver::RED);
-            drawUiIcon(display, mute_x, 1, muted_icon, icon_size);
-            status_right = mute_x + icon_size;
+            drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
           }
         }
         display.setColor(_task->getUiBottomColor());
-        drawClockUptimeBetween(display, _task, status_right, name_right, 0);
       } else
 #endif
       {
@@ -7025,39 +7015,32 @@ public:
           int gps_count = -1;
           readGpsUiState(gps_enabled, gps_valid, gps_count);
           int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
-          int status_right = gps_right;
           if (_task->areNotificationsMuted()) {
             int icon_size = uiStatusIconSize(display);
             int mute_x = gps_right + 3;
             if (mute_x + icon_size <= name_right) {
               display.setColor(DisplayDriver::RED);
-              drawUiIcon(display, mute_x, 1, muted_icon, icon_size);
-              status_right = mute_x + icon_size;
+              drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
             }
           }
           display.setColor(_task->getUiBottomColor());
-          drawClockUptimeBetween(display, _task, status_right, name_right, 0);
 #else
           // A GPS-less board must not advertise a permanently disabled
           // module.  Keep only the useful mute state in the clock chrome.
-          int status_right = -3;
           if (_task->areNotificationsMuted()) {
             int icon_size = uiStatusIconSize(display);
             if (name_x + icon_size <= name_right) {
               display.setColor(DisplayDriver::RED);
-              drawUiIcon(display, name_x, 1, muted_icon, icon_size);
-              status_right = name_x + icon_size;
+              drawUiIcon(display, name_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
             }
           }
           display.setColor(_task->getUiBottomColor());
-          drawClockUptimeBetween(display, _task, status_right, name_right, 0);
 #endif
         } else
 #endif
         {
           if (isClockPage()) {
-            display.setColor(_task->getUiBottomColor());
-            drawClockUptimeBetween(display, _task, -3, name_right, 0);
+            // The uptime now has its own metadata row below the clock.
           } else {
             // node name
             display.setColor(_task->getUiTopColor());
@@ -7260,25 +7243,22 @@ public:
 
       uint8_t small_font = uiPushCompactChromeFont(display);
       display.setBold(false);
-      int battery_left = renderBatteryIndicator(display, _task->getBattMilliVolts());
+      int battery_left = renderBatteryIndicator(display, _task->getBattMilliVolts(), false);
       bool clock_muted = _task->areNotificationsMuted();
       // Satellite count is secondary.  On the widest T096 font it would leave
       // no safe room for the mute icon, so keep the explicit GPS ON state and
       // hide only the count while quiet mode is active.
-      int gps_right = renderGpsClockLabel(display, 1, 1, gps_enabled, gps_valid, sats, !clock_muted);
-      int status_right = gps_right;
+      int gps_right = renderGpsClockLabel(display, 1, 0, gps_enabled, gps_valid, sats, !clock_muted);
 
       if (clock_muted) {
         const int mute_size = 16;
         int mute_x = gps_right + 4;
         if (mute_x + mute_size <= battery_left - 3) {
           display.setColor(DisplayDriver::RED);
-          drawUiIcon(display, mute_x, 1, muted_icon, mute_size);
-          status_right = mute_x + mute_size;
+          drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, mute_size), muted_icon, mute_size);
         }
       }
       display.setColor(_task->getUiBottomColor());
-      drawClockUptimeBetween(display, _task, status_right, battery_left, 1);
       uiPopFont(display, small_font);
 
       uint32_t rtc_now = _rtc->getCurrentTime();
@@ -7292,28 +7272,31 @@ public:
       } else {
         strcpy(tmp, "--:--");
       }
-      drawRichTextCentered(display, display.width() / 2, 17, tmp);
+      drawRichTextCentered(display, display.width() / 2, 15, tmp);
       display.setBold(false);
       uiPopFont(display, clock_font);
 
-      uint8_t detail_font = uiPushCompactChromeFont(display);
+      // Fixed small metadata cells keep all 15 body-font choices clear of
+      // the clock and the two bottom telemetry blocks.
+      uint8_t detail_font = uiPushCompactSettingsFont(display);
       display.setColor(_task->getUiBottomColor());
+      drawClockUptimeBetween(display, _task, 0, display.width(), 35);
       if (time_valid) {
         snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
       } else {
         strcpy(tmp, "нет времени");
       }
-      drawRichTextCenteredEllipsized(display, display.width() / 2, 43, display.width(), tmp);
+      drawRichTextCenteredEllipsized(display, display.width() / 2, 47, display.width(), tmp);
 #if UI_SMART_B11_EXTRAS == 1
       if (_task->getMsgCount() > 0) {
         display.setColor(DisplayDriver::RED);
         snprintf(tmp, sizeof(tmp), "Н:%d", _task->getMsgCount());
-        drawRichTextEllipsized(display, 1, 43, 38, tmp);
+        drawRichTextEllipsized(display, 1, 47, 38, tmp);
       }
 #endif
 
-      const int block_y = 60;
-      const int block_h = 19;
+      const int block_y = 63;
+      const int block_h = 17;
       const int load_block_w = 117;
       const int temp_block_x = 120;
       const int temp_block_w = 40;
@@ -7322,13 +7305,13 @@ public:
       display.fillRect(0, block_y, 3, block_h);
       display.setColor(_task->getUiBottomColor());
       snprintf(tmp, sizeof(tmp), "CH%s AIR%s", ch_pct, air_pct);
-      drawRichTextEllipsized(display, 5, block_y + 2, load_block_w - 7, tmp);
+      drawRichTextEllipsized(display, 5, block_y, load_block_w - 7, tmp);
 
       display.setColor(has_mcu_temp ? DisplayDriver::GREEN : DisplayDriver::YELLOW);
       display.drawRect(temp_block_x, block_y, temp_block_w, block_h);
       display.fillRect(temp_block_x, block_y, 3, block_h);
       display.setColor(_task->getUiBottomColor());
-      drawRichTextCenteredEllipsized(display, temp_block_x + temp_block_w / 2, block_y + 2, temp_block_w - 5, temp_text);
+      drawRichTextCenteredEllipsized(display, temp_block_x + temp_block_w / 2, block_y, temp_block_w - 5, temp_text);
       uiPopFont(display, detail_font);
 #else
       UIHourlyStatsSnapshot stats;
@@ -7377,11 +7360,10 @@ public:
         display.setTextSize(1);
         display.setBold(false);
         display.setColor(DisplayDriver::LIGHT);
-        int battery_left = renderBatteryIndicator(display, _task->getBattMilliVolts());
+        renderBatteryIndicator(display, _task->getBattMilliVolts());
         const int node_right = display.width() / 2;
         drawRichTextEllipsized(display, 4, 4, node_right - 8, _node_prefs->node_name);
         display.setColor(_task->getUiBottomColor());
-        drawClockUptimeBetween(display, _task, node_right, battery_left, 4);
 
         display.setTextSize(4);
         display.setBold(true);
@@ -7394,18 +7376,20 @@ public:
         display.drawTextCentered(display.width() / 2, 25, tmp);
 
         display.setBold(false);
+        display.setTextSize(1);
+        drawClockUptimeBetween(display, _task, 0, display.width(), 57);
         display.setTextSize(2);
         if (time_valid) {
           snprintf(tmp, sizeof(tmp), "%02u.%02u.%04u", dt.day(), dt.month(), dt.year());
         } else {
           strcpy(tmp, "нет времени");
         }
-        display.drawTextCentered(display.width() / 2, 61, tmp);
+        display.drawTextCentered(display.width() / 2, 72, tmp);
 
         display.setTextSize(1);
         display.setColor(DisplayDriver::LIGHT);
         snprintf(tmp, sizeof(tmp), "ChUtil %s  Air %s", ch_pct, air_pct);
-        display.drawTextCentered(display.width() / 2, 86, tmp);
+        display.drawTextCentered(display.width() / 2, 91, tmp);
 
         int sats = -1;
 #if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
@@ -7436,6 +7420,14 @@ public:
       int date_y = compact_clock ? 34 : 38;
       int stats_y = compact_clock ? 45 : 48;
       int detail_y = compact_clock ? 54 : 58;
+#if UI_NATIVE_TFT_PROFILE && defined(HELTEC_T114)
+      if (compact_clock) {
+        // Physical font descenders extend below the nominal logical cell.
+        // Keep the final row inside 135px even with PT Narrow XXL.
+        stats_y = 42;
+        detail_y = 52;
+      }
+#endif
 #if UI_V4_3_OLED_PROFILE
       if (compact_clock) {
         time_y = 18;
@@ -7444,7 +7436,15 @@ public:
         detail_y = 55;
       }
 #endif
-      bool show_clock_date = true;
+      // Larger generic displays can keep a separate full date. On short
+      // displays its old row becomes uptime (T114 also fits a short date).
+      bool show_clock_date = !compact_clock && display.height() >= 96;
+      int uptime_y = date_y;
+      if (show_clock_date) {
+        uptime_y += display.getTextLineHeight() + 2;
+        stats_y = uptime_y + display.getTextLineHeight() + 2;
+        detail_y = stats_y + display.getTextLineHeight() + 2;
+      }
 #if UI_V4_3_OLED_PROFILE
       if (compact_clock) show_clock_date = false;
 #elif UI_NATIVE_TFT_PROFILE
@@ -7456,7 +7456,7 @@ public:
       display.setColor(time_valid ? DisplayDriver::GREEN : DisplayDriver::YELLOW);
 #if UI_V4_3_OLED_PROFILE
       uint8_t clock_hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
-      if (compact_clock) display.setTextSize(3);
+      if (compact_clock) display.setTextSize(2);
 #else
       display.setTextSize(2);
 #endif
@@ -7492,6 +7492,26 @@ public:
       }
       display.setBold(false);
       display.setTextSize(1);
+      {
+        uint8_t metadata_font = uiPushCompactSettingsFont(display);
+        display.setColor(DisplayDriver::LIGHT);
+#if UI_NATIVE_TFT_PROFILE && defined(HELTEC_T114)
+        if (compact_clock) {
+          // Date and uptime share one baseline; both remain present even
+          // with the largest body font. The year is omitted on this panel.
+          DateTime dt(time_valid ? localClockTime(rtc_now) : 0);
+          if (time_valid) snprintf(tmp, sizeof(tmp), "%02u.%02u", dt.day(), dt.month());
+          else strcpy(tmp, "--.--");
+          const int date_left = display.width() - 1 - display.getTextWidth(tmp);
+          display.drawTextRightAlign(display.width() - 1, date_y, tmp);
+          drawClockUptimeBetween(display, _task, 0, date_left - 4, date_y);
+        } else
+#endif
+        {
+          drawClockUptimeBetween(display, _task, 0, display.width(), uptime_y);
+        }
+        uiPopFont(display, metadata_font);
+      }
 
       int sats = -1;
 #if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
@@ -9464,31 +9484,17 @@ void UITask::showAlert(const char* text, int duration_millis) {
 }
 
 void UITask::invalidateBatteryCache() {
-  _battery_milli_volts = 0;
-  _battery_next_sample = 0;
-  _battery_sample_valid = false;
+  _battery_display.invalidate();
 }
 
 uint16_t UITask::getBattMilliVolts() const {
-  unsigned long now = millis();
-  if (!_battery_sample_valid ||
-      smartui::deadlineReached((uint32_t)now, (uint32_t)_battery_next_sample)) {
-    uint16_t sample = _board->getBattMilliVolts();
-    if (!_battery_sample_valid || _battery_milli_volts == 0 || sample == 0 || UI_BATTERY_SMOOTHING_SAMPLES <= 1) {
-      _battery_milli_volts = sample;
-    } else {
-      uint32_t smoothed = ((uint32_t)_battery_milli_volts * (UI_BATTERY_SMOOTHING_SAMPLES - 1)) + sample;
-      _battery_milli_volts = (uint16_t)((smoothed + (UI_BATTERY_SMOOTHING_SAMPLES / 2)) / UI_BATTERY_SMOOTHING_SAMPLES);
-    }
-    _battery_sample_valid = true;
-    _battery_next_sample = now + UI_BATTERY_SAMPLE_MILLIS;
-  }
-  return _battery_milli_volts;
+  return _battery_display.read((uint32_t)millis(), UI_BATTERY_SAMPLE_MILLIS,
+      [this]() -> uint16_t { return _board ? _board->getBattMilliVolts() : 0; });
 }
 
 smartui::BatteryReading UITask::readSafetyBattery() const {
   if (_board == NULL) return smartui::BatteryReading();
-  // This path is intentionally independent of the slow display EMA.  Three
+  // This path is intentionally independent of the display cache.  Three
   // immediate board-level readings suppress one-off ADC noise while retaining
   // a prompt response to a genuine voltage collapse.
   const uint16_t a = _board->getBattMilliVolts();
@@ -12115,6 +12121,9 @@ void UITask::extendAutoOff(unsigned long now) {
 
 void UITask::markDisplayWake(bool reset_to_clock) {
   unsigned long now = millis();
+  // The first visible frame must measure the present load, not reuse a value
+  // cached before the panel was switched on.
+  invalidateBatteryCache();
 #if UI_WAKE_DEBUG_LOG
   Serial.printf("[DBG UI] markDisplayWake now=%lu reset=%d display_on=%d\r\n",
                 now, reset_to_clock ? 1 : 0,

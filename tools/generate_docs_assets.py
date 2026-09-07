@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -33,6 +34,9 @@ sys.path.insert(0, str(TOOLS))
 from simulate_smartui_ps17_qa import (  # noqa: E402
     BoardProfile,
     Frame,
+    EmbeddedRaw,
+    Element,
+    glyph_ink_bounds,
     OledExactFont,
     T096ExactFont,
     T114ExactFont,
@@ -45,6 +49,8 @@ from simulate_smartui_ps17_qa import (  # noqa: E402
     render_unread_senders,
 )
 from simulate_oled_128x64 import Oled, STYLES as OLED_STYLES  # noqa: E402
+from simulate_icon_alignment_beta2 import draw_frame_icon  # noqa: E402
+from simulate_v4_3_oled_qa import draw_firmware_mute, draw_firmware_battery  # noqa: E402
 from simulate_t096_premium import (  # noqa: E402
     DEFAULT_PROFILE,
     VISIBLE_FONT_COUNT,
@@ -66,17 +72,12 @@ from simulate_t114_fonts import (  # noqa: E402
 OUT = ROOT / "docs" / "assets" / "ui"
 QA_OUT = ROOT / "docs" / "assets" / "qa"
 LABEL_FONT_PATH = TOOLS / "font_sources" / "noto_sans_2_015" / "NotoSans-CondensedMedium.ttf"
-UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 12 * 3600, 3 * 86400, 2000 * 86400)
+UPTIME_SAMPLES = (59, 12 * 60, 7 * 3600, 40 * 3600 + 5 * 60, 3 * 86400, 2000 * 86400)
 
 
 def format_clock_uptime(seconds: int) -> str:
     """Exact host equivalent of smartui::formatClockUptime()."""
-    if seconds < 3600:
-        return f"U {seconds // 60}m"
-    if seconds < 86400:
-        return f"U {seconds // 3600}h"
-    days = seconds // 86400
-    return "U 999+d" if days > 999 else f"U {days}d"
+    return f"U {seconds // 3600}h{seconds // 60 % 60:02d}m"
 
 
 def clock_uptime_placement(width_fn, left_used: int, right_used: int,
@@ -88,6 +89,8 @@ def clock_uptime_placement(width_fn, left_used: int, right_used: int,
         right = right_used - gap
         left = right - width
         if left >= left_used + gap:
+            right = left_used + (right_used - left_used + width) // 2
+            left = right - width
             return text, left, right, gap
     return None
 
@@ -133,7 +136,7 @@ def generate_esp32_docs_assets() -> None:
             v4_dir / "V4_3_OLED_CLOCK_UPTIME.png": OUT / "v4-3-oled-clock.png",
             v4_dir / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png":
                 QA_OUT / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png",
-            paper_dir / "wood_clock_final.png": OUT / "wireless-paper-wood-clock.png",
+            paper_dir / "idle_clock_final.png": OUT / "wireless-paper-clock.png",
             paper_dir / "ble_pin.png": OUT / "wireless-paper-ble-pin.png",
             paper_dir / "compact_settings_final.png": OUT / "wireless-paper-settings.png",
             paper_dir / "keyboard.png": OUT / "wireless-paper-full-keyboard.png",
@@ -156,25 +159,17 @@ def save_preview(image: Image.Image, stem: str, scale: int) -> Path:
 
 
 def draw_mute(frame: Frame, x: int, y: int, size: int) -> None:
-    # Exact UI_ICONPACK_V1 procedural mute glyph from UITask.cpp: a compact
-    # speaker body on the 12x12 design grid plus the rising strike-through.
-    def fill(gx: int, gy: int, gw: int, gh: int) -> None:
-        grid = 12
-        x1 = x + (gx * size) // grid
-        y1 = y + (gy * size) // grid
-        x2 = x + ((gx + gw) * size + grid - 1) // grid
-        y2 = y + ((gy + gh) * size + grid - 1) // grid
-        frame.rect(x1, y1, max(1, x2 - x1), max(1, y2 - y1), "red", tag="mute")
+    draw_frame_icon(frame, x, y, "muted_icon", size, "red")
+    frame.elements.append(Element("mute", frame.logical_box_to_physical(x, y, size, size)))
 
-    fill(1, 5, 3, 3)
-    fill(4, 4, 2, 5)
-    stroke = 2 if size >= 13 else 1
-    diag_x = x + 1
-    diag_y = y + 1
-    diag_size = size - 2
-    for i in range(0, diag_size, stroke):
-        frame.rect(diag_x + i, diag_y + diag_size - 1 - i, stroke, stroke,
-                   "red", tag="mute strike")
+
+def aligned_icon_y(frame: Frame, y: int, size: int) -> int:
+    """Mirror uiTextAlignedIconY and the bitmap ink-metric getters."""
+    ink = glyph_ink_bounds(frame.font.raw.glyph("H"))
+    top = int(ink[1] / frame.board.scale_y)
+    height = math.ceil((ink[3] - ink[1]) / frame.board.scale_y)
+    dy = top + int((height - size) / 2)
+    return y + min(max(0, dy), max(0, frame.font.logical_height - size))
 
 
 def draw_battery(frame: Frame, x: int, y: int, w: int, h: int, pct: int = 82) -> None:
@@ -183,6 +178,7 @@ def draw_battery(frame: Frame, x: int, y: int, w: int, h: int, pct: int = 82) ->
     frame.rect(x + w, y + 3, 2, max(1, h - 6), "green", tag="battery nub")
     fill_w = max(1, ((w - 4) * pct + 50) // 100)
     frame.rect(x + 2, y + 2, fill_w, max(1, h - 4), "green", tag="battery fill")
+    frame.elements.append(Element("battery", frame.logical_box_to_physical(x, y, w + 2, h)))
 
 
 def draw_page_dots(frame: Frame, active: int = 1, count: int = 6) -> None:
@@ -264,14 +260,25 @@ def render_status(profile: BoardProfile, *, gps: bool, fem: bool) -> Frame:
     return frame
 
 
-def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
+def make_t096_clock_profiles() -> list[BoardProfile]:
+    base = make_profiles()["T096"]
+    result = []
+    for index in range(VISIBLE_FONT_FIRST, VISIBLE_FONT_FIRST + VISIBLE_FONT_COUNT):
+        chrome = T096ExactFont("chrome", load_font(index, "S"))
+        result.append(replace(base[index % 5], profile=profile_name(index), font_id=index,
+                              desired_font=chrome, current_font=chrome))
+    return result
+
+
+def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5 * 60,
                       muted: bool = True) -> Frame:
     frame = Frame(profile, "T096 clock", True)
     w = profile.logical_w
     gps = "GPS ON"
-    frame.text(1, 1, gps, "green", max_w=58, tag="gps")
+    frame.text(1, 0, gps, "green", max_w=58, tag="gps")
     gps_right = 1 + frame.font.width(gps)
     icon_x, icon_y, icon_w, icon_h = w - 22 - 4, 1, 22, 13
+    icon_y = aligned_icon_y(frame, 0, icon_h)
     voltage = "4.09V"
     voltage_x = icon_x - frame.font.width(voltage) - 3
     frame.text(voltage_x, 0, voltage, "green", max_w=frame.font.width(voltage), tag="voltage")
@@ -280,27 +287,29 @@ def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
     if muted:
         mute_x = gps_right + 4
         if mute_x + 16 <= voltage_x - 3:
-            draw_mute(frame, mute_x, 1, 16)
+            draw_mute(frame, mute_x, aligned_icon_y(frame, 0, 16), 16)
             status_right = mute_x + 16
-    draw_frame_clock_uptime(frame, status_right, voltage_x, 1, uptime_seconds)
 
-    clock_font = T096ExactFont("Roboto clock", load_font(DEFAULT_PROFILE, "L"))
+    clock_font = T096ExactFont("clock", load_font(profile.font_id, "L"))
     time = "17:08"
-    clock_font.draw(frame.image, (w - clock_font.width(time, True)) // 2, 17, time,
+    clock_font.draw(frame.image, (w - clock_font.width(time, True)) // 2, 15, time,
                     frame.color("green"), True)
-    frame.text(w // 2, 43, "21.08.2026", "light", center=True, max_w=w, tag="date")
-    frame.text(1, 43, "Н:3", "red", max_w=35, tag="unread")
+    frame.elements.append(Element("time", clock_font.ink_box((w - clock_font.width(time, True)) // 2, 15, time, True), time))
+    frame.font = T096ExactFont("metadata", load_compact_settings_font(profile.font_id))
+    draw_frame_clock_uptime(frame, 0, w, 35, uptime_seconds)
+    frame.text(w // 2, 47, "07.09.2026", "light", center=True, max_w=w, tag="date")
+    frame.text(1, 47, "Н:3", "red", max_w=35, tag="unread")
 
-    frame.rect(0, 60, 117, 19, "green", outline=True, tag="load box")
-    frame.rect(0, 60, 3, 19, "green", tag="load accent")
-    frame.text(5, 62, "CH1.2% AIR0.03%", "light", max_w=110, tag="load")
-    frame.rect(120, 60, 40, 19, "green", outline=True, tag="temp box")
-    frame.rect(120, 60, 3, 19, "green", tag="temp accent")
-    frame.text(140, 62, "29C", "light", center=True, max_w=34, tag="temp")
+    frame.rect(0, 63, 117, 17, "green", outline=True, tag="load box")
+    frame.rect(0, 63, 3, 17, "green", tag="load accent")
+    frame.text(5, 63, "CH1.2% AIR0.03%", "light", max_w=110, tag="load")
+    frame.rect(120, 63, 40, 17, "green", outline=True, tag="temp box")
+    frame.rect(120, 63, 3, 17, "green", tag="temp accent")
+    frame.text(140, 63, "29C", "light", center=True, max_w=34, tag="temp")
     return frame
 
 
-def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
+def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5 * 60,
                       muted: bool = True) -> Frame:
     # Chrome remains in the selected T114 font; it is not the forced compact
     # menu font.  This distinction is why the active-profile sweep is needed.
@@ -310,6 +319,7 @@ def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
     frame.text(0, 0, gps, "green", max_w=48, tag="gps")
     gps_right = frame.font.width(gps)
     icon_x, icon_y, icon_w, icon_h = w - 18 - 2, 2, 18, 10
+    icon_y = aligned_icon_y(frame, 0, icon_h)
     voltage = "4.09V"
     voltage_x = icon_x - frame.font.width(voltage) - 3
     frame.text(voltage_x, 0, voltage, "green", max_w=frame.font.width(voltage), tag="voltage")
@@ -320,20 +330,26 @@ def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 12 * 3600,
         icon_size = min(12, max(9, frame.font.logical_height - 1))
         mute_x = gps_right + 3
         if mute_x + icon_size <= name_right:
-            draw_mute(frame, mute_x, 1, icon_size)
+            draw_mute(frame, mute_x, aligned_icon_y(frame, 0, icon_size), icon_size)
             status_right = mute_x + icon_size
-    draw_frame_clock_uptime(frame, status_right, name_right, 0, uptime_seconds)
     draw_page_dots(frame)
 
-    raw_clock = FirmwareT114Font("Roboto", 28, 36, 30, 6)
+    raw_clock = EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 15)
     clock_font = T114ExactFont("Roboto clock", raw_clock)
     time = "17:08"
-    clock_font.draw(frame.image, (w - clock_font.width(time, True)) // 2, 17, time,
-                    frame.color("green"), True)
-    frame.text(w // 2, 34, "21.08.2026", "light", center=True, max_w=w, tag="date")
-    frame.text(0, 45, "CH1.2% A0.03%", "light", max_w=94, tag="load")
-    frame.text(w - 1, 45, "29C", "green", right=True, max_w=28, tag="temp")
-    frame.text(0, 54, "Н:3  MSG/h 5", "light", max_w=w, tag="messages")
+    clock_font.draw(frame.image, (w - clock_font.width(time)) // 2, 17, time,
+                    frame.color("green"))
+    frame.elements.append(Element("time", clock_font.ink_box((w - clock_font.width(time)) // 2, 17, time), time))
+    saved_font = frame.font
+    frame.font = T114ExactFont("metadata", EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 0))
+    date = "07.09"
+    date_left = w - 1 - frame.font.width(date)
+    frame.text(w - 1, 34, date, "light", right=True, max_w=frame.font.width(date), tag="date")
+    draw_frame_clock_uptime(frame, 0, date_left - 4, 34, uptime_seconds)
+    frame.font = saved_font
+    frame.text(0, 42, "CH1.2% A0.03%", "light", max_w=94, tag="load")
+    frame.text(w - 1, 42, "29C", "green", right=True, max_w=28, tag="temp")
+    frame.text(0, 52, "Н:3  MSG/h 5", "light", max_w=w, tag="messages")
     return frame
 
 
@@ -367,7 +383,7 @@ def draw_oled_battery(oled: Oled, milli_volts: int = 4090) -> int:
 
 
 def render_clock_oled(style: tuple[str, int, bool] = OLED_STYLES[0],
-                      uptime_seconds: int = 12 * 3600,
+                      uptime_seconds: int = 40 * 3600 + 5 * 60,
                       muted: bool = True,
                       errors: list[str] | None = None) -> Image.Image:
     oled = Oled(style)
@@ -375,25 +391,23 @@ def render_clock_oled(style: tuple[str, int, bool] = OLED_STYLES[0],
     # stays useful and therefore occupies the left edge of clock chrome.
     status_right = -3
     if muted:
-        draw_oled_mute(oled, 0, 1)
+        draw_firmware_mute(oled, 0, 0)
         status_right = 8
     battery_left = 108 - oled.text_width("4.09V") - 3
     name_right = battery_left - 2
-    placement = clock_uptime_placement(oled.text_width, status_right, name_right, uptime_seconds)
+    placement = clock_uptime_placement(oled.text_width, 0, 128, uptime_seconds)
     if placement is not None:
         uptime, left, right, gap = placement
-        if left < status_right + gap or right > name_right - gap:
+        if left < gap or right > 128 - gap:
             oled.overflows.append(
                 f"{style[0]}: uptime {uptime} at {left}..{right} escapes "
                 f"{status_right}..{name_right} gap={gap}"
             )
-        oled.text(right, 0, uptime, right=True)
+        oled.text(right, 34, uptime, right=True)
     else:
         full = format_clock_uptime(uptime_seconds)
-        if (name_right - 3 - oled.text_width(full) >= status_right + 3 or
-                name_right - 2 - oled.text_width(full.replace(" ", "", 1)) >= status_right + 2):
-            oled.overflows.append(f"{style[0]}: uptime hidden despite available room")
-    actual_battery_left = draw_oled_battery(oled)
+        oled.overflows.append(f"{style[0]}: uptime unexpectedly hidden: {full}")
+    actual_battery_left = draw_firmware_battery(oled)
     if actual_battery_left != battery_left:
         oled.overflows.append(
             f"{style[0]}: battery metric drift {actual_battery_left}!={battery_left}"
@@ -403,7 +417,7 @@ def render_clock_oled(style: tuple[str, int, bool] = OLED_STYLES[0],
             oled.draw.rectangle((x - 1, 13, x + 1, 15), fill=1)
         else:
             oled.draw.point((x, 14), fill=1)
-    oled.text(64, 18, "17:08", center=True, size=3)
+    oled.text(64, 18, "17:08", center=True, size=2)
     oled.text(0, 45, "CH1.2% A0.03%", max_width=128)
     oled.text(0, 55, "MSG/h 5", max_width=76)
     oled.text(127, 55, "29C", right=True)
@@ -511,10 +525,22 @@ def validate_clock_asset_layouts() -> int:
     checks = 0
 
     def chrome_violations(frame: Frame) -> list[str]:
-        prefixes = ("uptime:", "gps:", "voltage:", "battery", "mute")
-        return [item for item in frame.violations if item.startswith(prefixes)]
+        errors = list(frame.violations)
+        for index, first in enumerate(frame.elements):
+            if first.physical_box is None:
+                errors.append(f"{first.tag}: required text disappeared")
+                continue
+            for second in frame.elements[index + 1:]:
+                if second.physical_box is None:
+                    continue
+                a, b = first.physical_box, second.physical_box
+                if max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3]):
+                    errors.append(f"{first.tag}/{second.tag}: overlapping ink boxes {a}/{b}")
+        if frame.facts.get("clock_uptime") == "hidden-no-room":
+            errors.append("uptime unexpectedly hidden")
+        return errors
 
-    for profile in make_profiles()["T096"]:
+    for profile in make_t096_clock_profiles():
         for seconds in UPTIME_SAMPLES:
             for muted in (False, True):
                 frame = render_clock_t096(profile, seconds, muted)
@@ -605,7 +631,7 @@ def main() -> None:
 
     board_scenes: dict[str, list[tuple[str, Image.Image]]] = {
         "T096 FEM": [
-            ("clock", render_clock_t096(t096).image),
+            ("clock", render_clock_t096(make_t096_clock_profiles()[5]).image),
             ("settings", render_rows(t096, "Настройки", common_root, 0).image),
             ("fonts", render_picker(t096, t096_names, 0, 0).image),
             ("keyboard", render_keyboard(t096, desired=True, cursor=21).image),

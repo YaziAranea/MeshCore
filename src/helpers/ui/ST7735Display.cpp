@@ -1,5 +1,6 @@
 #include "ST7735Display.h"
 #include "EmbeddedBitmapFonts.h"
+#include "BitmapTextMetrics.h"
 #include "Utf8Cyrillic5x7.h"
 
 //#include <Fonts/GFXFF/FreeSans9pt7b.h>
@@ -633,6 +634,14 @@ const MeshcoreBitmapGlyph* ST7735Display::glyphForCodepoint(uint16_t codepoint) 
 
 uint8_t ST7735Display::fontLineHeight() const {
   return currentFont()->height * _text_size;
+}
+
+int16_t ST7735Display::getTextInkTop() const {
+  return meshcoreBitmapCapitalInk(currentFont()).top * _text_size;
+}
+
+uint8_t ST7735Display::getTextInkHeight() const {
+  return meshcoreBitmapCapitalInk(currentFont()).height * _text_size;
 }
 
 void ST7735Display::setUiFont(uint8_t font_id) {

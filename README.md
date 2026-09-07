@@ -8,21 +8,21 @@
 - Heltec V4.3 OLED с включённым FEM/LNA;
 - Heltec Wireless Paper с e-paper 250×122.
 
-Текущий выпуск — `SmartUI 2.1.0-beta.1`: усилена проверка companion-команд, атомарно сохраняются настройки и identity, исправлены защита АКБ и доверие к времени, добавлены часовой пояс и компактный аптайм на экране часов. `v2.1.0-dev.2` сохранён для быстрого отката; RC-линия `v2.0.0-rc1` не изменена.
+Текущий выпуск — `SmartUI 2.1.0-beta.2`: доработка экрана часов, понятности пиктограмм, выравнивания строк и отображения напряжения АКБ. Это публичный релиз с явной пометкой **БЕТА**; аппаратная проверка каждого экземпляра не заявляется. `v2.1.0-beta.1` сохранён для отката; RC-линия `v2.0.0-rc1` не изменена.
 
-[⬇ Скачать SmartUI v2.1.0-beta.1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.1) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-beta.1_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать SmartUI v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-beta.2_RU.md#какой-файл-скачать) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
 ![Обзор интерфейса на трёх платах](docs/assets/ui/ui-overview-three-boards.png)
 
-| Heltec V4.3 OLED | Heltec Wireless Paper WOOD |
+| Heltec V4.3 OLED | Heltec Wireless Paper |
 |---|---|
-| ![Часы V4.3 OLED с GPS и тишиной](docs/assets/ui/v4-3-oled-clock.png) | ![Большие часы Wireless Paper](docs/assets/ui/wireless-paper-wood-clock.png) |
+| ![Часы V4.3 OLED с GPS и тишиной](docs/assets/ui/v4-3-oled-clock.png) | ![Большие часы Wireless Paper](docs/assets/ui/wireless-paper-clock.png) |
 
 [Открыть проект на GitHub](https://github.com/YaziAranea/MeshCore)
 
 > Это независимая модификация. Она не является официальным выпуском MeshCore или IoTThinks. Порт закреплён на коммите [`a3b9ad91`](https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628) ветки `PowerSaving-v17` проекта IoTThinks/MeshCore. Новые цели V4.3/Wireless Paper пока проверены сборкой и точной симуляцией, но не объявлены физически испытанными.
 
-Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущая beta находится в [`smartui-2.1-beta.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.1); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
+Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущая beta находится в [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
 
 ## Что умеет интерфейс
 
@@ -39,7 +39,7 @@
 - Исправлен выход ProMicro из сна: первое нажатие будит OLED без обязательного Reset.
 - Калибровка измерения АКБ доступна на всех поддерживаемых платах.
 - Исправлены потерянные при PS17-переносе настройки зуммера, чтение ключей `prefs.json`, содержащих цифры, и полная синхронизация времени назад вместе с timestamp сообщений.
-- Wireless Paper имеет рекомендуемый профиль `WOOD` и отдельный `FULL` с экранной клавиатурой.
+- Wireless Paper выпускается одной сборкой `FULL`: экранная клавиатура и адресная отправка сохранены, лесной фон убран.
 - BLE PIN доступен отдельной ручной страницей на всех пяти платах, не перехватывает часы/сообщения/сон и сохраняется между обычными перезагрузками.
 - GPIO уведомлений и резонанс зуммера выбираются без записи каждого промежуточного значения: сохранение только по подтверждению.
 - Защита АКБ по умолчанию использует 3,2 В; при её выключении остаётся нижний порог 2,7 В. Сохранённый выбор пользователя сохраняется.
@@ -61,7 +61,7 @@
 
 ## Быстрый старт
 
-Используйте [Release v2.1.0-beta.1](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.1). Это предварительный выпуск; файлы `v2.1.0-dev.2` остаются на своей странице для отката.
+Используйте [Release v2.1.0-beta.2 — БЕТА](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2). Файлы доступны на обычной странице Release; предыдущая `v2.1.0-beta.1` остаётся на своей странице для отката.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Из Release берите опубликованный рядом `SHA256SUMS.txt`. В CI-артефакте nRF52 он называется `SHA256SUMS.txt`, в ESP32-S3-артефакте — `SHA256SUMS-ESP32.txt`.
@@ -93,7 +93,6 @@ pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
-pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_wood -t mergebin
 pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 ```
 
@@ -115,11 +114,11 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Результаты, размеры и контрольные суммы именно `v2.1.0-beta.1` публикуются в [примечаниях к выпуску](RELEASE_NOTES_v2.1.0-beta.1_RU.md). Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты beta.
+Результаты, размеры и контрольные суммы именно `v2.1.0-beta.2` публикуются в [примечаниях к выпуску](RELEASE_NOTES_v2.1.0-beta.2_RU.md). Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты beta.
 
-CI собирает шесть релизных конфигураций, проверяет UF2/BIN, native-тесты и точные модели дисплеев. Дополнительная матрица display-драйверов использует `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это контроль совместимости, не добавление этих плат в Release.
+CI собирает пять релизных конфигураций, проверяет UF2/BIN, native-тесты и точные модели дисплеев. Дополнительная матрица display-драйверов использует `Heltec_v3_companion_radio_ble`, `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb`; это контроль совместимости, не добавление этих плат в Release.
 
-Heltec T1 остаётся нерелизной контрольной платой. Её USB-вариант в CI проверяет общий UI/display-код; обе companion-конфигурации T1 используют `-Os` и помещаются в штатную flash-разметку с ExtraFS. Это не добавляет T1 в список поддерживаемых файлов Release. RAK4631 также не является релизной или обязательной compatibility-целью beta. Все шесть публикуемых конфигураций собираются отдельно; [подробности](docs/BUILD_RU.md#целевые-сборки).
+Heltec T1 остаётся нерелизной контрольной платой. Её USB-вариант в CI проверяет общий UI/display-код; обе companion-конфигурации T1 используют `-Os` и помещаются в штатную flash-разметку с ExtraFS. Это не добавляет T1 в список поддерживаемых файлов Release. RAK4631 также не является релизной или обязательной compatibility-целью beta. Все пять публикуемых конфигураций собираются отдельно; [подробности](docs/BUILD_RU.md#целевые-сборки).
 
 T096 симулируется с реальными bitmap-метриками, T114 — через масштабирование 128×64 → 240×135, OLED — по встроенным glyph-таблицам, Wireless Paper — в физической геометрии 250×122. Симуляция не заменяет проверку на устройстве, включая реальный порог отключения аккумулятора.
 
@@ -134,7 +133,7 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
-- [Примечания к v2.1.0-beta.1](RELEASE_NOTES_v2.1.0-beta.1_RU.md)
+- [Примечания к v2.1.0-beta.2](RELEASE_NOTES_v2.1.0-beta.2_RU.md)
 - [Примечания к v2.1.0-dev.2](RELEASE_NOTES_v2.1.0-dev.2_RU.md)
 - [Примечания к v2.1.0-dev.1](RELEASE_NOTES_v2.1.0-dev.1_RU.md)
 - [Примечания к v2.1.0-dev](RELEASE_NOTES_v2.1.0-dev_RU.md)

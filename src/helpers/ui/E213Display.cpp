@@ -221,6 +221,14 @@ uint8_t E213Display::getTextLineHeight() const {
 #endif
 }
 
+uint8_t E213Display::getTextInkHeight() const {
+#if MESHCORE_E213_PROFILE_FONTS
+  return 7 * effectiveProfileScale();
+#else
+  return getTextLineHeight();
+#endif
+}
+
 void E213Display::setUiFont(uint8_t font_id) {
 #if MESHCORE_E213_PROFILE_FONTS
   if (font_id >= E213_PROFILE_FONT_COUNT) font_id = 0;

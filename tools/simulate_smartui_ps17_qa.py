@@ -286,6 +286,7 @@ class BoardProfile:
     scale_y: float = 1.0
     y_offset: int = 0
     oled: bool = False
+    font_id: int = 0
 
 
 @dataclass
@@ -430,7 +431,7 @@ def make_profiles() -> dict[str, list[BoardProfile]]:
     for family_index, (family_name, _, _) in enumerate(T096_FAMILIES):
         font = T096ExactFont(f"{family_name} L", load_compact_settings_font(10 + family_index))
         profiles["T096"].append(BoardProfile(
-            "T096", family_name, 160, 80, 160, 80, font, font,
+            "T096", family_name, 160, 80, 160, 80, font, font, font_id=10 + family_index,
         ))
 
     # Firmware uiPushCompactSettingsFont always selects ST7789 profile 0,

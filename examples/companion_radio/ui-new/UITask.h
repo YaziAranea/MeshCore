@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <helpers/sensors/LPPDataHelpers.h>
 #include "BatteryShutdownPolicy.h"
+#include "BatteryDisplayCache.h"
 
 #ifndef LED_STATE_ON
   #define LED_STATE_ON 1
@@ -28,13 +29,6 @@
 
 #ifndef UI_BATTERY_SAMPLE_MILLIS
   #define UI_BATTERY_SAMPLE_MILLIS 1000UL
-#endif
-
-#ifndef UI_BATTERY_SMOOTHING_SAMPLES
-  #define UI_BATTERY_SMOOTHING_SAMPLES 4
-#endif
-#ifndef UI_BATTERY_DISPLAY_HYSTERESIS_MV
-  #define UI_BATTERY_DISPLAY_HYSTERESIS_MV 0
 #endif
 
 #ifndef UI_PHONE_GPS
@@ -130,9 +124,7 @@ class UITask : public AbstractUITask {
   uint64_t _uptime_accumulated_ms;
   uint32_t _uptime_last_millis;
   uint8_t _low_batt_strikes;
-  mutable uint16_t _battery_milli_volts;
-  mutable unsigned long _battery_next_sample;
-  mutable bool _battery_sample_valid;
+  mutable smartui::BatteryDisplayCache _battery_display;
   uint32_t next_backlight_btn_check = 0;
 #ifdef PIN_STATUS_LED
   int led_state = 0;
@@ -282,9 +274,6 @@ public:
     _uptime_accumulated_ms = 0;
     _uptime_last_millis = 0;
     _low_batt_strikes = 0;
-    _battery_milli_volts = 0;
-    _battery_next_sample = 0;
-    _battery_sample_valid = false;
     _last_activity_ms = 0;
     _display_wake_lock_until = 0;
     _display_recover_until = 0;

@@ -53,6 +53,7 @@ public:
   void setTextSize(int sz) override;
   void setBold(bool bold) override;
   uint8_t getTextLineHeight() const override;
+  uint8_t getTextInkHeight() const override;
   void setUiFont(uint8_t font_id) override;
   uint8_t getUiFont() const override;
   uint8_t getUiFontCount() const override;

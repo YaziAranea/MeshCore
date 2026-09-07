@@ -23,7 +23,6 @@ NRF_ENVS = (
 )
 ESP_ENVS = (
     "heltec_v4_3_companion_radio_ble_femon_smartui",
-    "Heltec_Wireless_Paper_companion_radio_ble_smartui_wood",
     "Heltec_Wireless_Paper_companion_radio_ble_smartui_full",
 )
 
@@ -48,6 +47,13 @@ def main():
     for source, _ in files:
         if not source.is_file():
             parser.error(f"build artifact missing: {source}")
+    first_name = next(iter(uf2.EXPECTED))
+    version = first_name.split("_SmartUI_", 1)[1].removesuffix(".uf2")
+    notes_source = ROOT / f"RELEASE_NOTES_v{version}_RU.md"
+    if not notes_source.is_file():
+        parser.error(f"release notes missing: {notes_source}")
+    if "RELEASE_FINALIZATION" in notes_source.read_text(encoding="utf-8"):
+        parser.error(f"release notes are unfinished: {notes_source}")
     output = args.output.resolve()
     if output.exists():
         parser.error(f"refusing to overwrite existing release directory: {output}")
@@ -63,11 +69,7 @@ def main():
         rows = [f"{digest(path)}  {path.name}" for path in sorted(output.glob("*" + suffix))]
         (output / manifest).write_text("\n".join(rows) + "\n", encoding="ascii", newline="\n")
 
-    first_name = next(iter(uf2.EXPECTED))
-    version = first_name.split("_SmartUI_", 1)[1].removesuffix(".uf2")
-    notes_source = ROOT / f"RELEASE_NOTES_v{version}_RU.md"
-    if notes_source.is_file():
-        shutil.copy2(notes_source, output / notes_source.name)
+    shutil.copy2(notes_source, output / notes_source.name)
 
     manifest_payloads = sorted(output.iterdir())
     manifest = {
