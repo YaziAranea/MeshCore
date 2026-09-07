@@ -462,6 +462,23 @@ jobs:
           notes="RELEASE_NOTES_v2.1.0-beta.2_RU.md"
           release_json="$(mktemp)"
           trap 'rm -f "$release_json"' EXIT
+          find_release_id() {
+            # The tag endpoint returns 404 for drafts, even to their author.
+            # Listing releases includes accessible drafts. Never create another
+            # page until this exact-tag fallback has completed successfully.
+            local ids
+            ids="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"${tag}\") | .id")" || return 1
+            if [[ -z "$ids" ]]; then return 0; fi
+            if [[ "$ids" == *$'\n'* || ! "$ids" =~ ^[0-9]+$ ]]; then
+              echo "Ambiguous or invalid release IDs for ${tag}: ${ids}" >&2
+              return 1
+            fi
+            printf '%s\n' "$ids"
+          }
+
+          release_id=""
           status="$({
             curl --silent --show-error --location \
               --output "$release_json" \
@@ -474,18 +491,12 @@ jobs:
 
           case "$status" in
             200)
-              # A rerun updates this tag's existing page. Replace matching files
-              # one by one; do not empty the entire published release first.
-              gh release upload "$tag" release/* --clobber \
-                --repo "$GITHUB_REPOSITORY"
+              release_id="$(python -c \
+                'import json, sys; r=json.load(open(sys.argv[1], encoding="utf-8")); assert r["tag_name"] == sys.argv[2]; print(r["id"])' \
+                "$release_json" "$tag")"
               ;;
             404)
-              gh release create "$tag" release/* \
-                --title "$title" \
-                --notes-file "$notes" \
-                --draft \
-                --verify-tag \
-                --repo "$GITHUB_REPOSITORY"
+              release_id="$(find_release_id)"
               ;;
             *)
               echo "GitHub release lookup failed with HTTP ${status}" >&2
@@ -494,10 +505,28 @@ jobs:
               ;;
           esac
 
+          if [[ -n "$release_id" ]]; then
+            # A rerun resumes an existing public page or unfinished draft.
+            gh release upload "$tag" release/* --clobber \
+              --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" release/* \
+              --title "$title" \
+              --notes-file "$notes" \
+              --draft \
+              --verify-tag \
+              --repo "$GITHUB_REPOSITORY"
+            release_id="$(find_release_id)"
+          fi
+          if [[ ! "$release_id" =~ ^[0-9]+$ ]]; then
+            echo "Cannot resolve release ID for ${tag}; leaving the draft unpublished" >&2
+            exit 1
+          fi
+
           # New releases remain drafts until all 12 expected assets have arrived.
           # A beta is public and Latest, with the warning in its title and notes;
           # it deliberately does not use GitHub's prerelease visibility flag.
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" > "$release_json"
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
           python - "$release_json" <<'PY'
           import hashlib
           import json
@@ -528,7 +557,7 @@ jobs:
             --verify-tag \
             --repo "$GITHUB_REPOSITORY"
 
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             --jq 'if .draft == false and .prerelease == false then .html_url else error("Release is not public") end'
           latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
           test "$latest_tag" = "$tag"
