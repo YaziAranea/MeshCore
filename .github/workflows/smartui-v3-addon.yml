@@ -9,6 +9,8 @@ on:
       - tools/validate_release_v3.py
       - tools/simulate_heltec_v3_smartui_qa.py
       - tools/package_smartui_v3_addon.py
+      - merge-bin.py
+      - tools/test_v3_fresh_storage.py
   workflow_dispatch:
 
 permissions:
@@ -20,7 +22,7 @@ concurrency:
 
 jobs:
   build-v3:
-    name: Heltec V3 OLED merged and update BIN
+    name: Heltec V3 OLED FS1 fresh storage and update BIN
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -56,6 +58,7 @@ jobs:
           cp "${build_dir}/firmware-merged.bin" "firmware/${stem}-freshInstall-merged.bin"
           cp "${build_dir}/firmware.bin" "firmware/${stem}-update.bin"
           python tools/validate_release_v3.py firmware
+          python tools/test_v3_fresh_storage.py firmware
       - name: Upload validated V3 pair
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

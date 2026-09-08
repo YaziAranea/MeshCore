@@ -15,12 +15,12 @@ from pathlib import Path
 import re
 import zipfile
 
-from validate_release_esp32 import validate_pair
-from validate_release_v3 import PAIR
+from validate_release_v3 import PAIR, validate_v3_pair
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "2.1.0-experimental.1"
+V3_REVISION = "FS1"
 TAG = "v" + VERSION
 BASE_COMMIT = "00df4872c0ccad5530f5450132e743e1fb4f3d57"
 BASE_ZIP = f"MeshCore_SmartUI_{VERSION}_all-five-boards.zip"
@@ -133,12 +133,27 @@ def firmware_record(name: str, data: bytes, board: str, commit: str) -> dict:
         kind, offset = "esp32-fresh-install-merged", "0x00000"
     else:
         kind, offset = "esp32-application-update", "0x10000"
-    return record(name, data, board=board, kind=kind, flash_offset=offset, source_commit=commit)
+    metadata = {}
+    if name in V3_FILES:
+        fresh = name.endswith("-freshInstall-merged.bin")
+        metadata = {
+            "revision": V3_REVISION,
+            "storage": {
+                "contains_formatted_empty_spiffs": fresh,
+                "overwrites_existing_identity_and_settings_even_without_erase": fresh,
+                "clean_install_only": fresh,
+                "preserves_existing_filesystem": not fresh,
+                "initializes_erased_flash_storage": fresh,
+            },
+        }
+    return record(name, data, board=board, kind=kind, flash_offset=offset,
+                  source_commit=commit, **metadata)
 
 
 def build_addon(base: dict[str, bytes], v3: dict[str, bytes], notes: bytes, commit: str) -> dict[str, bytes]:
     sources = {"original_five_boards": {"tag": TAG, "commit": BASE_COMMIT},
-               "heltec_v3_addition": {"commit": commit, "updates_existing_release": TAG}}
+               "heltec_v3_addition": {"commit": commit, "revision": V3_REVISION,
+                                     "updates_existing_release": TAG}}
     firmwares = {n: base[n] for n in BASE_FIRMWARE} | v3
     firmware_rows = [firmware_record(n, data, BASE_FIRMWARE.get(n, "Heltec V3 OLED"),
                                     BASE_COMMIT if n in BASE_FIRMWARE else commit)
@@ -149,9 +164,22 @@ def build_addon(base: dict[str, bytes], v3: dict[str, bytes], notes: bytes, comm
 не заменяют проверку на реальной плате. Выбирайте файл строго для своей платы.
 
 Пять исходных плат: {BASE_COMMIT}
-Добавлен только Heltec V3 OLED: {commit}
+Heltec V3 OLED, исправление {V3_REVISION}: {commit}
 Старый тег {TAG} и его 12 файлов НЕ заменены.
 Этот общий ZIP дополнен V3; старый all-five-boards.zip оставлен без изменений.
+
+V3 FS1: ВАЖНО ПЕРЕД ПРОШИВКОЙ
+- Работающая нода: update.bin по адресу 0x10000, БЕЗ Erase Flash.
+  Этот файл содержит только приложение и не записывает раздел SPIFFS.
+- После уже выполненной очистки или STORAGE ERROR именно после Erase:
+  freshInstall-merged.bin FS1 по адресу 0x00000. Он содержит заранее
+  отформатированное пустое SPIFFS; повторять Erase Flash не требуется.
+- ВНИМАНИЕ: V3 freshInstall-merged.bin FS1 заменяет SPIFFS пустым хранилищем
+  и удаляет сохранённые identity/настройки ДАЖЕ БЕЗ галочки Erase Flash.
+  Это файл только для осознанной чистой установки, не обычного обновления.
+  Сохраните identity и нужные данные приватно до такой установки.
+- update.bin сам по себе не исправит пустое SPIFFS после Erase.
+Имена V3-файлов прежние: скачайте их заново и проверьте свежий SHA256SUMS-V3.txt.
 
 ФАЙЛЫ ПРОШИВОК
 """
@@ -159,11 +187,17 @@ def build_addon(base: dict[str, bytes], v3: dict[str, bytes], notes: bytes, comm
         mode = "UF2 для USB-bootloader" if row["flash_offset"] is None else (
             "полный merged BIN, адрес 0x00000" if row["flash_offset"] == "0x00000" else
             "обновление приложения BIN, адрес 0x10000")
+        if row["name"] in V3_FILES:
+            mode += ("; FS1, ЧИСТАЯ УСТАНОВКА СО СБРОСОМ ДАННЫХ" if row["flash_offset"] == "0x00000"
+                     else "; FS1, без записи файлового хранилища")
         readme += f"\n{row['board']} — {mode}\n  {row['name']}\n"
     readme += f"""
 UF2 нельзя использовать как BIN и наоборот. Модели V3, V4.3 и Wireless Paper
 не взаимозаменяемы. Merged предназначен для полной первоначальной установки;
 update содержит только приложение. Перед очисткой флеш-памяти сохраните настройки.
+Файлы V4.3/Wireless Paper оставлены прежними, без этого FS1-исправления:
+после Erase их пустое хранилище также может дать STORAGE ERROR. Для работающих
+нод используйте совместимый update без Erase. Не устанавливайте на них V3 BIN.
 
 ПРОИСХОЖДЕНИЕ И ПРОВЕРКА
 {ALL_MANIFEST}: source_commit и SHA256 для каждой из девяти прошивок,
@@ -178,6 +212,7 @@ base-release/ содержит неизменённые исходные зам�
     for name in (NOTES, "RELEASE-MANIFEST.json", "SHA256SUMS.txt", "SHA256SUMS-ESP32.txt"):
         payloads["base-release/" + name] = base[name]
     common = {"schema_version": 1, "tag": TAG, "kind": "six-board-combined-bundle",
+              "v3_revision": V3_REVISION,
               "sources": sources, "original_release_assets": records(base),
               "files": firmware_rows + records({n: b for n, b in payloads.items() if n not in firmwares}),
               "checksums_file": ALL_SUMS,
@@ -196,6 +231,7 @@ base-release/ содержит неизменённые исходные зам�
     verify_zip(zip_raw, payloads, COMBINED_ZIP)
     assets = v3 | {ADDENDUM: notes, COMBINED_ZIP: zip_raw}
     manifest = {"schema_version": 1, "tag": TAG, "kind": "heltec-v3-release-addition",
+                "revision": V3_REVISION,
                 "sources": sources, "original_release_assets_unchanged": records(base),
                 "firmware_files": [row for row in firmware_rows if row["source_commit"] == commit],
                 "files": records(assets), "checksums_file": V3_SUMS,
@@ -226,8 +262,9 @@ def main() -> int:
                     "output must not overlap either input directory")
         base = verify_base(base_dir)
         require(PAIR.stem == f"Heltec_V3_OLED_SmartUI_{VERSION}" and
-                PAIR.marker == f"V3 OLED SmartUI {VERSION}".encode("ascii"), "unexpected V3 validation configuration")
-        sizes_and_hashes = validate_pair(v3_dir, PAIR)
+                PAIR.marker == f"V3 OLED SmartUI {VERSION} {V3_REVISION}".encode("ascii"),
+                "unexpected V3 FS1 validation configuration")
+        sizes_and_hashes = validate_v3_pair(v3_dir)
         v3 = {name: (v3_dir / name).read_bytes() for name in V3_FILES}
         for index, name in enumerate(V3_FILES):
             require(len(v3[name]) == sizes_and_hashes[index] and
@@ -248,6 +285,7 @@ def main() -> int:
             for name, data in original.items():
                 require(sha256((directory / name).read_bytes()) == sha256(data), f"input changed: {directory / name}")
         print(json.dumps({"directory": str(output), "tag_unchanged": TAG,
+                          "v3_revision": V3_REVISION,
                           "base_commit": BASE_COMMIT, "v3_source_commit": commit,
                           "original_assets_unchanged": 12, "assets": records(assets)}, indent=2))
         return 0
