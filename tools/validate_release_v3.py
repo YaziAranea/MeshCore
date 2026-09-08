@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate V3 FS1: exact application pair and mountable, pristine empty SPIFFS.
+"""Validate V3 FS2: exact application pair and mountable, pristine empty SPIFFS.
 
 Requires PlatformIO's pinned tool-mkspiffs 2.230.0 and the installed ESP32-S3
 Arduino SDK configuration. No downloads, formatting of devices or hardware
@@ -20,7 +20,7 @@ from validate_release_esp32 import ImagePair, validate_pair
 
 PAIR = ImagePair(
     "Heltec_V3_OLED_SmartUI_2.1.0-experimental.1",
-    b"V3 OLED SmartUI 2.1.0-experimental.1 FS1",
+    b"V3 OLED SmartUI 2.1.0-experimental.1 FS2",
 )
 
 PARTITION_OFFSET = 0x8000
@@ -32,6 +32,15 @@ FORMAT_CONFIG = {
     "SPIFFS_USE_MAGIC": 1, "SPIFFS_USE_MAGIC_LENGTH": 1,
     "SPIFFS_ALIGNED_OBJECT_INDEX_TABLES": 0,
 }
+
+
+def factory_spiffs_sha256() -> str:
+    header = Path(__file__).resolve().parents[1] / "examples/companion_radio/ui-new/V3StorageRecovery.h"
+    source = header.read_text(encoding="utf-8")
+    match = re.search(r'kV3FactorySpiffsSha256Hex\[\]\s*=\s*"([0-9a-f]{64})"\s*;', source)
+    if not match:
+        raise ValueError("missing exact factory SPIFFS SHA256 in V3StorageRecovery.h")
+    return match[1]
 
 
 def validate_exact_application(image: bytes) -> None:
@@ -138,7 +147,7 @@ def check_host_configuration(tool: Path, sdkconfig: Path | None = None) -> dict:
         if not re.search(rf"^\s*{key}:\s*{value}\s*$", version, re.M):
             raise ValueError(f"mkspiffs on-disk configuration mismatch: {key}={value}")
     if "mkspiffs ver. 0.2.3" not in version or "SPIFFS ver. 0.3.7-5-gf5e26c4" not in version:
-        raise ValueError("unexpected mkspiffs/SPIFFS version; review before changing the FS1 contract")
+        raise ValueError("unexpected mkspiffs/SPIFFS version; review before changing the FS2 contract")
     if sdkconfig is None and os.environ.get("SMARTUI_SPIFFS_SDKCONFIG"):
         sdkconfig = Path(os.environ["SMARTUI_SPIFFS_SDKCONFIG"])
     configs = [Path(sdkconfig)] if sdkconfig else sorted(pio_packages().glob(
@@ -195,6 +204,10 @@ def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
         run_tool(tool, "-c", empty, *args, canonical)
         if canonical.read_bytes() != image:
             raise ValueError("SPIFFS is not a pristine canonical empty image (stale data or geometry mismatch)")
+    if part["offset"] != 0x670000 or part["size"] != 0x180000:
+        raise ValueError("SPIFFS layout does not match the narrowly scoped V3 recovery guard")
+    if hashlib.sha256(image).hexdigest() != factory_spiffs_sha256():
+        raise ValueError("factory SPIFFS SHA256 differs from V3StorageRecovery.h")
     return {**part, "page_size": PAGE_SIZE, "block_size": BLOCK_SIZE,
             "sha256": hashlib.sha256(image).hexdigest().upper(), "empty": True,
             "host_mount": "SPIFFS_mount via pinned mkspiffs -l; no auto-format",
@@ -205,7 +218,10 @@ def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
 def validate_v3_pair(directory: Path, *, mkspiffs: Path | None = None,
                      sdkconfig: Path | None = None) -> tuple[int, int, str, str]:
     result = validate_pair(directory, PAIR)
-    validate_exact_application((directory / f"{PAIR.stem}-update.bin").read_bytes())
+    update = (directory / f"{PAIR.stem}-update.bin").read_bytes()
+    validate_exact_application(update)
+    if factory_spiffs_sha256().encode("ascii") not in update:
+        raise ValueError("update does not contain the exact factory-empty recovery hash")
     merged = (directory / f"{PAIR.stem}-freshInstall-merged.bin").read_bytes()
     apps = [entry for entry in parse_partitions(merged) if entry["type"] == 0 and entry["offset"] == 0x10000]
     if len(apps) != 1 or result[1] > apps[0]["size"]:
@@ -226,7 +242,7 @@ def main():
     except (OSError, ValueError) as exc:
         parser.exit(1, f"[FAIL] {PAIR.stem}: {exc}\n")
     print(f"[PASS] {PAIR.stem}: merged {merged_size} bytes SHA256 {merged_hash}; "
-          f"update {update_size} bytes SHA256 {update_hash}; FS1 empty SPIFFS host mount verified")
+          f"update {update_size} bytes SHA256 {update_hash}; FS2 empty SPIFFS host mount verified")
 
 
 if __name__ == "__main__":

@@ -108,6 +108,10 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 
 /* END GLOBAL OBJECTS */
 
+#if defined(ESP32) && defined(DISPLAY_CLASS) && UI_V3_STORAGE_RECOVERY
+  #include "ui-new/V3StorageRecovery.h"
+#endif
+
 void halt() {
   while (1) ;
 }
@@ -206,8 +210,13 @@ void setup() {
   }
 #elif defined(ESP32)
   // Never turn a transient mount failure into an implicit factory reset.
-  // Formatting remains available only through the explicit recovery command.
+  // V3 may initialize a hash-verified factory-empty image; other data requires
+  // an explicit recovery confirmation. Other board paths remain unchanged.
+#if UI_V3_STORAGE_RECOVERY && defined(DISPLAY_CLASS)
+  storage_ready = smartui::v3MountStorage(disp);
+#else
   storage_ready = SPIFFS.begin(false);
+#endif
   if (!storage_ready) {
     MESH_DEBUG_PRINTLN("SPIFFS mount failed; refusing to auto-format persistent data");
   } else {
@@ -236,6 +245,9 @@ void setup() {
     MESH_DEBUG_PRINTLN("IDENTITY ERROR: restore a valid identity backup or perform an explicit factory reset");
 #ifdef DISPLAY_CLASS
     showFatalStorageError(disp, "IDENTITY ERROR", "RESTORE / RESET");
+#endif
+#if defined(ESP32) && defined(DISPLAY_CLASS) && UI_V3_STORAGE_RECOVERY
+    smartui::v3StorageRecoveryMenu(disp, true);
 #endif
     halt();
   }

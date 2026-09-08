@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for V3 FS1 release packaging, using real mkspiffs mounts.
+"""Regression tests for V3 FS2 release packaging, using real mkspiffs mounts.
 
 Pass a firmware directory to exercise a compiled release pair. With no argument
 only a clearly synthetic ESP container is used; it is never a flashable artifact.
@@ -12,11 +12,12 @@ import hashlib
 from pathlib import Path
 import struct
 import tempfile
+from unittest.mock import patch
 
 from validate_release_v3 import (
     PAIR, PARTITION_OFFSET, PARTITION_SECTOR, PAGE_SIZE, BLOCK_SIZE,
     find_mkspiffs, run_tool, parse_partitions, inspect_fresh_spiffs,
-    validate_v3_pair,
+    validate_v3_pair, factory_spiffs_sha256,
 )
 
 
@@ -56,7 +57,7 @@ def main() -> None:
             scope = "actual supplied compiled release pair"
         else:
             # Synthetic packaging fixture only: not a real application or bootloader.
-            payload = PAIR.marker + b"\0" * 32
+            payload = PAIR.marker + b"\0" + factory_spiffs_sha256().encode("ascii") + b"\0" * 32
             update = b"\xe9\x01\x00\x30" + b"\0" * 20 + struct.pack("<II", 0x3C000020, len(payload)) + payload
             checksum = 0xEF
             for value in payload: checksum ^= value
@@ -97,6 +98,8 @@ def main() -> None:
             passed += 1
             print(f"[PASS] rejects {label}")
         accepted("complete formatted empty SPIFFS mounts", lambda: inspect_fresh_spiffs(merged))
+        with patch("validate_release_v3.factory_spiffs_sha256", return_value="0" * 64):
+            rejected("image hash differs from runtime recovery guard", lambda: inspect_fresh_spiffs(merged), "differs from V3StorageRecovery.h")
         rejected("old merged without FS", lambda: inspect_fresh_spiffs(merged[:0x10000 + len(update)]), "missing the complete")
         rejected("truncated FS", lambda: inspect_fresh_spiffs(merged[:offset + size - 1]), "missing the complete")
         rejected("erased FF partition", lambda: inspect_fresh_spiffs(with_fs(b"\xff" * size)), "erased")
@@ -125,7 +128,7 @@ def main() -> None:
         (fixture / f"{PAIR.stem}-freshInstall-merged.bin").write_bytes(merged)
         update_path = fixture / f"{PAIR.stem}-update.bin"
         update_path.write_bytes(update)
-        accepted("exact update/application bytes and FS1 marker", lambda: validate_v3_pair(fixture))
+        accepted("exact update/application bytes and FS2 marker", lambda: validate_v3_pair(fixture))
         changed = bytearray(update)
         changed[-1] ^= 1
         update_path.write_bytes(changed)
@@ -134,7 +137,7 @@ def main() -> None:
         rejected("FF padding appended to update payload", lambda: validate_v3_pair(fixture), "trailing bytes")
         update_path.write_bytes(update + original)
         rejected("filesystem appended to update payload", lambda: validate_v3_pair(fixture), "slice differs")
-    print(f"V3 FS1 storage regression: {passed} passed; {scope}.")
+    print(f"V3 FS2 storage regression: {passed} passed; {scope}.")
     print("Host mount/configuration tests only; not an ESP32 boot or hardware test.")
 
 

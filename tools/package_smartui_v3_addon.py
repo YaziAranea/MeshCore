@@ -20,7 +20,7 @@ from validate_release_v3 import PAIR, validate_v3_pair
 
 ROOT = Path(__file__).resolve().parents[1]
 VERSION = "2.1.0-experimental.1"
-V3_REVISION = "FS1"
+V3_REVISION = "FS2"
 TAG = "v" + VERSION
 BASE_COMMIT = "00df4872c0ccad5530f5450132e743e1fb4f3d57"
 BASE_ZIP = f"MeshCore_SmartUI_{VERSION}_all-five-boards.zip"
@@ -144,6 +144,8 @@ def firmware_record(name: str, data: bytes, board: str, commit: str) -> dict:
                 "clean_install_only": fresh,
                 "preserves_existing_filesystem": not fresh,
                 "initializes_erased_flash_storage": fresh,
+                "boot_recovery": "exact-empty-factory-hash-only automatic native format; otherwise explicit two-step user confirmation",
+                "hardware_validation": "FS1 still failed on user hardware; FS2 hardware success not yet confirmed",
             },
         }
     return record(name, data, board=board, kind=kind, flash_offset=offset,
@@ -168,17 +170,23 @@ Heltec V3 OLED, исправление {V3_REVISION}: {commit}
 Старый тег {TAG} и его 12 файлов НЕ заменены.
 Этот общий ZIP дополнен V3; старый all-five-boards.zip оставлен без изменений.
 
-V3 FS1: ВАЖНО ПЕРЕД ПРОШИВКОЙ
+V3 FS2: ВАЖНО ПЕРЕД ПРОШИВКОЙ
 - Работающая нода: update.bin по адресу 0x10000, БЕЗ Erase Flash.
   Этот файл содержит только приложение и не записывает раздел SPIFFS.
 - После уже выполненной очистки или STORAGE ERROR именно после Erase:
-  freshInstall-merged.bin FS1 по адресу 0x00000. Он содержит заранее
+  freshInstall-merged.bin FS2 по адресу 0x00000. Он содержит заранее
   отформатированное пустое SPIFFS; повторять Erase Flash не требуется.
-- ВНИМАНИЕ: V3 freshInstall-merged.bin FS1 заменяет SPIFFS пустым хранилищем
+- ВНИМАНИЕ: V3 freshInstall-merged.bin FS2 заменяет SPIFFS пустым хранилищем
   и удаляет сохранённые identity/настройки ДАЖЕ БЕЗ галочки Erase Flash.
   Это файл только для осознанной чистой установки, не обычного обновления.
   Сохраните identity и нужные данные приватно до такой установки.
-- update.bin сам по себе не исправит пустое SPIFFS после Erase.
+- FS1 не устранила STORAGE ERROR на пользовательской плате.
+- FS2 при ошибке mount автоматически готовит штатное SPIFFS только при точном
+  SHA256 известного пустого заводского образа и правильной разметке. Другие данные,
+  стертый FF-раздел или ошибки чтения не разрешают автоматическое форматирование.
+- Иначе восстановление требует двух отдельных подтверждений PRG/BOOT с отпусканием
+  между ними; это удаляет identity/контакты/настройки. Отказ и таймаут не стирают данные.
+- Успешная аппаратная проверка FS2 пока не подтверждена.
 Имена V3-файлов прежние: скачайте их заново и проверьте свежий SHA256SUMS-V3.txt.
 
 ФАЙЛЫ ПРОШИВОК
@@ -188,14 +196,14 @@ V3 FS1: ВАЖНО ПЕРЕД ПРОШИВКОЙ
             "полный merged BIN, адрес 0x00000" if row["flash_offset"] == "0x00000" else
             "обновление приложения BIN, адрес 0x10000")
         if row["name"] in V3_FILES:
-            mode += ("; FS1, ЧИСТАЯ УСТАНОВКА СО СБРОСОМ ДАННЫХ" if row["flash_offset"] == "0x00000"
-                     else "; FS1, без записи файлового хранилища")
+            mode += ("; FS2, ЧИСТАЯ УСТАНОВКА СО СБРОСОМ ДАННЫХ" if row["flash_offset"] == "0x00000"
+                     else "; FS2, без записи файлового хранилища")
         readme += f"\n{row['board']} — {mode}\n  {row['name']}\n"
     readme += f"""
 UF2 нельзя использовать как BIN и наоборот. Модели V3, V4.3 и Wireless Paper
 не взаимозаменяемы. Merged предназначен для полной первоначальной установки;
 update содержит только приложение. Перед очисткой флеш-памяти сохраните настройки.
-Файлы V4.3/Wireless Paper оставлены прежними, без этого FS1-исправления:
+Файлы V4.3/Wireless Paper оставлены прежними, без этого FS2-исправления:
 после Erase их пустое хранилище также может дать STORAGE ERROR. Для работающих
 нод используйте совместимый update без Erase. Не устанавливайте на них V3 BIN.
 
@@ -263,7 +271,7 @@ def main() -> int:
         base = verify_base(base_dir)
         require(PAIR.stem == f"Heltec_V3_OLED_SmartUI_{VERSION}" and
                 PAIR.marker == f"V3 OLED SmartUI {VERSION} {V3_REVISION}".encode("ascii"),
-                "unexpected V3 FS1 validation configuration")
+                "unexpected V3 FS2 validation configuration")
         sizes_and_hashes = validate_v3_pair(v3_dir)
         v3 = {name: (v3_dir / name).read_bytes() for name in V3_FILES}
         for index, name in enumerate(V3_FILES):
