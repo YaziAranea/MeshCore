@@ -17,10 +17,10 @@
 ```powershell
 git clone https://github.com/YaziAranea/MeshCore.git
 Set-Location MeshCore
-git switch smartui-2.1-experimental.1
+git switch smartui-2.1-experimental.2
 ```
 
-Текущий эксперимент для шести плат находится в `smartui-2.1-experimental.1`; предыдущая beta для пяти плат без V3 сохранена в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Текущий эксперимент для шести плат находится в `smartui-2.1-experimental.2`; предыдущая beta для пяти плат без V3 сохранена в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -78,12 +78,12 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
 
-Публичные stems `v2.1.0-experimental.1`:
+Публичные stems `v2.1.0-experimental.2`:
 
 ```text
-Heltec_V3_OLED_SmartUI_2.1.0-experimental.1
-Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1
-Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1
+Heltec_V3_OLED_SmartUI_2.1.0-experimental.2
+Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2
+Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2
 ```
 
 К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
@@ -97,13 +97,13 @@ V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/�
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-experimental.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-experimental.2.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-experimental.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-experimental.2.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -113,11 +113,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-experimental.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-experimental.2.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-experimental.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-experimental.2.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -133,21 +133,20 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Старый упаковщик предназначен только для исходной матрицы пяти плат
-(T096/T114/ProMicro/V4.3/Paper), без V3. Укажите новую, ещё не существующую папку:
+Упаковщик experimental.2 принимает девять прошивок шести плат из одного
+чистого commit. Укажите новую, ещё не существующую папку:
 
 ```powershell
-python tools/package_smartui_release.py ../SmartUI-experimental1-baseline-five
+python tools/package_smartui_release.py ../SmartUI-experimental2-six-boards
 ```
 
-Скрипт берёт файлы из `.pio/build`, проверяет UF2 и пары BIN, создаёт оба SHA-256 манифеста и ZIP пяти плат. Он не прошивает платы и не публикует ничего на GitHub. Существующую папку не перезаписывает.
-
-V3 добавляется отдельной парой BIN и проверяется `tools/validate_release_v3.py`;
-его дополнение упаковывается отдельным `tools/package_smartui_v3_addon.py`.
-При дополнении уже опубликованного эксперимента не пересобирайте и не заменяйте
-пять исходных файловых наборов. Дополнение имеет собственный commit; общий
-архив шести плат должен указывать происхождение каждого набора, а не выдавать
-все бинарники за сборку одного исходного тега.
+Скрипт берёт файлы из `.pio/build`, проверяет UF2, три пары BIN и подготовленную
+SPIFFS V3, создаёт два списка SHA-256, общий `RELEASE-MANIFEST.json` и ZIP шести
+плат. Нужны PlatformIO tool-mkspiffs 2.230.0 и SDK-конфигурация V3. Для CI
+поддерживается `--firmware-dir` с девятью release-named файлами.
+Он не прошивает платы и не публикует ничего на GitHub. Существующую папку
+не перезаписывает. Исторический addon-упаковщик experimental.1 в новом выпуске
+не используется; прежние релизы и теги не изменяются.
 
 PowerShell:
 

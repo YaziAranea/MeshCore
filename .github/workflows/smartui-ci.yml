@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - smartui-ps17.2-dev
+      - smartui-2.1-experimental.2
       # Experimental publication is explicitly dispatched and gated below.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish EXPERIMENTAL 1 after all required checks pass
+        description: Publish EXPERIMENTAL 2 after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -18,8 +19,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: smartui-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: smartui-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   PLATFORMIO_CORE_VERSION: 6.1.19
@@ -36,15 +37,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-experimental.1.uf2
+            uf2_name: T096_FEM_SmartUI_2.1.0-experimental.2.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-experimental.1.uf2
+            uf2_name: T114_SmartUI_2.1.0-experimental.2.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2
+            uf2_name: ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2
 
     steps:
       - name: Check out source
@@ -138,14 +139,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - board: Heltec V3 OLED FS2
+            artifact_id: heltec-v3-oled
+            environment: Heltec_v3_companion_radio_ble_smartui
+            stem: Heltec_V3_OLED_SmartUI_2.1.0-experimental.2
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1
+            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1
+            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2
 
     steps:
       - name: Check out source
@@ -186,6 +191,44 @@ jobs:
           cp "${build_dir}/firmware-merged.bin" "firmware/${{ matrix.stem }}-freshInstall-merged.bin"
           cp "${build_dir}/firmware.bin" "firmware/${{ matrix.stem }}-update.bin"
 
+      - name: Validate V3 prepared SPIFFS and FS2 recovery contract
+        if: matrix.artifact_id == 'heltec-v3-oled'
+        run: |
+          python tools/validate_release_v3.py firmware
+          python tools/test_v3_fresh_storage.py firmware
+          python tools/test_storage_recovery_policy.py
+          python tools/test_v3_storage_recovery.py
+
+      - name: Preserve the actual V3 validation tool and SDK configuration
+        if: matrix.artifact_id == 'heltec-v3-oled'
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          import sys
+          sys.path.insert(0, "tools")
+          from validate_release_v3 import find_mkspiffs, check_host_configuration
+          tool = find_mkspiffs()
+          checked = check_host_configuration(tool)
+          config = Path(checked["sdk_configs_checked"][0])
+          header = config.parents[2] / "include/spiffs/include/spiffs_config.h"
+          root = Path("validation-support")
+          (root / "sdk/profile/include").mkdir(parents=True)
+          (root / "sdk/include/spiffs/include").mkdir(parents=True)
+          shutil.copy2(tool, root / "mkspiffs")
+          shutil.copy2(config, root / "sdk/profile/include/sdkconfig.h")
+          shutil.copy2(header, root / "sdk/include/spiffs/include/spiffs_config.h")
+          PY
+
+      - name: Upload V3 validation support (not a public release asset)
+        if: matrix.artifact_id == 'heltec-v3-oled'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: smartui-v3-validation-support
+          path: validation-support
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload board BIN pair
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -217,8 +260,19 @@ jobs:
           path: firmware
           merge-multiple: true
 
+      - name: Download the pinned validation support from the V3 build
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-v3-validation-support
+          path: validation-support
+
       - name: Validate ESP image headers, app slices and markers
-        run: python tools/validate_release_esp32.py firmware
+        run: |
+          python tools/validate_release_esp32.py firmware
+          chmod +x validation-support/mkspiffs
+          python tools/validate_release_v3.py firmware \
+            --mkspiffs validation-support/mkspiffs \
+            --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
 
       - name: Generate SHA256 checksums
         working-directory: firmware
@@ -231,6 +285,45 @@ jobs:
           path: |
             firmware/*.bin
             firmware/SHA256SUMS-ESP32.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  package-release:
+    name: Package one exact-source six-board release
+    needs: [validate-uf2, validate-esp32]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact firmware source and release notes
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-ps17-validated-uf2
+          path: firmware
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-ps17-validated-esp32-bin
+          path: firmware
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: smartui-v3-validation-support
+          path: validation-support
+      - name: Validate all nine images and build manifest, checksums and all-six ZIP
+        run: |
+          chmod +x validation-support/mkspiffs
+          python tools/package_smartui_release.py release \
+            --firmware-dir firmware --commit "$GITHUB_SHA" \
+            --mkspiffs validation-support/mkspiffs \
+            --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
+      - name: Upload the complete fourteen-asset release
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: smartui-experimental-release
+          path: release/*
           if-no-files-found: error
           retention-days: 30
 
@@ -353,6 +446,9 @@ jobs:
       - name: Exercise the actual settings navigation and confirmations
         run: python tools/test_settings_flow.py
 
+      - name: Check real-font quiet-state placement in production C++
+        run: python tools/test_quiet_status.py
+
       - name: Check actual C++ icons on every display backend
         run: python tools/simulate_icon_alignment_beta2.py --out qa_outputs/icon_alignment_beta2
 
@@ -364,6 +460,9 @@ jobs:
 
       - name: Run Heltec V4.3 OLED chrome simulation
         run: python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/v4_3_oled
+
+      - name: Run Heltec V3 OLED profiles and interaction geometry
+        run: python tools/simulate_heltec_v3_smartui_qa.py
 
       - name: Run Wireless Paper 250x122 simulation
         run: python tools/simulate_wireless_paper_ps17_qa.py --out-dir qa_outputs/wireless_paper
@@ -382,8 +481,7 @@ jobs:
   release-gate:
     name: Required experimental release gate
     needs:
-      - validate-uf2
-      - validate-esp32
+      - package-release
       - build-display-compatibility
       - native-tests
       - ui-qa
@@ -392,13 +490,13 @@ jobs:
       - name: Confirm every required job succeeded
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
-  publish-beta-release:
+  publish-experimental-release:
     name: Publish the separate EXPERIMENTAL release
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.1'
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.2'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-beta-release-v2.1.0-experimental.1
+      group: publish-experimental-release-v2.1.0-experimental.2
       cancel-in-progress: false
     permissions:
       contents: write
@@ -410,66 +508,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download validated UF2 bundle
+      - name: Download the single fully validated release bundle
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          name: smartui-ps17-validated-uf2
+          name: smartui-experimental-release
           path: release
-
-      - name: Download validated ESP32-S3 bundle
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
-        with:
-          name: smartui-ps17-validated-esp32-bin
-          path: release
-
-      - name: Build the all-five-boards archive and manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          cp RELEASE_NOTES_v2.1.0-experimental.1_RU.md release/
-          python - <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import zipfile
-
-          root = Path("release")
-          notes = root / "RELEASE_NOTES_v2.1.0-experimental.1_RU.md"
-          assert notes.is_file(), "Release notes are required"
-          assert "RELEASE_FINALIZATION" not in notes.read_text(encoding="utf-8"), "Release notes are unfinished"
-          payloads = sorted(
-              p for p in root.iterdir()
-              if p.suffix in {".uf2", ".bin", ".txt", ".md"}
-          )
-          manifest = {
-              "tag": "v2.1.0-experimental.1",
-              "commit": "${{ github.sha }}",
-              "files": [
-                  {
-                      "name": p.name,
-                      "bytes": p.stat().st_size,
-                      "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
-                  }
-                  for p in payloads
-              ],
-          }
-          manifest_path = root / "RELEASE-MANIFEST.json"
-          manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-          archive = root / "MeshCore_SmartUI_2.1.0-experimental.1_all-five-boards.zip"
-          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-              for path in payloads + [manifest_path]:
-                  zf.write(path, path.name)
-          with zipfile.ZipFile(archive) as zf:
-              assert zf.testzip() is None
-          PY
 
       - name: Create or resume the separate experimental release page
         shell: bash
         run: |
           set -euo pipefail
-          tag="v2.1.0-experimental.1"
-          title="MeshCore SmartUI v2.1.0-experimental.1 — ЭКСПЕРИМЕНТАЛЬНЫЙ UI"
-          notes="RELEASE_NOTES_v2.1.0-experimental.1_RU.md"
+          tag="v2.1.0-experimental.2"
+          title="MeshCore SmartUI v2.1.0-experimental.2 — ЭКСПЕРИМЕНТАЛЬНЫЙ UI"
+          notes="release/RELEASE_NOTES_v2.1.0-experimental.2_RU.md"
           # Create the immutable tag only after all builds/tests passed. A
           # failed pre-release build therefore never leaves a broken tag.
           tag_json="$(mktemp)"
@@ -552,7 +603,7 @@ jobs:
             exit 1
           fi
 
-          # New releases remain drafts until all 12 expected assets have arrived.
+          # New releases remain drafts until all 14 expected assets have arrived.
           # Keep this visible as a normal public Release, with an explicit
           # EXPERIMENTAL warning. Do not replace the existing beta.2 Latest.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
@@ -565,7 +616,7 @@ jobs:
           local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
           remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assets = {a["name"]: a for a in remote["assets"]}
-          assert len(local) == 12, f"Expected 12 local assets, got {len(local)}"
+          assert len(local) == 14, f"Expected 14 local assets, got {len(local)}"
           assert len(remote["assets"]) == len(assets), "Duplicate asset names"
           assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
           for name, path in local.items():

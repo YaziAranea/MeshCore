@@ -1,5 +1,11 @@
 # MeshCore Smart UI PowerSaving17 — полная документация
 
+> **Новый экспериментальный UI для шести плат — experimental.2.**
+> [Скачать](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.2)
+> · [Изменения, выбор файла и ограничения чистой установки](RELEASE_NOTES_v2.1.0-experimental.2_RU.md)
+> · [Свежие экраны](docs/SCREENS_RU.md).
+> Ниже сохранено описание базовой beta.2; актуальные файлы эксперимента имеют версию `2.1.0-experimental.2`.
+
 ## 1. Назначение проекта
 
 MeshCore Smart UI — неофициальная модификация Companion-прошивки MeshCore с единым русским интерфейсом для Heltec T096, Heltec T114, ProMicro RA62, Heltec V4.3 OLED и Heltec Wireless Paper.

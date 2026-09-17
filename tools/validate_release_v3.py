@@ -15,12 +15,12 @@ import struct
 import subprocess
 import tempfile
 
-from validate_release_esp32 import ImagePair, validate_pair
+from validate_release_esp32 import ImagePair, validate_pair, validate_exact_application
 
 
 PAIR = ImagePair(
-    "Heltec_V3_OLED_SmartUI_2.1.0-experimental.1",
-    b"V3 OLED SmartUI 2.1.0-experimental.1 FS2",
+    "Heltec_V3_OLED_SmartUI_2.1.0-experimental.2",
+    b"V3 OLED SmartUI 2.1.0-experimental.2 FS2",
 )
 
 PARTITION_OFFSET = 0x8000
@@ -41,33 +41,6 @@ def factory_spiffs_sha256() -> str:
     if not match:
         raise ValueError("missing exact factory SPIFFS SHA256 in V3StorageRecovery.h")
     return match[1]
-
-
-def validate_exact_application(image: bytes) -> None:
-    """Check actual ESP segment/checksum/hash extent, rejecting appended FS/padding."""
-    pos, checksum = 24, 0xEF
-    for _ in range(image[1]):
-        if pos + 8 > len(image):
-            raise ValueError("truncated ESP application segment header")
-        _, size = struct.unpack_from("<II", image, pos)
-        pos += 8
-        if pos + size > len(image):
-            raise ValueError("truncated ESP application segment")
-        for value in image[pos:pos + size]:
-            checksum ^= value
-        pos += size
-    end = (pos + 16) & ~15
-    if end > len(image) or image[end - 1] != checksum:
-        raise ValueError("ESP application checksum mismatch")
-    if image[pos:end - 1] != b"\0" * (end - pos - 1):
-        raise ValueError("unexpected ESP application alignment padding")
-    if image[23] not in (0, 1):
-        raise ValueError("unsupported ESP application hash flag")
-    expected_end = end + (32 if image[23] else 0)
-    if len(image) != expected_end:
-        raise ValueError("update has trailing bytes outside the ESP application (FS/padding is forbidden)")
-    if image[23] and hashlib.sha256(image[:end]).digest() != image[end:]:
-        raise ValueError("ESP application appended SHA256 mismatch")
 
 
 def parse_partitions(merged: bytes) -> list[dict]:

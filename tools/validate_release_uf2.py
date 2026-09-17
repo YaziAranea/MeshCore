@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the three nRF52 UF2 artifacts for SmartUI experimental 1."""
+"""Validate the three nRF52 UF2 artifacts for SmartUI experimental 2."""
 
 from __future__ import annotations
 
@@ -14,11 +14,12 @@ MAGIC_START1 = 0x9E5D5157
 MAGIC_END = 0x0AB16F30
 NRF52840_FAMILY = 0xADA52840
 APP_START = 0x26000
+APP_END = 0xD4000  # Preserve the extra-FS region shared by these profiles.
 
 EXPECTED = {
-    "T096_FEM_SmartUI_2.1.0-experimental.1.uf2": b"T096 SmartUI 2.1.0-experimental.1",
-    "T114_SmartUI_2.1.0-experimental.1.uf2": b"T114 SmartUI 2.1.0-experimental.1",
-    "ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2": b"ProMicro SmartUI 2.1.0-experimental.1",
+    "T096_FEM_SmartUI_2.1.0-experimental.2.uf2": b"T096 SmartUI 2.1.0-experimental.2",
+    "T114_SmartUI_2.1.0-experimental.2.uf2": b"T114 SmartUI 2.1.0-experimental.2",
+    "ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2": b"ProMicro SmartUI 2.1.0-experimental.2",
 }
 
 
@@ -45,12 +46,16 @@ def validate(path: Path, marker: bytes) -> tuple[str, int, int]:
             declared_count = count
         if count != declared_count or count != blocks:
             raise ValueError(f"block {index}: inconsistent block count {count}")
-        if size <= 0 or size > 476:
+        if size != 256:
             raise ValueError(f"block {index}: invalid payload size {size}")
         if not flags & 0x2000 or family != NRF52840_FAMILY:
             raise ValueError(f"block {index}: wrong or missing nRF52840 family ID")
         if address in payloads:
             raise ValueError(f"block {index}: duplicate target address 0x{address:08X}")
+        if address != APP_START + index * size:
+            raise ValueError(f"block {index}: non-contiguous target address 0x{address:08X}")
+        if address + size > APP_END:
+            raise ValueError(f"block {index}: application overlaps the reserved extra-FS region")
         payloads[address] = block[32:32 + size]
 
     first_address = min(payloads)
@@ -75,7 +80,7 @@ def main() -> int:
         nargs="?",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "firmware",
-        help="directory containing the three SmartUI beta UF2 files",
+        help="directory containing the three SmartUI experimental UF2 files",
     )
     args = parser.parse_args()
 

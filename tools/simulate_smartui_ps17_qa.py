@@ -732,6 +732,20 @@ def setting_row(index: int) -> tuple[str, str]:
     return f"Дополнительная настройка {index + 1}", "ВКЛ" if index % 2 else "ВЫКЛ"
 
 
+def draw_settings_header(frame: Frame, title: str, action: str, tag: str) -> None:
+    """Mirror the measured production header; actual C++ proof is in dev2 QA."""
+    w = frame.board.logical_w
+    hint = "Удерж: " + action if action else ""
+    if frame.font.width(title) + frame.font.width(hint) + 8 > w:
+        hint = "Удерж." if action else ""
+    if frame.font.width(title) + frame.font.width(hint) + 8 > w:
+        hint = ""
+    hint_w = frame.font.width(hint)
+    frame.text(2, 14, title, "green", max_w=w-(hint_w+8 if hint else 4), tag=tag+" title")
+    if hint:
+        frame.text(w-2, 14, hint, "light", right=True, max_w=hint_w, tag=tag+" hint")
+
+
 def render_compact(profile: BoardProfile, *, desired: bool, count: int = 350,
                    cursor: int | None = None) -> Frame:
     frame = Frame(profile, f"{'desired' if desired else 'current'} compact {count}", desired)
@@ -755,9 +769,12 @@ def render_compact(profile: BoardProfile, *, desired: bool, count: int = 350,
         start = max(0, count - visible)
 
     action="Изменить" if desired else "<>OK"
-    hint_w=frame.font.width(action)
-    frame.text(2, 14, "Настройки", "green", max_w=w-hint_w-8, tag="compact title")
-    frame.text(w - 2, 14, action, right=True, max_w=hint_w, tag="compact hint")
+    if desired:
+        draw_settings_header(frame, "Настройки", action, "compact")
+    else:
+        hint_w=frame.font.width(action)
+        frame.text(2, 14, "Настройки", "green", max_w=w-hint_w-8, tag="compact title")
+        frame.text(w - 2, 14, action, right=True, max_w=hint_w, tag="compact hint")
     for row in range(visible):
         index = start + row
         if index >= count:
@@ -833,10 +850,7 @@ def render_appearance_picker(profile: BoardProfile, *, font_picker: bool, cursor
     has_scrollbar = item_count > visible
 
     action="Выбрать" if cursor<choice_count else "Отмена"
-    hint_w=frame.font.width(action)
-    frame.text(2, 14, "Шрифт" if font_picker else "Тема", "green", max_w=w - hint_w - 8,
-               tag="appearance title")
-    frame.text(w - 2, 14, action, right=True, max_w=hint_w, tag="appearance hint")
+    draw_settings_header(frame, "Шрифт" if font_picker else "Тема", action, "appearance")
     for row in range(visible):
         index = start + row
         if index >= item_count:

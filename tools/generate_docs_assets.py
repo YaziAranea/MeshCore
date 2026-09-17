@@ -176,6 +176,21 @@ def draw_mute(frame: Frame, x: int, y: int, size: int) -> None:
     frame.elements.append(Element("mute", frame.logical_box_to_physical(x, y, size, size)))
 
 
+def draw_quiet_status(frame: Frame, x: int, y: int, max_width: int, icon_size: int) -> int:
+    """Match drawUiQuietStatus: complete real-font text, otherwise native icon."""
+    label_width = frame.font.width("ТИХО")
+    if 0 < label_width <= max_width:
+        frame.text(x, y, "ТИХО", "red", max_w=max_width, tag="mute")
+        return label_width
+    if icon_size > max_width:
+        icon_size = 8
+    if icon_size > max_width:
+        frame.violations.append("required quiet status hidden")
+        return 0
+    draw_mute(frame, x, aligned_icon_y(frame, y, icon_size), icon_size)
+    return icon_size
+
+
 def aligned_icon_y(frame: Frame, y: int, size: int) -> int:
     """Mirror uiTextAlignedIconY and the bitmap ink-metric getters."""
     ink = glyph_ink_bounds(frame.font.raw.glyph("H"))
@@ -223,9 +238,8 @@ def render_rows(profile: BoardProfile, title: str, rows: list[tuple[str, str]], 
         start = item_count - visible
 
     if root_menu: action="Закрыть" if rows[selected][0]=="Закрыть" else "Открыть"
-    hint_w=frame.font.width(action)
-    frame.text(2, 14, title, "green", max_w=w-hint_w-8, tag="menu title")
-    frame.text(w - 2, 14, action, "light", right=True, max_w=hint_w, tag="menu hint")
+    from simulate_smartui_ps17_qa import draw_settings_header
+    draw_settings_header(frame, title, action, "menu")
     value_width = 66 if w > 140 else 50
     has_scrollbar = item_count > visible
     for row in range(visible):
@@ -313,11 +327,7 @@ def render_clock_t096(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5
     status_right = gps_right
     if muted:
         mute_x = gps_right + 4
-        if mute_x + 16 <= voltage_x - 3:
-            draw_mute(frame, mute_x, aligned_icon_y(frame, 0, 16), 16)
-            status_right = mute_x + 16
-        else:
-            frame.violations.append("required mute icon hidden")
+        status_right = mute_x + draw_quiet_status(frame, mute_x, 0, voltage_x - 3 - mute_x, 16)
 
     clock_font = T096ExactFont("clock", load_font(profile.font_id, "L"))
     time = "17:08" if time_valid else "--:--"
@@ -358,11 +368,7 @@ def render_clock_t114(profile: BoardProfile, uptime_seconds: int = 40 * 3600 + 5
     if muted:
         icon_size = min(12, max(9, frame.font.logical_height - 1))
         mute_x = gps_right + 3
-        if mute_x + icon_size <= name_right:
-            draw_mute(frame, mute_x, aligned_icon_y(frame, 0, icon_size), icon_size)
-            status_right = mute_x + icon_size
-        else:
-            frame.violations.append("required mute icon hidden")
+        status_right = mute_x + draw_quiet_status(frame, mute_x, 0, name_right - mute_x, icon_size)
     draw_page_dots(frame)
 
     raw_clock = EmbeddedRaw("meshcore_st7789_font", "meshcoreSt7789Fonts", 15)

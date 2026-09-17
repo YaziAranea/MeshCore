@@ -3286,6 +3286,24 @@ static void drawPreviewTextEllipsized(DisplayDriver& display, int x, int y, int 
 #endif
 }
 
+// A state must be readable without recognising a tiny speaker silhouette.
+// Use the current real font, not an assumed glyph width; on a crowded header
+// keep a complete native icon instead of truncating the word or hiding mute.
+static int drawUiQuietStatus(DisplayDriver& display, int x, int y, int max_width) {
+  if (max_width <= 0) return 0;
+  const char* label = "ТИХО";
+  const int label_width = display.getTextWidth(label);
+  if (label_width > 0 && label_width <= max_width) {
+    display.drawTextLeftAlign(x, y, label);
+    return label_width;
+  }
+  int size = uiStatusIconSize(display);
+  if (size > max_width) size = 8;
+  if (size > max_width) return 0;
+  drawUiIcon(display, x, uiTextAlignedIconY(display, y, size), muted_icon, size);
+  return size;
+}
+
 static uint32_t uiApplyTimezoneOffset(uint32_t now, int32_t offset_seconds) {
   int64_t adjusted = (int64_t)now + offset_seconds;
   if (adjusted <= 0) return 0;
@@ -5082,11 +5100,27 @@ class HomeScreen : public UIScreen {
 
   void renderSettingsHeader(DisplayDriver& display, const char* title, const char* action) const {
     display.setBold(false);
-    int hint_w = display.getTextWidth(action);
+    const char* heading = title != NULL ? title : "";
+    char hint[64] = {0};
+    if (action != NULL && action[0]) {
+      int written = snprintf(hint, sizeof(hint), "Удерж: %s", action);
+      int title_w = display.getTextWidth(heading);
+      if (written < 0 || written >= (int)sizeof(hint) ||
+          title_w + display.getTextWidth(hint) + 8 > display.width()) {
+        snprintf(hint, sizeof(hint), "Удерж.");
+      }
+      // Keep the complete section name. The selected row supplies context
+      // when even the compact hold reminder cannot share this baseline.
+      if (title_w + display.getTextWidth(hint) + 8 > display.width()) hint[0] = 0;
+    }
+    int hint_w = display.getTextWidth(hint);
+    int title_width = display.width() - (hint_w > 0 ? hint_w + 8 : 4);
     display.setColor(DisplayDriver::GREEN);
-    drawRichTextStaticEllipsized(display, 2, 14, display.width() - hint_w - 8, title);
-    display.setColor(DisplayDriver::LIGHT);
-    display.drawTextRightAlign(display.width() - 2, 14, action);
+    drawRichTextStaticEllipsized(display, 2, 14, title_width, heading);
+    if (hint_w > 0) {
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawTextRightAlign(display.width() - 2, 14, hint);
+    }
   }
 
   void renderCompactSettings(DisplayDriver& display) const {
@@ -7537,12 +7571,9 @@ public:
         readGpsUiState(gps_enabled, gps_valid, gps_count);
         int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
         if (_task->areNotificationsMuted()) {
-          int icon_size = uiStatusIconSize(display);
           int mute_x = gps_right + 3;
-          if (mute_x + icon_size <= name_right) {
-            display.setColor(DisplayDriver::RED);
-            drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
-          }
+          display.setColor(DisplayDriver::RED);
+          drawUiQuietStatus(display, mute_x, 0, name_right - mute_x);
         }
         display.setColor(_task->getUiBottomColor());
       } else
@@ -7557,23 +7588,17 @@ public:
           readGpsUiState(gps_enabled, gps_valid, gps_count);
           int gps_right = renderGpsClockLabel(display, name_x, 0, gps_enabled, gps_valid, gps_count, false);
           if (_task->areNotificationsMuted()) {
-            int icon_size = uiStatusIconSize(display);
             int mute_x = gps_right + 3;
-            if (mute_x + icon_size <= name_right) {
-              display.setColor(DisplayDriver::RED);
-              drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
-            }
+            display.setColor(DisplayDriver::RED);
+            drawUiQuietStatus(display, mute_x, 0, name_right - mute_x);
           }
           display.setColor(_task->getUiBottomColor());
 #else
           // A GPS-less board must not advertise a permanently disabled
           // module.  Keep only the useful mute state in the clock chrome.
           if (_task->areNotificationsMuted()) {
-            int icon_size = uiStatusIconSize(display);
-            if (name_x + icon_size <= name_right) {
-              display.setColor(DisplayDriver::RED);
-              drawUiIcon(display, name_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);
-            }
+            display.setColor(DisplayDriver::RED);
+            drawUiQuietStatus(display, name_x, 0, name_right - name_x);
           }
           display.setColor(_task->getUiBottomColor());
 #endif
@@ -7792,12 +7817,9 @@ public:
       int gps_right = renderGpsClockLabel(display, 1, 0, gps_enabled, gps_valid, sats, !clock_muted);
 
       if (clock_muted) {
-        const int mute_size = 16;
         int mute_x = gps_right + 4;
-        if (mute_x + mute_size <= battery_left - 3) {
-          display.setColor(DisplayDriver::RED);
-          drawUiIcon(display, mute_x, uiTextAlignedIconY(display, 0, mute_size), muted_icon, mute_size);
-        }
+        display.setColor(DisplayDriver::RED);
+        drawUiQuietStatus(display, mute_x, 0, battery_left - 3 - mute_x);
       }
       display.setColor(_task->getUiBottomColor());
       uiPopFont(display, small_font);

@@ -1,6 +1,8 @@
 # Прошивка готового UF2 или BIN
 
-Эта ветка описывает экспериментальный `v2.1.0-experimental.1` с дополнением Heltec V3 OLED — шесть плат. Предыдущая `v2.1.0-beta.2` для пяти плат остаётся Latest. Прошивайте только файл с соответствующими контрольными суммами: `SHA256SUMS.txt` для UF2, `SHA256SUMS-ESP32.txt` для исходных V4.3/Paper, `SHA256SUMS-V3.txt` для дополнения V3. В общем архиве шести плат есть `SHA256SUMS-ALL-SIX.txt`.
+Эта ветка описывает единый экспериментальный `v2.1.0-experimental.2` для шести плат. Предыдущая `v2.1.0-beta.2` остаётся Latest. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
+
+> **V4.3/Paper: чистая установка на полностью очищенную память может дать `STORAGE ERROR`.** Их merged не содержит подготовленной SPIFFS; этот UI-выпуск механизм хранилища не меняет. Для работающей ноды используйте `update.bin` без Erase. Файл V3 на других платах не применять.
 
 > [!WARNING]
 > **V3 FS2: merged-файл удаляет сохранённые identity/настройки даже без Erase Flash.**
@@ -20,17 +22,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-experimental.1.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-experimental.1.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-experimental.1.uf2` |
+| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-experimental.2.uf2` |
+| Heltec T114 с TFT | `T114_SmartUI_2.1.0-experimental.2.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V3 OLED | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.1-update.bin` |
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2-update.bin` |
+| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -54,7 +56,7 @@ SHA-256 и запишите приложение по `0x10000` **без Erase F
 
 **V3 уже очищена, после Erase появился `STORAGE ERROR`:**
 
-1. Заново скачайте `Heltec_V3_OLED_SmartUI_2.1.0-experimental.1-freshInstall-merged.bin`
+1. Заново скачайте `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin`
    и актуальный `SHA256SUMS-V3.txt`. Имя старое, но содержимое исправлено в ревизии **FS2**.
 2. Проверьте контрольную сумму. `RELEASE-MANIFEST-V3.json` должен указывать `FS2`.
 3. Запишите merged FS2 по адресу **`0x00000`**. Повторная очистка не требуется.
@@ -128,7 +130,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии `2.1.0-experimental.1`.
+- На странице версии виден маркер нужной платы и линии `2.1.0-experimental.2`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

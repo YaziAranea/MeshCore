@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import argparse
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -26,6 +29,127 @@ from embedded_bitmap_fonts import EmbeddedRaw
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "qa_outputs/dev2-settings"
 UI = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
+HEADER_TITLES = ("", "Настройки", "Система", "Выход звука", "Выход света", "Вибрация",
+                 "Резонанс", "Громкость", "Управление", "Сброс ADC", "Избранное 1",
+                 "Шрифт", "Тема", "Мелодия", "Часовой пояс", "Дополнительно",
+                 "Радио и GPS", "Уведомления", "Защита АКБ")
+HEADER_ACTIONS = ("", "Открыть", "Закрыть", "Назад", "Изменить", "Выполн.",
+                  "Выбрать", "Отмена", "Сбросить")
+_HEADER_LAYOUTS = {}
+_HEADER_META = {}
+
+
+def header_profile_key(profile):
+    board = "OLED" if profile.board in ("V4.3", "Heltec V3") else profile.board
+    return board, profile.profile
+
+
+def actual_header_layouts(configurations):
+    """Execute the production C++ method with real per-glyph advance metrics.
+
+    The recording stub checks layout decisions; Python only paints its recorded
+    coordinates with the real bitmap tables. This does not execute the complete
+    DisplayDriver/UITask or prove button timing and hardware appearance.
+    """
+    global _HEADER_LAYOUTS, _HEADER_META
+    start = UI.index("  void renderSettingsHeader(DisplayDriver& display")
+    end = UI.index("\n  void renderCompactSettings", start)
+    method = UI[start:end].rstrip()
+    characters = set("?Удерж: ." + "".join(HEADER_TITLES + HEADER_ACTIONS))
+    code = r'''
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <map>
+#include <string>
+#include <vector>
+#include <iostream>
+struct DisplayDriver {
+  enum { GREEN, LIGHT };
+  int viewport, title_limit=0, title_x=-1, title_y=-1, hint_x=-1, hint_y=-1;
+  std::map<uint32_t,int> advances;
+  std::string title, hint;
+  int width() const { return viewport; }
+  void setBold(bool) {}
+  void setColor(int) {}
+  int getTextWidth(const char* text) const {
+    int width=0;
+    const auto* p=reinterpret_cast<const unsigned char*>(text);
+    while (*p) {
+      uint32_t cp=*p++;
+      if ((cp&0xe0)==0xc0) { cp=(cp&0x1f)<<6; cp|=*p++&0x3f; }
+      else if ((cp&0xf0)==0xe0) { cp=(cp&0x0f)<<12; cp|=(*p++&0x3f)<<6; cp|=*p++&0x3f; }
+      else if ((cp&0xf8)==0xf0) { cp=(cp&7)<<18; cp|=(*p++&0x3f)<<12; cp|=(*p++&0x3f)<<6; cp|=*p++&0x3f; }
+      width+=advances.at(cp);
+    }
+    return width;
+  }
+  void drawTextRightAlign(int x,int y,const char* text) { hint_x=x; hint_y=y; hint=text; }
+};
+void drawRichTextStaticEllipsized(DisplayDriver& d,int x,int y,int maximum,const char* text) {
+  d.title_x=x; d.title_y=y; d.title_limit=maximum; d.title=text;
+}
+struct HeaderHost {
+'''
+    code += method + "\n};\nint main() {\n  HeaderHost host;\n"
+    code += "  const char* titles[] = {" + ",".join(json.dumps(x, ensure_ascii=False) for x in HEADER_TITLES) + "};\n"
+    code += "  const char* actions[] = {" + ",".join(json.dumps(x, ensure_ascii=False) for x in HEADER_ACTIONS) + "};\n"
+    for index, profile in enumerate(configurations):
+        advances = ",".join("{" + str(ord(char)) + "," + str(profile.desired_font.width(char)) + "}"
+                            for char in sorted(characters))
+        code += "  { std::map<uint32_t,int> metrics={" + advances + "};\n"
+        code += f"    for (auto title:titles) for (auto action:actions) {{ DisplayDriver d; d.viewport={profile.logical_w}; d.advances=metrics;\n"
+        code += "      host.renderSettingsHeader(d,title,action);\n"
+        code += f"      std::cout << {index} << '\\t' << title << '\\t' << action << '\\t' << d.title_limit << '\\t' << d.hint << '\\t' << d.hint_x << '\\t' << d.hint_y << '\\t' << d.title_x << '\\t' << d.title_y << '\\n';\n"
+        code += "    } }\n"
+    code += "}\n"
+    native = OUT / "header_actual_cpp"
+    native.mkdir(parents=True, exist_ok=True)
+    cpp = native / "header.cpp"
+    cpp.write_text(code, encoding="utf-8")
+    if shutil.which("g++"):
+        binary = native / "header"
+        compile_command = ["g++", "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(binary)]
+        run_command = [str(binary)]
+        engine = "g++"
+    else:
+        linux = subprocess.check_output(["wsl", "--exec", "wslpath", "-a", native.resolve().as_posix()], text=True).strip()
+        compile_command = ["wsl", "--exec", "g++", "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror", linux + "/header.cpp", "-o", linux + "/header"]
+        run_command = ["wsl", "--exec", linux + "/header"]
+        engine = "WSL g++"
+    subprocess.run(compile_command, check=True)
+    output = subprocess.check_output(run_command, text=True, encoding="utf-8")
+    layouts, modes = {}, {"full": 0, "compact": 0, "hidden": 0}
+    for line in output.splitlines():
+        index, title, action, maximum, hint, hint_x, hint_y, title_x, title_y = line.split("\t")
+        profile = configurations[int(index)]
+        font, width = profile.desired_font, profile.logical_w
+        title_w = font.width(title)
+        full = "Удерж: " + action if action else ""
+        expected = full
+        if action and title_w + font.width(full) + 8 > width:
+            expected = "Удерж."
+        if expected and title_w + font.width(expected) + 8 > width:
+            expected = ""
+        assert hint == expected, f"actual C++ header hint differs: {profile.board}/{profile.profile}/{title}/{action}: {hint}"
+        title_limit = int(maximum)
+        assert title_limit >= title_w, f"actual C++ header sacrifices complete title: {title}"
+        assert (int(title_x), int(title_y)) == (2, 14)
+        if hint:
+            assert (int(hint_x), int(hint_y)) == (width - 2, 14)
+            assert 2 + title_w + 4 <= int(hint_x) - font.width(hint), "actual C++ header lanes overlap"
+        else:
+            assert (int(hint_x), int(hint_y)) == (-1, -1)
+        mode = "full" if hint == full and hint else "compact" if hint else "hidden"
+        modes[mode] += 1
+        layouts[(header_profile_key(profile), title, action)] = (title_limit, hint, int(hint_x), int(hint_y))
+    assert len(layouts) == len(configurations) * len(HEADER_TITLES) * len(HEADER_ACTIONS)
+    _HEADER_LAYOUTS = layouts
+    _HEADER_META = {"sha256": hashlib.sha256(method.encode()).hexdigest(), "checks": len(layouts),
+                    "modes": modes, "engine": engine,
+                    "scope": "actual production C++ method; real bitmap advance metrics; recording draw stubs, not full firmware/hardware"}
+    (native / "REPORT.json").write_text(json.dumps(_HEADER_META, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return _HEADER_META
 
 
 class PaperFont(ExactFont):
@@ -123,11 +247,15 @@ def geometry(profile, count, cursor):
 
 
 def heading(frame, title, action="Выбрать"):
-    w = frame.board.logical_w
-    hint_w = frame.font.width(action)
-    frame.text(2,14,title,"green",max_w=w-hint_w-8,tag="title")
-    shown = frame.text(w-2,14,action,right=True,max_w=hint_w,tag="hint")
-    assert shown == action, "required contextual hint truncated"
+    if not _HEADER_LAYOUTS:
+        actual_header_layouts(profiles())
+    maximum, hint, hint_x, hint_y = _HEADER_LAYOUTS[(header_profile_key(frame.board), title, action)]
+    shown_title = frame.text(2,14,title,"green",max_w=maximum,tag="title")
+    assert shown_title == title, "complete section title was sacrificed to the hint"
+    if hint:
+        shown = frame.text(hint_x,hint_y,hint,right=True,max_w=frame.font.width(hint),tag="hint")
+        assert shown == hint, "required hold instruction truncated"
+    frame.facts["header"] = {"title": title, "action": action, "hint": hint, "layout": "actual C++ recording"}
     assert_tags_do_not_overlap(frame, "title", "hint")
 
 
@@ -300,10 +428,11 @@ def docs_previews(configurations):
     ], out / "dev2-wireless-paper-battery.png")
 
 
-def main():
+def main(no_docs=False):
     fingerprint = source_contract()
     OUT.mkdir(parents=True, exist_ok=True)
     configurations = profiles()
+    header_proof = actual_header_layouts(configurations)
     lists = {
         "Выход звука": [f"GPIO{x}" for x in (29, 31, 33, 34, 35, 36, 37, 39, 43, 45)],
         "Выход света": [f"GPIO{x}" for x in range(32)],
@@ -357,10 +486,13 @@ def main():
                     ("ADC: сначала отмена",auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],0,"Отмена")),
                     ("Управление",auxiliary(profile,"Управление",help_labels(),0,"Назад")),
                     ("Управление: CLI",auxiliary(profile,"Управление",help_labels(),6,"Назад"))]
-        docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")
+        docs_sheet(aux_scenes, OUT / f"experimental-{board.lower().replace(' ','-')}-settings.png")
+        if not no_docs:
+            docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")
     report = {
         "kind": "source-bound geometry model; real glyph tables; not full firmware/hardware execution",
         "renderNotifyPicker_sha256": fingerprint, "profiles": len(configurations),
+        "renderSettingsHeader_actual_cpp": header_proof,
         "checks": checks, "failures": failures,
         "coverage": "all list cursors including Cancel, active marker, 32-item GPIO stress, resonance, volume, both battery values",
         "t114": "forced bitmap font0: real 24px line; logical128x64 -> physical240x135; Y_OFFSET=1",
@@ -369,12 +501,18 @@ def main():
         "selection_alignment": "glyph row zero equals selection top; no negative baseline on SSD1306/E213, intentionally no added top padding",
     }
     (OUT / "REPORT.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(json.dumps({"checks": checks, "profiles": len(configurations), "failures": len(failures)}, ensure_ascii=False))
+    print(json.dumps({"checks": checks, "native_header_checks": header_proof["checks"], "profiles": len(configurations), "failures": len(failures)}, ensure_ascii=False))
     if failures:
         print("\n".join(failures[:20]))
         raise SystemExit(1)
-    docs_previews(configurations)
+    if not no_docs:
+        docs_previews(configurations)
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out-dir", type=Path, default=OUT)
+    parser.add_argument("--no-docs", action="store_true", help="Write QA outputs only; leave checked-in documentation images untouched")
+    args = parser.parse_args()
+    OUT = args.out_dir
+    main(no_docs=args.no_docs)

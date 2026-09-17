@@ -1,9 +1,9 @@
 # MeshCore Smart UI — PowerSaving17
 
 > [!WARNING]
-> **Эта ветка — отдельный экспериментальный UI `2.1.0-experimental.1`.**
-> [Скачать эксперимент](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1)
-> · [Что изменилось и какой файл выбрать](RELEASE_NOTES_v2.1.0-experimental.1_RU.md).
+> **Эта ветка — отдельный экспериментальный UI `2.1.0-experimental.2`.**
+> [Скачать эксперимент](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.2)
+> · [Что изменилось и какой файл выбрать](RELEASE_NOTES_v2.1.0-experimental.2_RU.md).
 > Прежняя [beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2)
 > сохранена и остаётся Latest. Эксперимент не объявляется стабильным.
 
@@ -18,9 +18,9 @@
 
 Основа эксперимента — `SmartUI 2.1.0-beta.2`. В `experimental.1` доработаны действия меню, выбор избранного, безопасная калибровка/отмена, адресная отправка с подтверждением, поиск контактов и пиктограммы. Разделы не переставлялись, черновики не добавлены. Изображения ниже показывают экспериментальную ветку, а не старую beta.2; аппаратная проверка каждого экземпляра не заявляется.
 
-[⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-experimental.1_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.2) · [Как выбрать файл](RELEASE_NOTES_v2.1.0-experimental.2_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
-**Добавлен Heltec V3 OLED:** [файлы и инструкция V3](V3_ADDENDUM_v2.1.0-experimental.1_RU.md). На той же странице Release доступен новый `all-six-boards.zip`; прежний архив пяти плат сохранён. Для исходников V3 используйте эту ветку или точный SHA из `RELEASE-MANIFEST-V3.json`: исходный тег первых пяти плат не перемещался.
+**Experimental.2 — единый выпуск шести плат:** новый набор пиктограмм, читаемое «ТИХО» на часах и подсказки удержания в меню. Один `all-six-boards.zip`, один commit и `RELEASE-MANIFEST.json` для всех прошивок. Исторические релизы не изменяются.
 
 > [!WARNING]
 > **V3 FS2 добавляет восстановление при `STORAGE ERROR`; проверка на плате ещё нужна.**
@@ -45,8 +45,8 @@
 
 Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущая beta находится в [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
 
-Эксперимент — [`smartui-2.1-experimental.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-experimental.1).
-[Разница с beta.2](https://github.com/YaziAranea/MeshCore/compare/v2.1.0-beta.2...smartui-2.1-experimental.1).
+Эксперимент — [`smartui-2.1-experimental.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-experimental.2).
+[Разница с beta.2](https://github.com/YaziAranea/MeshCore/compare/v2.1.0-beta.2...smartui-2.1-experimental.2).
 
 ## Что умеет интерфейс
 
@@ -86,7 +86,7 @@
 
 ## Быстрый старт
 
-Для проверки нового UI используйте [Release v2.1.0-experimental.1 — ЭКСПЕРИМЕНТ](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.1). Файлы доступны на обычной странице Release. Для возврата к предыдущему интерфейсу сохранена [v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2); она остаётся Latest.
+Для проверки нового UI используйте [Release v2.1.0-experimental.2 — ЭКСПЕРИМЕНТ](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-experimental.2). Файлы доступны на обычной странице Release. Для возврата к предыдущему интерфейсу сохранена [v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2); она остаётся Latest.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Скачайте актуальные контрольные суммы: `SHA256SUMS-V3.txt` для V3 FS2, `SHA256SUMS-ESP32.txt` для исходных V4.3/Paper, `SHA256SUMS.txt` для UF2. В общем архиве шести плат используйте `SHA256SUMS-ALL-SIX.txt`.
@@ -141,7 +141,7 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Изменения и границы проверки `v2.1.0-experimental.1` описаны в [примечаниях к эксперименту](RELEASE_NOTES_v2.1.0-experimental.1_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
+Изменения и границы проверки `v2.1.0-experimental.2` описаны в [примечаниях к эксперименту](RELEASE_NOTES_v2.1.0-experimental.2_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
 
 Основной CI проверяет исходные пять релизных конфигураций. Дополнение V3 имеет отдельный CI для `Heltec_v3_companion_radio_ble_smartui`: полная сборка BIN, проверка образов и OLED-раскладки. Старый `Heltec_v3_companion_radio_ble` остаётся compile-only представителем общего драйвера, а не V3-файлом SmartUI. Xiao S3 WIO и Heltec T1 не добавляются в Release.
 
@@ -160,7 +160,7 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
-- [Примечания к v2.1.0-experimental.1](RELEASE_NOTES_v2.1.0-experimental.1_RU.md)
+- [Примечания к v2.1.0-experimental.2](RELEASE_NOTES_v2.1.0-experimental.2_RU.md)
 - [Дополнение Heltec V3 OLED](V3_ADDENDUM_v2.1.0-experimental.1_RU.md)
 - [Примечания к v2.1.0-beta.2](RELEASE_NOTES_v2.1.0-beta.2_RU.md)
 - [Примечания к v2.1.0-dev.2](RELEASE_NOTES_v2.1.0-dev.2_RU.md)

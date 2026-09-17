@@ -788,19 +788,80 @@ SMALL8_PATTERNS = {
 }
 
 
-# Native-size primitives retain 1px strokes and semantic features at 8, 11,
-# 12 and 16px. These are drawn at their destination size, not enlarged masks.
+# Destination-size masters use one-pixel strokes, including at 16px. Empty
+# interiors are deliberate: small displays must not turn buildings/hands into
+# solid blocks. The 8px exceptions are reviewed separately, never downsampled.
 FACE_KINDS = {"smile", "grin", "laugh", "wink", "cool", "love", "think", "neutral",
               "wow", "sleep", "party", "cry", "frown", "angry", "unknown"}
-NATIVE_FAMILIES = FACE_KINDS | {"battery", "signal", "hospital", "temperature", "map",
-    "ball", "football", "basketball", "tennis", "clock", "unsupported", "satellite",
-    "route_relay", "forward", "snow", "sun", "cloud", "rain", "box", "clover", "note",
-    "ok_hand", "victory", "crossed_fingers", "fist", "clap", "handshake", "horns", "love_hand"}
-PIXEL_FAMILIES = {"pushpin","safety_pin","ok_hand","victory","crossed_fingers",
-                  "fist","clap","handshake","horns","love_hand"}
+NATIVE_FAMILIES = {kind for kind, _ in FIRMWARE_ICON_MAP}
+PIXEL_FAMILIES = set()
+
+REFRESH8_PATTERNS = {
+    "smile": "..####../.#....#./#.#..#.#/#......#/#.#..#.#/#..##..#/.#....#./..####..",
+    "grin": "..####../.#....#./#.#..#.#/#......#/#.####.#/#.#..#.#/.#....#./..####..",
+    "laugh": "..####../.#....#./#.##.#.#/#......#/#.####.#/#..##..#/.#....#./..####..",
+    "wink": "..####../.#....#./#.##.#.#/#......#/#.#..#.#/#..##..#/.#....#./..####..",
+    "cool": "..####../.#....#./#.####.#/#.#..#.#/#......#/#..##..#/.#....#./..####..",
+    "love": "..####../.#....#./#.####.#/#..##..#/#......#/#..##..#/.#....#./..####..",
+    "think": "..####../.#....#./#.#..#.#/#......#/#...#..#/#..#.#.#/.#....#./..####..",
+    "neutral": "..####../.#....#./#.#..#.#/#......#/#......#/#.####.#/.#....#./..####..",
+    "wow": "..####../.#....#./#.#..#.#/#......#/#..##..#/#..##..#/.#....#./..####..",
+    "sleep": "..####../.#....#./#......#/#.##.#.#/#......#/#..##..#/.#....#./..####..",
+    "party": "...#..../..###.../.#....#./#.#..#.#/#......#/#.#..#.#/.#.##.#./..####..",
+    "cry": "..####../.#....#./#.#..#.#/#.....##/#..##.##/#.#..#.#/.#....#./..####..",
+    "frown": "..####../.#....#./#.#..#.#/#......#/#..##..#/#.#..#.#/.#....#./..####..",
+    "angry": "..####../.#....#./#.#..#.#/#..##..#/#..##..#/#.#..#.#/.#....#./..####..",
+    "unknown": "..####../.#....#./#.#..#.#/#...#..#/#..#...#/#......#/.#.#..#./..####..",
+    "skull": "..####../.#....#./#.#..#.#/#......#/.#.#.#../..#..#../..####../........",
+    "ghost": "..####../.#....#./#.#..#.#/#......#/#......#/#......#/#.#..#.#/##.##.##",
+    "heart": ".##..##./#..##..#/#......#/.#....#./..#..#../...##.../......../........",
+    "thumb_up": "...#..../..#.#.../..#.#.../###.###./#.#...#./#.#...#./###.##../........",
+    "thumb_down": "......../###.##../#.#...#./#.#...#./###.###./..#.#.../..#.#.../...#....",
+    "wave": ".#.#.#../.#.#.#../.#.#.##./##.#.#.#/#......#/.#....#./..####../........",
+    "pray": "..#..#../..#..#../.#.#.#../.#.#.#../#..##..#/#..##..#/.##..##./........",
+    "person": "..####../..#..#../..#..#../..####../......../.######./#......#/#......#",
+    "group": ".##..##./.##..##./......../.##..##./#..##..#/#..##..#/#..##..#/........",
+    "pager": "......#./.######./.#....#./.#.##.#./.#....#./.#.#..#./.######./........",
+    "home": "...##.../..#..#../.#....#./#......#/.#....#./.#.##.#./.#.#..#./.###.##.",
+    "office": ".######./.#....#./.#.#..#./.#....#./.#..#.#./.#....#./.#.#..#./.###.##.",
+    "shop": ".######./#..#...#/#..#...#/########/.#....#./.#.##.#./.#.#..#./.###.##.",
+    "hospital": "...##.../...##.../.######./...##.../...##.../......../......../........",
+    "bank": "...#..../..#.#.../.#...#../#######./.#.#.#../.#.#.#../.#.#.#../#######.",
+    "school": ".#....../.###..../.#....../...##.../..#..#../.#....#./.#.#..#./.###.##.",
+    "factory": "......##/......##/.#.#..##/.#.##.##/.#....##/.#.#...#/.#...#.#/.#######",
+    "construction": ".#....../.#######/.#....#./.#....#./.#....#./.#...##./.#....../####....",
+    "camp": "...#..../..#.#.../..#.#.../.#...#../.#.#.#../#..#..#./#..#..#./#######.",
+    "gear": "...##.../.######./.#....#./##....##/##....##/.#....#./.######./...##...",
+    "power": "...#..../...#..../.#.#.#../#..#..#./#.....#./#.....#./.#...#../..###...",
+    "sound": "..#...../.##..#../#.#...#./#.#....#/#.#....#/.##...#./..#..#../........",
+    "mute": "..#...../.##..#.#/#.#...#./#.#..#.#/#.#...../.##...../..#...../........",
+    "message": "......../.######./.#....#./.#.##.#./.#....#./.######./..#...../.#......",
+    "mail": "......../########/#......#/#.#..#.#/#..##..#/#......#/########/........",
+    "battery": "......../......../#######./#.#...##/#.#...##/#######./......../........",
+    "plug": "..#..#../..#..#../.######./.#....#./..#..#../...##.../...#..../...#....",
+    "pin": "..####../.#....#./.#.##.#./.#....#./..#..#../..#..#../...##.../........",
+    "clip": "...###../..#...#./..#.#.#./..#.#.#./..#.#.#./..#.#.../...#..../........",
+    "lock": "..####../..#..#../..#..#../.######./.#....#./.#.#..#./.#....#./.######.",
+    "unlock": "....###./...#..#./...#..../.######./.#....#./.#.#..#./.#....#./.######.",
+    "alarm": ".#....#./..####../..#..#../..#..#../..#..#../.######./...##.../........",
+    "cloud": "..###.../.#...#../.#...#../#.....#./#......#/.######./......../........",
+    "rain": "..###.../.#...#../#.....#./.#####../......../.#.#.#../#.#.#.../........",
+    "ok_hand": "....#.#./...#.#../.##..#../#..#.#../#..#..#./.##...#./..#..#../...##...",
+    "victory": ".#....#./.#....#./..#..#../..#..#../...##.../..#..#../..#..#../...##...",
+    "crossed_fingers": "..#.#.../..#.#.../...#..../..#.#.../.#...#../.#...#../..###.../........",
+    "fist": ".######./.#.#.#.#/.#.....#/#......#/#.####.#/#....#.#/.####.#./........",
+    "clap": ".#....#./..#.#.../...#.#../..#.#.#./.#.#..#./#..#.#../.##.#.../........",
+    "handshake": "......../##....##/#.####.#/.#....#./..#..#../...##.../......../........",
+    "horns": ".#....#./.#....#./.#.##.#./.#.#..#./.#....#./..#..#../..#..#../...##...",
+    "love_hand": ".#....#./.#....#./.#.##.#./##.#..#./#.....#./.#...#../..#..#../...##...",
+}
 
 
 def native_icon(kind: str, size: int) -> Image.Image:
+    if size not in (8, 11, 12, 16):
+        raise ValueError(f"Unsupported native icon size: {size}")
+    if size == 8 and kind in REFRESH8_PATTERNS:
+        return pattern8_image(tuple(REFRESH8_PATTERNS[kind].split("/")))
     im = Image.new("1", (size, size), 0)
     d = ImageDraw.Draw(im)
     n = size - 1
@@ -808,49 +869,20 @@ def native_icon(kind: str, size: int) -> Image.Image:
     def line(points, width=1): d.line([(p(x),p(y)) for x,y in points], fill=1, width=width)
     def rect(box, fill=False):
         d.rectangle(tuple(p(v) for v in box), outline=1, fill=1 if fill else None)
+    def ellipse(box):
+        d.ellipse(tuple(p(v) for v in box), outline=1)
+    def point(x, y):
+        d.point((p(x), p(y)), fill=1)
     if kind in FACE_KINDS:
-        d.ellipse((0, 0, n, n), outline=1)
-        if size == 8:
-            # An 8px face has only six interior columns. Keep eyes on row2
-            # and mouth on rows4/5: row6 belongs to the rounded outline.
-            if kind == "cool":
-                d.line((1,2,6,2),fill=1); d.point((2,3),fill=1); d.point((5,3),fill=1)
-            elif kind == "sleep":
-                d.line((1,3,2,3),fill=1); d.line((5,3,6,3),fill=1)
-            elif kind == "love":
-                for x in (1,3,4,6): d.point((x,2),fill=1)
-                d.line((1,3,6,3),fill=1)
-                d.point((2,4),fill=1); d.point((5,4),fill=1)
-            elif kind == "wink":
-                d.line((1,2,2,2),fill=1); d.point((5,2),fill=1)
-            else:
-                d.point((2,2),fill=1); d.point((5,2),fill=1)
-            if kind in ("smile","wink","cool","love","party"):
-                if kind == "love": d.line((3,5,4,5),fill=1)
-                else:
-                    d.point((2,4),fill=1); d.point((5,4),fill=1); d.line((3,5,4,5),fill=1)
-            elif kind == "grin":
-                d.line((2,4,5,4),fill=1); d.line((3,5,4,5),fill=1)
-            elif kind == "laugh":
-                d.rectangle((2,3,5,4),outline=1); d.line((3,5,4,5),fill=1)
-            elif kind in ("frown","cry","angry"):
-                d.point((2,5),fill=1); d.point((5,5),fill=1); d.line((3,4,4,4),fill=1)
-                if kind == "cry": d.line((6,3,6,4),fill=1)
-                if kind == "angry": d.point((3,3),fill=1); d.point((4,3),fill=1)
-            elif kind == "wow": d.rectangle((3,4,4,5),outline=1)
-            elif kind == "think": d.line((3,5,4,4),fill=1); d.point((5,6),fill=1)
-            elif kind == "unknown": d.line((3,4,4,4),fill=1); d.point((4,6),fill=1)
-            else: d.line((2,5,5,5),fill=1)
-            if kind == "party": d.point((3,1),fill=1)
-            return im
+        ellipse((1, 1, 10, 10))
         ex1,ex2,ey = p(3),p(8),p(4)
         if kind == "cool":
-            rect((2,3,5,5)); rect((7,3,10,5)); line(((5,4),(7,4)))
+            line(((2,3),(9,3))); line(((2,3),(3,5),(4,5),(5,3)))
+            line(((6,3),(7,5),(8,5),(9,3)))
         elif kind == "sleep":
             line(((2,4),(4,4))); line(((7,4),(9,4)))
         elif kind == "love":
-            for x in (ex1,ex2):
-                d.line((x-1,ey-1,x+1,ey-1), fill=1); d.point((x,ey),fill=1)
+            line(((2,3),(3,4),(4,3))); line(((7,3),(8,4),(9,3)))
         elif kind == "wink":
             line(((2,4),(4,4))); d.point((ex2,ey),fill=1)
         else:
@@ -858,16 +890,17 @@ def native_icon(kind: str, size: int) -> Image.Image:
         if kind in ("smile","wink","cool","love","party"):
             line(((3,7),(4,8),(7,8),(8,7)))
         elif kind == "grin":
-            line(((3,7),(8,7),(8,8),(3,8),(3,7)))
+            line(((3,7),(8,7),(7,9),(4,9),(3,7)))
         elif kind == "laugh":
-            line(((3,7),(4,9),(7,9),(8,7)))
+            line(((3,3),(4,4))); line(((7,4),(8,3)))
+            line(((3,6),(8,6),(7,9),(4,9),(3,6)))
         elif kind in ("frown","cry","angry"):
             line(((3,8),(4,7),(7,7),(8,8)))
             if kind == "cry": line(((9,5),(9,7)))
             if kind == "angry":
                 line(((2,2),(4,3))); line(((7,3),(9,2)))
         elif kind == "wow":
-            d.ellipse((p(4),p(7),p(7),p(9)),outline=1)
+            ellipse((4,6,7,8))
         elif kind == "think":
             line(((4,8),(7,7))); d.point((p(8),p(9)),fill=1)
         elif kind == "unknown":
@@ -875,20 +908,195 @@ def native_icon(kind: str, size: int) -> Image.Image:
         else:
             line(((3,8),(8,8)))
         if kind == "party":
-            line(((5,1),(7,0),(8,2)))
+            line(((3,2),(5,0),(7,2)))
+    elif kind == "skull":
+        line(((3,1),(8,1),(10,3),(10,6),(8,8),(8,10),(3,10),(3,8),(1,6),(1,3),(3,1)))
+        point(4,4); point(7,4); point(5,6)
+        line(((5,8),(5,10))); line(((7,8),(7,10)))
+    elif kind == "ghost":
+        line(((2,10),(2,4),(3,2),(5,1),(7,1),(9,3),(9,10),(7,9),(6,10),(4,9),(2,10)))
+        point(4,4); point(7,4)
+    elif kind == "heart":
+        line(((1,3),(2,2),(4,2),(5,3),(6,3),(7,2),(9,2),(10,3),(10,5),(6,10),(5,10),(1,5),(1,3)))
+    elif kind == "hundred":
+        line(((0,3),(1,2),(1,9)))
+        rect((3,2,6,9)); rect((8,2,11,9))
+    elif kind in ("thumb_up", "thumb_down"):
+        rect((0,5,2,10))
+        line(((3,10),(3,5),(5,5),(6,1),(7,1),(8,2),(8,5),(10,5),(10,9),(9,10),(3,10)))
+        if kind == "thumb_down": im = im.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
+    elif kind == "wave":
+        line(((2,10),(0,6),(0,4),(1,4),(3,7),(3,1),(4,1),(4,6),(6,0),(7,0),(7,6),(9,1),(10,2),(9,8),(7,10),(2,10)))
+    elif kind == "pray":
+        line(((5,0),(3,4),(1,8),(3,10),(5,8),(5,0)))
+        line(((7,0),(9,4),(11,8),(9,10),(7,8),(7,0)))
+    elif kind == "person":
+        ellipse((4,0,7,3))
+        line(((1,10),(1,8),(3,6),(8,6),(10,8),(10,10),(1,10)))
+    elif kind == "group":
+        ellipse((1,1,4,4)); ellipse((7,1,10,4))
+        line(((0,10),(0,8),(2,6),(3,6),(5,8),(5,10)))
+        line(((6,10),(6,8),(8,6),(9,6),(11,8),(11,10)))
+    elif kind == "pager":
+        rect((1,2,10,10)); rect((3,4,8,6))
+        point(4,8); point(7,8); line(((8,2),(10,0)))
+    elif kind == "home":
+        line(((0,5),(5,0),(6,0),(11,5)))
+        line(((2,5),(2,10),(9,10),(9,5)))
+        line(((5,10),(5,7),(7,7),(7,10)))
+    elif kind == "office":
+        rect((2,0,9,11))
+        for yy in (3,6): point(4,yy); point(7,yy)
+        line(((5,11),(5,9),(7,9),(7,11)))
+    elif kind == "shop":
+        line(((1,2),(10,2),(11,5),(0,5),(1,2)))
+        line(((4,2),(4,5))); line(((7,2),(7,5)))
+        line(((1,5),(1,11),(10,11),(10,5)))
+        rect((3,7,6,9)); line(((8,11),(8,7),(9,7)))
+    elif kind == "bank":
+        line(((0,4),(5,0),(6,0),(11,4),(0,4)))
+        for xx in (2,5,8): line(((xx,6),(xx,10)))
+        line(((0,11),(11,11)))
+    elif kind == "school":
+        line(((1,0),(1,4))); line(((1,0),(4,0),(4,2),(1,2)))
+        line(((1,5),(6,2),(11,5))); line(((2,5),(2,11),(10,11),(10,5)))
+        point(6,5); line(((5,11),(5,8),(7,8),(7,11)))
+    elif kind == "factory":
+        line(((1,11),(1,5),(4,2),(4,5),(7,2),(7,5),(9,4),(9,0),(11,0),(11,11),(1,11)))
+        point(3,8); point(6,8); point(9,8)
+    elif kind == "construction":
+        line(((2,1),(2,11))); line(((0,11),(5,11)))
+        line(((1,2),(11,2))); line(((2,2),(4,0),(4,2)))
+        line(((9,2),(9,7),(8,8),(7,7)))
+    elif kind == "camp":
+        line(((0,11),(5,1),(6,1),(11,11),(0,11)))
+        line(((5,11),(5,6),(7,11)))
+    elif kind == "sofa":
+        rect((2,4,9,8)); line(((0,6),(2,6),(2,9),(9,9),(9,6),(11,6),(11,10),(0,10),(0,6)))
+        line(((1,10),(1,11))); line(((10,10),(10,11)))
+    elif kind == "pin":
+        line(((3,6),(2,4),(2,2),(4,0),(7,0),(9,2),(9,4),(6,11),(3,6)))
+        ellipse((4,2,7,5))
+    elif kind == "pushpin":
+        line(((3,1),(9,1),(8,3),(8,5),(10,6),(2,6),(4,5),(4,3),(3,1)))
+        line(((6,6),(3,11)))
+    elif kind == "safety_pin":
+        line(((3,10),(1,8),(1,3),(3,1),(8,1),(10,3),(10,8),(8,10),(3,10)))
+        line(((3,9),(3,4),(5,3),(8,6),(8,9)))
+    elif kind == "clip":
+        line(((3,9),(2,8),(2,3),(3,1),(7,1),(9,3),(9,8),(7,10),(5,10),(4,8),(4,4),(6,3),(7,4),(7,7),(6,8)))
+    elif kind == "gear":
+        line(((4,2),(7,2),(9,4),(9,7),(7,9),(4,9),(2,7),(2,4),(4,2)))
+        line(((5,2),(5,0),(6,0),(6,2))); line(((5,9),(5,11),(6,11),(6,9)))
+        line(((2,5),(0,5),(0,6),(2,6))); line(((9,5),(11,5),(11,6),(9,6)))
+        ellipse((4,4,7,7))
+    elif kind == "wrench":
+        line(((0,1),(0,4),(2,6),(4,6),(9,11),(11,9),(6,4),(6,2),(4,0),(4,3),(2,3),(0,1)))
+    elif kind == "hammer":
+        line(((1,1),(7,1),(9,3),(7,5),(1,4),(1,1)))
+        line(((6,5),(10,10))); line(((5,6),(9,11)))
+    elif kind == "screwdriver":
+        line(((1,1),(4,1),(5,4),(3,6),(1,4),(1,1)))
+        line(((4,5),(10,11)))
+    elif kind == "nut":
+        line(((3,1),(8,1),(11,5),(8,10),(3,10),(0,5),(3,1)))
+        ellipse((4,3,7,7))
+    elif kind == "pick":
+        line(((0,5),(2,2),(5,1),(8,2),(11,5)))
+        line(((6,2),(3,11)))
+    elif kind == "antenna":
+        line(((2,1),(1,2),(1,5),(2,6))); line(((9,1),(10,2),(10,5),(9,6)))
+        if size >= 11:
+            line(((4,2),(3,3),(3,4),(4,5))); line(((7,2),(8,3),(8,4),(7,5)))
+        line(((5,5),(5,11))); line(((3,11),(8,11)))
+    elif kind == "radio":
+        rect((1,3,10,10)); line(((8,3),(10,0)))
+        ellipse((3,5,6,8)); point(8,5); point(8,8)
+    elif kind == "phone":
+        rect((3,0,8,11)); line(((5,2),(6,2))); point(5,9)
+    elif kind == "pc":
+        rect((1,1,10,8)); line(((5,8),(5,11))); line(((3,11),(8,11)))
+    elif kind == "camera":
+        rect((1,3,10,10)); line(((3,3),(3,1),(7,1),(7,3))); ellipse((4,5,7,8))
+    elif kind in ("sound", "mute"):
+        line(((1,5),(3,5),(6,2),(6,10),(3,7),(1,7),(1,5)))
+        if kind == "sound":
+            line(((8,4),(9,5),(9,7),(8,8))); line(((10,2),(11,4),(11,8),(10,10)))
+        else:
+            line(((8,4),(11,8))); line(((11,4),(8,8)))
+    elif kind == "plug":
+        line(((4,1),(4,4))); line(((7,1),(7,4)))
+        line(((3,4),(8,4),(8,6),(6,8),(5,8),(3,6),(3,4)))
+        line(((5,8),(5,11)))
+    elif kind == "power":
+        line(((5,0),(5,6)))
+        line(((2,3),(1,5),(1,8),(3,10),(8,10),(10,8),(10,5),(9,3)))
+    elif kind == "lamp":
+        line(((4,8),(2,5),(2,2),(4,0),(7,0),(9,2),(9,5),(7,8),(4,8)))
+        line(((4,10),(7,10))); line(((5,11),(6,11)))
+    elif kind == "compass":
+        ellipse((1,1,10,10)); line(((7,3),(6,7),(3,9),(5,5),(7,3)))
+    elif kind == "car":
+        line(((0,7),(2,6),(3,3),(8,3),(9,6),(11,7),(11,9),(0,9),(0,7)))
+        line(((2,6),(9,6))); line(((2,9),(2,10))); line(((9,9),(9,10)))
+    elif kind == "truck":
+        rect((0,3,7,8)); line(((7,5),(9,5),(11,7),(11,9),(7,9)))
+        point(2,10); point(9,10)
+    elif kind == "bike":
+        ellipse((0,6,4,10)); ellipse((7,6,11,10))
+        line(((2,8),(5,4),(8,8),(4,8),(2,8)))
+        line(((4,3),(6,3))); line(((5,4),(8,4),(9,8)))
+    elif kind == "walk":
+        ellipse((5,0,7,2)); line(((6,3),(5,7),(2,11)))
+        line(((5,5),(2,6))); line(((6,4),(9,6))); line(((5,7),(9,11)))
+    elif kind == "rocket":
+        line(((2,9),(4,3),(8,0),(9,4),(6,9),(2,9)))
+        point(6,3); line(((3,7),(0,10),(2,10))); line(((6,8),(5,11)))
+    elif kind == "alarm":
+        line(((3,9),(3,5),(4,3),(7,3),(8,5),(8,9)))
+        line(((2,10),(9,10))); point(5,11)
+        line(((1,3),(0,2))); line(((10,3),(11,2)))
+    elif kind in ("lock", "unlock"):
+        rect((2,5,9,11))
+        line(((3,5),(3,2),(4,1),(7,1),(8,2),(8,5))) if kind == "lock" else line(((5,5),(5,2),(6,1),(9,1),(10,2),(10,3)))
+        line(((5,8),(5,9)))
+    elif kind == "key":
+        ellipse((0,1,5,6)); line(((4,5),(10,11)))
+        line(((8,9),(10,7))); line(((9,10),(11,8)))
+    elif kind == "message":
+        line(((1,1),(10,1),(10,8),(6,8),(3,11),(3,8),(1,8),(1,1)))
+        line(((3,4),(8,4)))
+    elif kind == "mail":
+        rect((0,2,11,9)); line(((0,2),(5,6),(6,6),(11,2)))
+    elif kind == "calendar":
+        rect((1,2,10,10)); line(((1,5),(10,5)))
+        line(((3,0),(3,3))); line(((8,0),(8,3)))
+        point(4,7); point(7,7)
+    elif kind == "check":
+        line(((1,6),(4,9),(10,2)))
+    elif kind == "cross":
+        line(((2,2),(9,9))); line(((9,2),(2,9)))
+    elif kind == "warning":
+        line(((5,0),(11,10),(0,10),(5,0)))
+        line(((5,3),(5,6))); point(5,8)
+    elif kind == "star":
+        line(((5,0),(7,4),(11,4),(8,7),(9,11),(5,9),(2,11),(3,7),(0,4),(4,4),(5,0)))
+    elif kind == "fire":
+        line(((6,0),(8,4),(10,3),(11,7),(9,10),(3,10),(1,8),(3,3),(5,6),(6,0)))
+        line(((5,7),(4,9),(7,9),(6,7)))
     elif kind == "battery":
         top=max(1,size//4); bottom=size-1-top
         d.rectangle((0,top,size-2,bottom),outline=1)
         d.line((size-1,top+1,size-1,bottom-1),fill=1)
-        if bottom-top>=4: d.rectangle((2,top+2,size-4,bottom-2),fill=1)
+        if bottom-top>=4: d.line((2,top+2,2,bottom-2),fill=1)
     elif kind == "signal":
         width=max(1,size//5); gap=max(1,(size-width*3)//2)
         for i,frac in enumerate((.28,.55,.85)):
             x=i*(width+gap); h=max(2,round(size*frac))
             d.rectangle((x,size-h,x+width-1,size-1),fill=1)
     elif kind == "hospital":
-        a=max(1,size//3); b=size-1-a
-        d.rectangle((a,1,b,size-2),fill=1); d.rectangle((1,a,size-2,b),fill=1)
+        rect((1,1,10,10))
+        line(((5,3),(5,8))); line(((3,5),(8,5)))
     elif kind == "temperature":
         x=size//2; radius=max(2,size//4)
         d.ellipse((x-radius,size-2*radius-1,x+radius,size-1),outline=1)
@@ -900,7 +1108,7 @@ def native_icon(kind: str, size: int) -> Image.Image:
     elif kind in ("ball","football","basketball","tennis","clock"):
         d.ellipse((0,0,n,n),outline=1)
         if kind == "football":
-            d.polygon([(p(x),p(y)) for x,y in ((5,3),(8,5),(7,8),(4,8),(3,5))],fill=1)
+            line(((5,3),(8,5),(7,8),(4,8),(3,5),(5,3)))
         elif kind == "basketball":
             line(((5,1),(5,10))); line(((1,5),(10,5)))
         elif kind == "tennis":
@@ -934,24 +1142,25 @@ def native_icon(kind: str, size: int) -> Image.Image:
     elif kind == "forward":
         line(((1,5),(10,5))); line(((6,1),(10,5),(6,9)))
     elif kind in ("snow","sun"):
-        line(((5,0),(5,11))); line(((0,5),(11,5)))
-        line(((1,1),(10,10))); line(((1,10),(10,1)))
-        if kind=="sun": d.ellipse((p(3),p(3),p(8),p(8)),fill=1)
-        elif size>=11:
+        if kind == "sun":
+            ellipse((3,3,8,8))
+            for a,b in (((5,0),(5,1)),((5,10),(5,11)),((0,5),(1,5)),((10,5),(11,5)),((1,1),(2,2)),((9,9),(10,10)),((1,10),(2,9)),((9,2),(10,1))): line((a,b))
+        else:
+            line(((5,0),(5,11))); line(((0,5),(11,5)))
+            line(((1,1),(10,10))); line(((1,10),(10,1)))
+        if kind == "snow" and size>=11:
             for a,b in (((3,1),(5,3)),((7,1),(5,3)),((3,10),(5,8)),((7,10),(5,8))): line((a,b))
     elif kind in ("cloud","rain"):
-        bottom=8 if kind=="rain" else 10
-        d.ellipse((p(0),p(4),p(11),p(bottom)),fill=1)
-        d.ellipse((p(3),p(1),p(8),p(bottom)),fill=1)
+        bottom=7 if kind=="rain" else 9
+        line(((1,bottom),(0,bottom-1),(0,5),(1,4),(3,4),(3,3),(5,1),(7,1),(9,3),(9,4),(10,4),(11,5),(11,bottom-1),(10,bottom),(1,bottom)))
         if kind=="rain":
             for x in (2,5,8): line(((x,10),(x-1,11)))
     elif kind == "box":
         line(((5,0),(11,3),(11,8),(5,11),(0,8),(0,3),(5,0)))
         line(((0,3),(5,6),(11,3))); line(((5,6),(5,11)))
     elif kind == "clover":
-        # Four distinct leaves with a dark central cross, not a solid blob.
         for a,b,c,e in ((1,0,4,3),(6,0,9,3),(1,5,4,8),(6,5,9,8)):
-            d.ellipse((p(a),p(b),p(c),p(e)),fill=1)
+            ellipse((a,b,c,e))
         line(((5,7),(5,9),(7,11)))
     elif kind == "note":
         d.rectangle((1,0,size-2,size-1),outline=1)

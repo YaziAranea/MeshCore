@@ -279,8 +279,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-experimental.1" in block,
-        "every public profile must use DM-only unread and carry the experimental.1 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 2.1.0-experimental.2" in block,
+        "every public profile must use DM-only unread and carry the experimental.2 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -334,7 +334,7 @@ check(
         gpsless_clock_guard + device_status,
         (
             "#if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1",
-            "drawUiIcon(display, name_x, uiTextAlignedIconY(display, 0, icon_size), muted_icon, icon_size);",
+            "drawUiQuietStatus(display, name_x, 0, name_right - name_x);",
             "#elif defined(RADIO_FEM_RXGAIN)",
             'snprintf(tmp, sizeof(tmp), "Радио SX1262");',
         ),
@@ -1433,15 +1433,15 @@ check(
     "recording stubs prove CRC skip/count policy, not physical refresh duration or ghosting",
 )
 
-# The original tag's five-board publisher is immutable. V3 is an additive
-# build with a separate source revision, manifest, assets and workflow.
+# The historical five-board tag stays immutable. Experimental.2 builds V3
+# from the same revision as the other five boards, in its dedicated env.
 v3_config = read("variants/heltec_v3/platformio.ini")
 v3_addon = effective_ini_section(v3_config, "env:Heltec_v3_companion_radio_ble_smartui")
 check(
-    "V3 addon enables the shared UI without rewriting the five-board publication scope",
+    "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 2.1.0-experimental.1")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 2.1.0-experimental.2")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(

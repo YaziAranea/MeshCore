@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,12 +26,12 @@ class ImagePair:
 
 EXPECTED = (
     ImagePair(
-        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.1",
-        b"V4.3 OLED SmartUI 2.1.0-experimental.1",
+        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2",
+        b"V4.3 OLED SmartUI 2.1.0-experimental.2",
     ),
     ImagePair(
-        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.1",
-        b"Wireless Paper SmartUI 2.1.0-experimental.1 FULL",
+        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2",
+        b"Wireless Paper SmartUI 2.1.0-experimental.2 FULL",
     ),
 )
 
@@ -49,6 +50,34 @@ def validate_esp_image(raw: bytes, label: str) -> None:
         raise ValueError(f"{label}: implausible segment count {segment_count}")
 
 
+def validate_exact_application(image: bytes) -> None:
+    """Check every ESP segment, checksum and appended hash; forbid FS/padding."""
+    validate_esp_image(image, "application")
+    pos, checksum = 24, 0xEF
+    for _ in range(image[1]):
+        if pos + 8 > len(image):
+            raise ValueError("truncated ESP application segment header")
+        _, size = struct.unpack_from("<II", image, pos)
+        pos += 8
+        if pos + size > len(image):
+            raise ValueError("truncated ESP application segment")
+        for value in image[pos:pos + size]:
+            checksum ^= value
+        pos += size
+    end = (pos + 16) & ~15
+    if end > len(image) or image[end - 1] != checksum:
+        raise ValueError("ESP application checksum mismatch")
+    if image[pos:end - 1] != b"\0" * (end - pos - 1):
+        raise ValueError("unexpected ESP application alignment padding")
+    if image[23] not in (0, 1):
+        raise ValueError("unsupported ESP application hash flag")
+    expected_end = end + (32 if image[23] else 0)
+    if len(image) != expected_end:
+        raise ValueError("update has trailing bytes outside the ESP application (FS/padding is forbidden)")
+    if image[23] and hashlib.sha256(image[:end]).digest() != image[end:]:
+        raise ValueError("ESP application appended SHA256 mismatch")
+
+
 def validate_pair(directory: Path, pair: ImagePair) -> tuple[int, int, str, str]:
     merged_path = directory / f"{pair.stem}-freshInstall-merged.bin"
     update_path = directory / f"{pair.stem}-update.bin"
@@ -64,6 +93,7 @@ def validate_pair(directory: Path, pair: ImagePair) -> tuple[int, int, str, str]
         )
     if merged[APP_OFFSET:APP_OFFSET + len(update)] != update:
         raise ValueError("merged application slice differs from the update image")
+    validate_exact_application(update)
     if pair.marker not in update:
         raise ValueError(f"version marker {pair.marker.decode()!r} was not found")
 

@@ -2,7 +2,7 @@
 """Run the actual C++ icon helpers, with pixel recording instead of hardware.
 
 Unlike design previews this compiles drawUiIcon from UITask.cpp verbatim.
-The baseline is the beta.2 tag; only a host compiler and Pillow are needed.
+The baseline is experimental.1 FS2; only a host compiler and Pillow are needed.
 T114 uses rectangle-boundary mapping, including Y_OFFSET=1. Labels outside
 the frame are illustrative, never used as replacement firmware fonts.
 """
@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 UI = "examples/companion_radio/ui-new/"
-BASE = "v2.1.0-beta.2"
+BASE = "0d31a651978439c202017e43175ffb33b929ebcd"
 
 
 @lru_cache(maxsize=256)
@@ -344,6 +344,10 @@ int main() {
 
 def contact_sheet(out, before, after):
     selected = [
+        ("Дом", "emoji_home_icon"), ("Узел / пейджер", "emoji_pager_icon"),
+        ("Контакт", "emoji_person_icon"), ("Контакты", "emoji_group_icon"),
+        ("Сообщение", "emoji_msg_icon"), ("Письмо", "emoji_mail_icon"),
+        ("Тихо", "muted_icon"), ("Звук", "emoji_sound_icon"),
         ("Батарея (emoji)", "emoji_battery_icon"), ("Карта", "emoji_map_icon"),
         ("Сеть (emoji)", "emoji_signal_icon"), ("Медицина", "emoji_hospital_icon"),
         ("Температура", "emoji_temp_icon"), ("Мяч", "emoji_ball_icon"),
@@ -360,7 +364,7 @@ def contact_sheet(out, before, after):
                ("T114 L/XL после",after,1,11,True), ("T096 после",after,1,16,False)]
     image = Image.new("RGB", (960, 72+len(selected)*75), "#111c23")
     d = ImageDraw.Draw(image)
-    d.text((12,10), "EXPERIMENTAL 1 — beta.2 vs actual C++ masks (not display photos)", font=font, fill="white")
+    d.text((12,10), "EXPERIMENTAL 2 — до / после: реальные C++ растры, не фотографии", font=font, fill="white")
     for col,(label,*_) in enumerate(columns):
         d.text((190+col*185,42),label,font=font,fill="#90dae4")
     for row,(label,symbol) in enumerate(selected):
@@ -449,7 +453,7 @@ def main():
             "emoji_semantics_checks":semantic_checks,"emoji_sanitizers":["address","undefined"],
             "preview_checks":"all Unicode aliases, fixed8px, SAT advance, wrapping, both board modes",
             "exact_duplicate_distinct_families":0,
-            "boards":["T096","T114","ProMicro RA62","Heltec V4.3 OLED","Wireless Paper WOOD/FULL"],
+            "boards":["T096","T114","ProMicro RA62","Heltec V3 OLED","Heltec V4.3 OLED","Wireless Paper FULL"],
             "physical_hardware_test":False}
     (out/"icon_audit.json").write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
     print(json.dumps(report,ensure_ascii=False))
