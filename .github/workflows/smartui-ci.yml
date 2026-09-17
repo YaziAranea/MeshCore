@@ -4,13 +4,13 @@ on:
   push:
     branches:
       - smartui-ps17.2-dev
-      - smartui-2.1-experimental.2
+      - smartui-2.1-experimental.3
       # Experimental publication is explicitly dispatched and gated below.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish EXPERIMENTAL 2 after all six-board checks pass
+        description: Publish SmartUI V3 after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -37,15 +37,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_FEM_SmartUI_2.1.0-experimental.2.uf2
+            uf2_name: T096_UI_V3.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_SmartUI_2.1.0-experimental.2.uf2
+            uf2_name: T114_UI_V3.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2
+            uf2_name: ProMicro_RA62_UI_V3.uf2
 
     steps:
       - name: Check out source
@@ -142,15 +142,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_OLED_SmartUI_2.1.0-experimental.2
+            stem: Heltec_V3_UI_V3
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2
+            stem: Heltec_V4.3_UI_V3
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2
+            stem: Paper_UI_V3
 
     steps:
       - name: Check out source
@@ -188,7 +188,7 @@ jobs:
           build_dir=".pio/build/${{ matrix.environment }}"
           test -s "${build_dir}/firmware-merged.bin"
           test -s "${build_dir}/firmware.bin"
-          cp "${build_dir}/firmware-merged.bin" "firmware/${{ matrix.stem }}-freshInstall-merged.bin"
+          cp "${build_dir}/firmware-merged.bin" "firmware/${{ matrix.stem }}-merged.bin"
           cp "${build_dir}/firmware.bin" "firmware/${{ matrix.stem }}-update.bin"
 
       - name: Validate V3 prepared SPIFFS and FS2 recovery contract
@@ -447,8 +447,11 @@ jobs:
       - name: Exercise the actual settings navigation and confirmations
         run: python tools/test_settings_flow.py
 
-      - name: Check real-font quiet-state placement in production C++
+      - name: Check icon-only mute state in production C++
         run: python tools/test_quiet_status.py
+
+      - name: Check MeshCore splash with real fonts on all six boards
+        run: python tools/test_splash_brand.py
 
       - name: Check actual C++ icons on every display backend
         run: python tools/simulate_icon_alignment_beta2.py --out qa_outputs/icon_alignment_beta2
@@ -492,12 +495,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-experimental-release:
-    name: Publish the separate EXPERIMENTAL release
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.2'
+    name: Publish SmartUI V3 (experimental UI)
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.3'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-experimental-release-v2.1.0-experimental.2
+      group: publish-experimental-release-smartui-v3
       cancel-in-progress: false
     permissions:
       contents: write
@@ -519,9 +522,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="v2.1.0-experimental.2"
-          title="MeshCore SmartUI v2.1.0-experimental.2 — ЭКСПЕРИМЕНТАЛЬНЫЙ UI"
-          notes="release/RELEASE_NOTES_v2.1.0-experimental.2_RU.md"
+          tag="smartui-v3"
+          title="SmartUI V3"
+          notes="release/RELEASE_NOTES_SmartUI_V3_RU.md"
           # Create the immutable tag only after all builds/tests passed. A
           # failed pre-release build therefore never leaves a broken tag.
           tag_json="$(mktemp)"

@@ -17,10 +17,10 @@
 ```powershell
 git clone https://github.com/YaziAranea/MeshCore.git
 Set-Location MeshCore
-git switch smartui-2.1-experimental.2
+git switch smartui-2.1-experimental.3
 ```
 
-Текущий эксперимент для шести плат находится в `smartui-2.1-experimental.2`; предыдущая beta для пяти плат без V3 сохранена в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Текущий эксперимент для шести плат находится в `smartui-2.1-experimental.3`; предыдущая beta для пяти плат без V3 сохранена в `smartui-2.1-beta.2`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -76,17 +76,17 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 .pio/build/<environment>/firmware.bin
 ```
 
-`firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. Проверка пары выполняется `python tools/validate_release_esp32.py firmware` после копирования под публичными именами.
+`firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. После копирования под публичными именами выполняйте `python tools/validate_release_esp32.py firmware`, а для V3 с подготовленной SPIFFS — дополнительно `python tools/validate_release_v3.py firmware`.
 
-Публичные stems `v2.1.0-experimental.2`:
+Публичные stems `SmartUI V3`:
 
 ```text
-Heltec_V3_OLED_SmartUI_2.1.0-experimental.2
-Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2
-Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2
+Heltec_V3_UI_V3
+Heltec_V4.3_UI_V3
+Paper_UI_V3
 ```
 
-К каждому stem добавляются `-freshInstall-merged.bin` и `-update.bin`.
+К каждому stem добавляются `-merged.bin` и `-update.bin`.
 V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/зуммер. Не подменяйте его
 сборкой V4.3 только потому, что дисплеи одинакового размера.
 
@@ -97,13 +97,13 @@ V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/�
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_FEM_SmartUI_2.1.0-experimental.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_UI_V3.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_SmartUI_2.1.0-experimental.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_UI_V3.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_UI_V3.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -113,11 +113,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_FEM_SmartUI_2.1.0-experimental.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_UI_V3.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_SmartUI_2.1.0-experimental.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_UI_V3.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_UI_V3.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -133,11 +133,11 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Упаковщик experimental.2 принимает девять прошивок шести плат из одного
+Упаковщик SmartUI V3 принимает девять прошивок шести плат из одного
 чистого commit. Укажите новую, ещё не существующую папку:
 
 ```powershell
-python tools/package_smartui_release.py ../SmartUI-experimental2-six-boards
+python tools/package_smartui_release.py ../SmartUI_V3_RELEASE
 ```
 
 Скрипт берёт файлы из `.pio/build`, проверяет UF2, три пары BIN и подготовленную
@@ -234,7 +234,7 @@ python tools/generate_docs_assets.py
 5. В исходниках и документации нет абсолютных путей пользователя, токенов, приватных ключей, координат и дампов.
 6. `git status --short` содержит только намеренные файлы.
 7. `git diff --check` не сообщает об ошибках пробелов.
-8. `validate_release_uf2.py` и `validate_release_esp32.py` прошли без ошибок.
+8. `validate_release_uf2.py`, `validate_release_esp32.py` и V3-специфичный `validate_release_v3.py` прошли без ошибок.
 9. Тег и Release создаются только после этих проверок и нужной аппаратной проверки.
 
 ## Размеры текущего выпуска

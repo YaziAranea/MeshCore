@@ -177,11 +177,7 @@ def draw_mute(frame: Frame, x: int, y: int, size: int) -> None:
 
 
 def draw_quiet_status(frame: Frame, x: int, y: int, max_width: int, icon_size: int) -> int:
-    """Match drawUiQuietStatus: complete real-font text, otherwise native icon."""
-    label_width = frame.font.width("ТИХО")
-    if 0 < label_width <= max_width:
-        frame.text(x, y, "ТИХО", "red", max_w=max_width, tag="mute")
-        return label_width
+    """Match drawUiMuteStatusIcon: a complete native icon, never a word."""
     if icon_size > max_width:
         icon_size = 8
     if icon_size > max_width:

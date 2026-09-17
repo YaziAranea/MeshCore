@@ -25,10 +25,10 @@ import validate_release_v3 as v3
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "2.1.0-experimental.2"
-TAG = "v" + VERSION
-NOTES_NAME = f"RELEASE_NOTES_{TAG}_RU.md"
-ARCHIVE_NAME = f"MeshCore_SmartUI_{VERSION}_all-six-boards.zip"
+VERSION = "V3"
+TAG = "smartui-v3"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_V3_RU.md"
+ARCHIVE_NAME = "SmartUI_V3_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -45,7 +45,7 @@ BOARD_NAMES = ("T096 FEM ON", "T114", "ProMicro RA62",
                "Heltec V3 OLED", "Heltec V4.3 OLED FEM ON", "Wireless Paper FULL")
 FIRMWARE_NAMES = tuple(uf2.EXPECTED) + tuple(
     pair.stem + suffix for pair in ESP_PAIRS
-    for suffix in ("-freshInstall-merged.bin", "-update.bin")
+    for suffix in ("-merged.bin", "-update.bin")
 )
 
 
@@ -108,7 +108,7 @@ def input_files(build_dir: Path, firmware_dir: Path | None = None) -> list[tuple
                  for env, name in zip(NRF_ENVS, uf2.EXPECTED)]
         for env, pair in zip(ESP_ENVS, ESP_PAIRS):
             files.extend((
-                (build_dir / env / "firmware-merged.bin", pair.stem + "-freshInstall-merged.bin"),
+                (build_dir / env / "firmware-merged.bin", pair.stem + "-merged.bin"),
                 (build_dir / env / "firmware.bin", pair.stem + "-update.bin"),
             ))
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
@@ -126,7 +126,7 @@ def firmware_metadata(name: str, commit: str) -> dict:
                 "source_commit": commit, "image_kind": "nrf52840-uf2-bootloader",
                 "flash_offset": None}
     index = next(i for i, pair in enumerate(ESP_PAIRS) if name.startswith(pair.stem + "-"))
-    fresh = name.endswith("-freshInstall-merged.bin")
+    fresh = name.endswith("-merged.bin")
     storage = {
         "contains_formatted_empty_spiffs": index == 0 and fresh,
         "prepared_clean_install_storage": index == 0 and fresh,
@@ -185,7 +185,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require(VERSION in text, "release notes must identify this exact experimental version")
+    require("SmartUI V3" in text, "release notes must identify this exact experimental version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:

@@ -26,12 +26,12 @@ class ImagePair:
 
 EXPECTED = (
     ImagePair(
-        "Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2",
-        b"V4.3 OLED SmartUI 2.1.0-experimental.2",
+        "Heltec_V4.3_UI_V3",
+        b"V4.3 OLED SmartUI-V3",
     ),
     ImagePair(
-        "Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2",
-        b"Wireless Paper SmartUI 2.1.0-experimental.2 FULL",
+        "Paper_UI_V3",
+        b"Wireless Paper SmartUI-V3 FULL",
     ),
 )
 
@@ -79,7 +79,7 @@ def validate_exact_application(image: bytes) -> None:
 
 
 def validate_pair(directory: Path, pair: ImagePair) -> tuple[int, int, str, str]:
-    merged_path = directory / f"{pair.stem}-freshInstall-merged.bin"
+    merged_path = directory / f"{pair.stem}-merged.bin"
     update_path = directory / f"{pair.stem}-update.bin"
     merged = merged_path.read_bytes()
     update = update_path.read_bytes()

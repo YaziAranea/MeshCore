@@ -2,7 +2,7 @@
 """Run the actual C++ icon helpers, with pixel recording instead of hardware.
 
 Unlike design previews this compiles drawUiIcon from UITask.cpp verbatim.
-The baseline is experimental.1 FS2; only a host compiler and Pillow are needed.
+The baseline is experimental.2; only a host compiler and Pillow are needed.
 T114 uses rectangle-boundary mapping, including Y_OFFSET=1. Labels outside
 the frame are illustrative, never used as replacement firmware fonts.
 """
@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 UI = "examples/companion_radio/ui-new/"
-BASE = "0d31a651978439c202017e43175ffb33b929ebcd"
+BASE = "09586456692b3634b141ee99bed7173a11f782c1"
 
 
 @lru_cache(maxsize=256)
@@ -347,7 +347,7 @@ def contact_sheet(out, before, after):
         ("Дом", "emoji_home_icon"), ("Узел / пейджер", "emoji_pager_icon"),
         ("Контакт", "emoji_person_icon"), ("Контакты", "emoji_group_icon"),
         ("Сообщение", "emoji_msg_icon"), ("Письмо", "emoji_mail_icon"),
-        ("Тихо", "muted_icon"), ("Звук", "emoji_sound_icon"),
+        ("Без звука", "muted_icon"), ("Звук", "emoji_sound_icon"),
         ("Батарея (emoji)", "emoji_battery_icon"), ("Карта", "emoji_map_icon"),
         ("Сеть (emoji)", "emoji_signal_icon"), ("Медицина", "emoji_hospital_icon"),
         ("Температура", "emoji_temp_icon"), ("Мяч", "emoji_ball_icon"),
@@ -364,7 +364,7 @@ def contact_sheet(out, before, after):
                ("T114 L/XL после",after,1,11,True), ("T096 после",after,1,16,False)]
     image = Image.new("RGB", (960, 72+len(selected)*75), "#111c23")
     d = ImageDraw.Draw(image)
-    d.text((12,10), "EXPERIMENTAL 2 — до / после: реальные C++ растры, не фотографии", font=font, fill="white")
+    d.text((12,10), "SmartUI V3 — до / после: реальные C++ растры, не фотографии", font=font, fill="white")
     for col,(label,*_) in enumerate(columns):
         d.text((190+col*185,42),label,font=font,fill="#90dae4")
     for row,(label,symbol) in enumerate(selected):

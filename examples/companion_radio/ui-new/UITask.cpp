@@ -191,6 +191,10 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
   #define MESHCORE_UI_VERSION "0.92"
 #endif
 
+#ifndef SMARTUI_RELEASE_LABEL
+  #define SMARTUI_RELEASE_LABEL "V3"
+#endif
+
 #ifndef UI_RECENT_PAGE
   #define UI_RECENT_PAGE 0
 #endif
@@ -3286,17 +3290,10 @@ static void drawPreviewTextEllipsized(DisplayDriver& display, int x, int y, int 
 #endif
 }
 
-// A state must be readable without recognising a tiny speaker silhouette.
-// Use the current real font, not an assumed glyph width; on a crowded header
-// keep a complete native icon instead of truncating the word or hiding mute.
-static int drawUiQuietStatus(DisplayDriver& display, int x, int y, int max_width) {
+// Keep mute a consistent pictogram on every clock. Its reserved width is
+// independent of language/font; align the native raster to the text ink.
+static int drawUiMuteStatusIcon(DisplayDriver& display, int x, int y, int max_width) {
   if (max_width <= 0) return 0;
-  const char* label = "ТИХО";
-  const int label_width = display.getTextWidth(label);
-  if (label_width > 0 && label_width <= max_width) {
-    display.drawTextLeftAlign(x, y, label);
-    return label_width;
-  }
   int size = uiStatusIconSize(display);
   if (size > max_width) size = 8;
   if (size > max_width) return 0;
@@ -3602,71 +3599,47 @@ static int renderPaperIdleClock(DisplayDriver& display, UITask* task, mesh::RTCC
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
-  char _version_info[12];
 
 public:
   SplashScreen(UITask* task) : _task(task) {
-    // strip off dash and commit hash by changing dash to null terminator
-    // e.g: v1.2.3-abcdef -> v1.2.3
-    const char *ver = FIRMWARE_VERSION;
-    const char *dash = strchr(ver, '-');
-
-    int len = dash ? dash - ver : strlen(ver);
-    if (len >= sizeof(_version_info)) len = sizeof(_version_info) - 1;
-    memcpy(_version_info, ver, len);
-    _version_info[len] = 0;
-
     dismiss_after = millis() + BOOT_SCREEN_MILLIS;
   }
 
   int render(DisplayDriver& display) override {
-#if UI_T096_PREMIUM_TFT
+    // Binary validators require the board-specific release marker. Volatile
+    // byte reads keep the complete metadata live through LTO/linker GC,
+    // without drawing the long internal version string on the splash.
+    const volatile char* release_metadata = MESHCORE_UI_VERSION;
+    for (size_t i = 0; i < sizeof(MESHCORE_UI_VERSION); ++i) (void)release_metadata[i];
+
     uint8_t saved_font = display.getUiFont();
     display.setTextSize(1);
     display.setBold(false);
 
-    display.setColor(DisplayDriver::GREEN);
-    uint8_t hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
-    display.setBold(true);
-    drawRichTextCenteredEllipsized(display, display.width() / 2, 18, display.width() - 2, "Мешкор Омск");
-    display.setBold(false);
-    uiPopFont(display, hero_font);
-
-    display.setColor(DisplayDriver::GREEN);
-    uint8_t small_font = uiPushOledRoleFont(display, UI_OLED_FONT_S);
-    drawRichTextCenteredEllipsized(display, display.width() / 2, 48, display.width() - 2, "UI " MESHCORE_UI_VERSION);
-    uiPopFont(display, small_font);
-
-    uiPopFont(display, saved_font);
-#elif UI_V4_3_OLED_PROFILE
-    uint8_t saved_font = display.getUiFont();
-    display.setTextSize(1);
-    display.setBold(false);
-
-    display.setColor(DisplayDriver::BLUE);
-    display.setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_L));
-    display.setUiFont(uiOledFontForRole(0, UI_OLED_FONT_L));
-    drawRichTextCentered(display, display.width() / 2, 5, "Мешкор");
-    drawRichTextCentered(display, display.width() / 2, 24, "Омск");
-
-    display.setColor(DisplayDriver::LIGHT);
-    display.setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_S));
-    display.setUiFont(uiOledFontForRole(0, UI_OLED_FONT_S));
-    drawRichTextCenteredEllipsized(display, display.width() / 2, 42, display.width(), "UI " MESHCORE_UI_VERSION);
-    drawRichTextCenteredEllipsized(display, display.width() / 2, 52, display.width(), _version_info);
-
-    uiPopFont(display, saved_font);
-#else
-    display.setColor(DisplayDriver::BLUE);
+    uiPushOledRoleFont(display, UI_OLED_FONT_L);
+#if UI_NATIVE_TFT_PROFILE || UI_WIRELESS_PAPER_BIG_CLOCK
+    // T114 selects its native clock bitmap; E213 uses its real 2x renderer.
     display.setTextSize(2);
-    display.drawTextCentered(display.width()/2, 5, "Мешкор");
-    display.drawTextCentered(display.width()/2, 24, "Омск");
-
-    display.setColor(DisplayDriver::LIGHT);
-    display.setTextSize(1);
-    display.drawTextCentered(display.width()/2, 43, "UI " MESHCORE_UI_VERSION);
-    display.drawTextCentered(display.width()/2, 55, _version_info);
 #endif
+    display.setBold(true);
+    if (display.getTextWidth("MeshCore") > display.width() - 8 ||
+        display.getTextInkHeight() > display.height() / 2) {
+      uiPopFont(display, saved_font);
+      uiPushCompactSettingsFont(display);
+      display.setBold(true);
+    }
+    int brand_y = (display.height() - display.getTextInkHeight()) / 2 - display.getTextInkTop();
+    display.setColor(DisplayDriver::BLUE);
+    drawRichTextCentered(display, display.width() / 2, brand_y, "MeshCore");
+
+    uiPopFont(display, saved_font);
+    uiPushCompactSettingsFont(display);
+    display.setBold(false);
+    int bottom_margin = display.height() >= 96 ? 10 : 6;
+    int label_y = display.height() - bottom_margin - display.getTextInkHeight() - display.getTextInkTop();
+    display.setColor(DisplayDriver::LIGHT);
+    drawRichTextCentered(display, display.width() / 2, label_y, SMARTUI_RELEASE_LABEL);
+    uiPopFont(display, saved_font);
 
     return 1000;
   }
@@ -7573,7 +7546,7 @@ public:
         if (_task->areNotificationsMuted()) {
           int mute_x = gps_right + 3;
           display.setColor(DisplayDriver::RED);
-          drawUiQuietStatus(display, mute_x, 0, name_right - mute_x);
+          drawUiMuteStatusIcon(display, mute_x, 0, name_right - mute_x);
         }
         display.setColor(_task->getUiBottomColor());
       } else
@@ -7590,7 +7563,7 @@ public:
           if (_task->areNotificationsMuted()) {
             int mute_x = gps_right + 3;
             display.setColor(DisplayDriver::RED);
-            drawUiQuietStatus(display, mute_x, 0, name_right - mute_x);
+            drawUiMuteStatusIcon(display, mute_x, 0, name_right - mute_x);
           }
           display.setColor(_task->getUiBottomColor());
 #else
@@ -7598,7 +7571,7 @@ public:
           // module.  Keep only the useful mute state in the clock chrome.
           if (_task->areNotificationsMuted()) {
             display.setColor(DisplayDriver::RED);
-            drawUiQuietStatus(display, name_x, 0, name_right - name_x);
+            drawUiMuteStatusIcon(display, name_x, 0, name_right - name_x);
           }
           display.setColor(_task->getUiBottomColor());
 #endif
@@ -7819,7 +7792,7 @@ public:
       if (clock_muted) {
         int mute_x = gps_right + 4;
         display.setColor(DisplayDriver::RED);
-        drawUiQuietStatus(display, mute_x, 0, battery_left - 3 - mute_x);
+        drawUiMuteStatusIcon(display, mute_x, 0, battery_left - 3 - mute_x);
       }
       display.setColor(_task->getUiBottomColor());
       uiPopFont(display, small_font);
@@ -10622,7 +10595,7 @@ void UITask::cycleBacklightTimeout() {
 const char* UITask::getSmartProfileName() const {
   uint8_t profile = _node_prefs ? _node_prefs->smart_profile_id : SMART_PROFILE_CUSTOM;
   switch (profile) {
-    case SMART_PROFILE_QUIET: return "Тихо";
+    case SMART_PROFILE_QUIET: return "Без звука";
     case SMART_PROFILE_OUTDOOR: return "Улица";
     case SMART_PROFILE_NIGHT: return "Ночь";
     default: return "Свой";
@@ -10863,7 +10836,7 @@ const char* UITask::getNotifyModeName() const {
       return "Все";
     case NOTIFY_MODE_SILENT:
     default:
-      return "Тихо";
+      return "Выкл";
   }
 }
 
@@ -11080,7 +11053,7 @@ const char* UITask::getImportantNotifyModeName() const {
       return "Все";
     case NOTIFY_MODE_SILENT:
     default:
-      return "Тихо";
+      return "Выкл";
   }
 }
 

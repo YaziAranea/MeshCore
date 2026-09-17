@@ -214,7 +214,7 @@ class Oled:
 def draw_page(style: tuple[str, int, bool], page: str) -> tuple[Image.Image, list[str]]:
     oled = Oled(style)
     if page == "Часы":
-        oled.text(0, 0, "Мешкор Омск", max_width=82)
+        oled.text(0, 0, "MeshCore", max_width=82)
         oled.text(90, 0, "3.92V")
         oled.battery(112, 0)
         oled.mute(8, 23)

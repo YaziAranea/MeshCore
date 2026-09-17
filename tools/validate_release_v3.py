@@ -19,8 +19,8 @@ from validate_release_esp32 import ImagePair, validate_pair, validate_exact_appl
 
 
 PAIR = ImagePair(
-    "Heltec_V3_OLED_SmartUI_2.1.0-experimental.2",
-    b"V3 OLED SmartUI 2.1.0-experimental.2 FS2",
+    "Heltec_V3_UI_V3",
+    b"V3 OLED SmartUI-V3 FS2",
 )
 
 PARTITION_OFFSET = 0x8000
@@ -195,7 +195,7 @@ def validate_v3_pair(directory: Path, *, mkspiffs: Path | None = None,
     validate_exact_application(update)
     if factory_spiffs_sha256().encode("ascii") not in update:
         raise ValueError("update does not contain the exact factory-empty recovery hash")
-    merged = (directory / f"{PAIR.stem}-freshInstall-merged.bin").read_bytes()
+    merged = (directory / f"{PAIR.stem}-merged.bin").read_bytes()
     apps = [entry for entry in parse_partitions(merged) if entry["type"] == 0 and entry["offset"] == 0x10000]
     if len(apps) != 1 or result[1] > apps[0]["size"]:
         raise ValueError("update image does not fit the actual app partition at 0x10000")

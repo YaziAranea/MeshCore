@@ -860,6 +860,21 @@ REFRESH8_PATTERNS = {
 def native_icon(kind: str, size: int) -> Image.Image:
     if size not in (8, 11, 12, 16):
         raise ValueError(f"Unsupported native icon size: {size}")
+    if kind == "mute":
+        # One unmistakable diagonal slash, not a tiny detached cross. Each
+        # destination has its own speaker geometry. Preserve the complete
+        # outline: erasing a gutter destroys the speaker at 8/11 pixels.
+        speaker, slash = {
+            8: (((0,3),(1,3),(3,1),(3,6),(1,4),(0,4),(0,3)), ((0,7),(7,0))),
+            11: (((1,4),(3,4),(5,2),(5,8),(3,6),(1,6),(1,4)), ((2,9),(10,1))),
+            12: (((1,4),(3,4),(6,1),(6,10),(3,7),(1,7),(1,4)), ((1,10),(10,1))),
+            16: (((1,6),(4,6),(8,2),(8,13),(4,9),(1,9),(1,6)), ((2,14),(14,2))),
+        }[size]
+        image = Image.new("1", (size, size), 0)
+        draw = ImageDraw.Draw(image)
+        draw.line(speaker, fill=1, width=1)
+        draw.line(slash, fill=1, width=1)
+        return image
     if size == 8 and kind in REFRESH8_PATTERNS:
         return pattern8_image(tuple(REFRESH8_PATTERNS[kind].split("/")))
     im = Image.new("1", (size, size), 0)

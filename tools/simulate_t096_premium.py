@@ -228,11 +228,10 @@ def chrome(draw, t, profile, page_idx, page_count=9):
 
 
 def draw_splash():
-    profile = DEFAULT_PROFILE
-    img, draw, t = new_screen(0, False)
-    center(draw, 18, "Мешкор Омск", load_font(profile, "L"), t["green"])
-    center(draw, 48, "T096 SmartUI PS17 FEM", load_font(profile, "S"), t["green"])
-    return "01_splash", img
+    # Keep this historical gallery entry tied to the actual C++ splash and
+    # checked-in bitmap bytes instead of a separately branded font mockup.
+    from test_splash_brand import render_splash_preview
+    return "01_splash", render_splash_preview("t096", DEFAULT_PROFILE)
 
 
 def draw_clock():

@@ -119,7 +119,7 @@ def clock_scene(
 
     if gps_right > name_right:
         oled.overflows.append(f"{style[0]}: {gps_label} reaches battery group at {gps_right}>{name_right}")
-    if muted and mute_x + min(oled.text_width("ТИХО"), STATUS_ICON_SIZE) > name_right:
+    if muted and mute_x + STATUS_ICON_SIZE > name_right:
         oled.overflows.append(
             f"{style[0]}: mute {mute_x}..{mute_x + STATUS_ICON_SIZE} overlaps battery group at {name_right}"
         )
@@ -127,10 +127,7 @@ def clock_scene(
     if gps_label:
         oled.text(0, 0, gps_label, tag="gps state", expected=gps_label)
     if muted:
-        if oled.text_width("ТИХО") <= name_right - mute_x:
-            oled.text(mute_x, 0, "ТИХО", tag="mute", expected="ТИХО")
-            status_right = mute_x + oled.text_width("ТИХО")
-        elif mute_x + STATUS_ICON_SIZE <= name_right:
+        if mute_x + STATUS_ICON_SIZE <= name_right:
             draw_firmware_mute(oled, mute_x, 0)
             status_right = mute_x + STATUS_ICON_SIZE
     placement = clock_uptime_placement(oled, status_right, name_right, uptime_seconds)

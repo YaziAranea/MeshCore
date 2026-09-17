@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-Эта ветка описывает единый экспериментальный `v2.1.0-experimental.2` для шести плат. Предыдущая `v2.1.0-beta.2` остаётся Latest. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
+Эта ветка описывает единый экспериментальный `SmartUI V3` для шести плат. Предыдущая `v2.1.0-beta.2` остаётся Latest. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
 
 > **V4.3/Paper: чистая установка на полностью очищенную память может дать `STORAGE ERROR`.** Их merged не содержит подготовленной SPIFFS; этот UI-выпуск механизм хранилища не меняет. Для работающей ноды используйте `update.bin` без Erase. Файл V3 на других платах не применять.
 
@@ -22,26 +22,26 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_FEM_SmartUI_2.1.0-experimental.2.uf2` |
-| Heltec T114 с TFT | `T114_SmartUI_2.1.0-experimental.2.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_SmartUI_2.1.0-experimental.2.uf2` |
+| Heltec T096 FEM ON | `T096_UI_V3.uf2` |
+| Heltec T114 с TFT | `T114_UI_V3.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_V3.uf2` |
 
 Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V3 OLED | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-update.bin` |
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_V4.3_OLED_FEMON_SmartUI_2.1.0-experimental.2-update.bin` |
-| Wireless Paper FULL | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin` | `Heltec_Wireless_Paper_FULL_SmartUI_2.1.0-experimental.2-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_UI_V3-merged.bin` | `Heltec_V3_UI_V3-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_V3-merged.bin` | `Heltec_V4.3_UI_V3-update.bin` |
+| Wireless Paper FULL | `Paper_UI_V3-merged.bin` | `Paper_UI_V3-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
 ## ESP32-S3: V3 OLED, V4.3 OLED и Wireless Paper
 
-- `freshInstall-merged.bin` записывается с адреса `0x00000`. Для V3 FS2 это **только чистая установка со сбросом данных**, не обычное обновление.
+- `merged.bin` записывается с адреса `0x00000`. Для V3 FS2 это **только чистая установка со сбросом данных**, не обычное обновление.
 - Для обновления уже установленной совместимой прошивки берите `update.bin`; application offset — `0x10000`.
 - Не переименовывайте update в merged и не пытайтесь копировать BIN на UF2-диск.
-- Команда `esptool` для чистой установки: `esptool.py --chip esp32s3 write_flash 0x00000 <freshInstall-merged.bin>`.
+- Команда `esptool` для чистой установки: `esptool.py --chip esp32s3 write_flash 0x00000 <merged.bin>`.
 - Команда для update: `esptool.py --chip esp32s3 write_flash 0x10000 <update.bin>`.
 
 Web Flasher должен работать с merged-файлом. Если сервис предлагает выбрать плату, выбирайте свою точную модель V3 OLED, V4.3 OLED или Wireless Paper — они не взаимозаменяемы. На V3 кнопка навигации PRG/BOOT — GPIO0, не RST; удержание PRG/BOOT во время сброса переводит ESP32-S3 в загрузчик.
@@ -56,9 +56,10 @@ SHA-256 и запишите приложение по `0x10000` **без Erase F
 
 **V3 уже очищена, после Erase появился `STORAGE ERROR`:**
 
-1. Заново скачайте `Heltec_V3_OLED_SmartUI_2.1.0-experimental.2-freshInstall-merged.bin`
-   и актуальный `SHA256SUMS-V3.txt`. Имя старое, но содержимое исправлено в ревизии **FS2**.
-2. Проверьте контрольную сумму. `RELEASE-MANIFEST-V3.json` должен указывать `FS2`.
+1. Заново скачайте `Heltec_V3_UI_V3-merged.bin`
+   и актуальный `SHA256SUMS-ESP32.txt` из того же выпуска.
+2. Проверьте контрольную сумму. В общем `RELEASE-MANIFEST.json` запись V3
+   должна содержать `storage.v3_fs2_recovery: true`; внутри прошивки сохранён маркер `FS2`.
 3. Запишите merged FS2 по адресу **`0x00000`**. Повторная очистка не требуется.
 4. Перезапустите плату. Если mount не удался, FS2 может подготовить SPIFFS штатной
    библиотекой только после точного совпадения с известным пустым заводским образом.
@@ -130,7 +131,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден маркер нужной платы и линии `2.1.0-experimental.2`.
+- На странице версии виден уникальный маркер нужной платы с `SmartUI-V3`; заставка показывает короткое `V3`.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

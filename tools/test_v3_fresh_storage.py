@@ -52,7 +52,7 @@ def main() -> None:
             return image.read_bytes()
         if args.firmware_dir:
             validate_v3_pair(args.firmware_dir)
-            merged = (args.firmware_dir / f"{PAIR.stem}-freshInstall-merged.bin").read_bytes()
+            merged = (args.firmware_dir / f"{PAIR.stem}-merged.bin").read_bytes()
             update = (args.firmware_dir / f"{PAIR.stem}-update.bin").read_bytes()
             scope = "actual supplied compiled release pair"
         else:
@@ -125,7 +125,7 @@ def main() -> None:
         rejected("unsupported encrypted SPIFFS", lambda: inspect_fresh_spiffs(encrypted), "unencrypted")
         fixture = temp / "pair"
         fixture.mkdir()
-        (fixture / f"{PAIR.stem}-freshInstall-merged.bin").write_bytes(merged)
+        (fixture / f"{PAIR.stem}-merged.bin").write_bytes(merged)
         update_path = fixture / f"{PAIR.stem}-update.bin"
         update_path.write_bytes(update)
         accepted("exact update/application bytes and FS2 marker", lambda: validate_v3_pair(fixture))

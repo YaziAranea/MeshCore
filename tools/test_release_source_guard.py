@@ -2,6 +2,7 @@
 """Exercise exact-source packaging against real Git line-ending edge cases."""
 
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -26,6 +27,12 @@ class SourceGuardTests(unittest.TestCase):
         (self.root / ".gitattributes").write_bytes(b"*.cpp text eol=lf\n")
         self.git("add", ".gitattributes")
         self.git("commit", "--quiet", "-m", "New newline policy")
+        # Force a content check after the attribute change. Otherwise Git's
+        # stat cache can legitimately consider this untouched file clean,
+        # making the CRLF regression fixture depend on filesystem timing.
+        source = self.root / "source.cpp"
+        stat = source.stat()
+        os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
 
     def git(self, *args):
         return subprocess.run(["git", *args], cwd=self.root,
