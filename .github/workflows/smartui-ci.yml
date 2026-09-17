@@ -315,6 +315,7 @@ jobs:
       - name: Validate all nine images and build manifest, checksums and all-six ZIP
         run: |
           chmod +x validation-support/mkspiffs
+          python tools/test_release_source_guard.py
           python tools/package_smartui_release.py release \
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \

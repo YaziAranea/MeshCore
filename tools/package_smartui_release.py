@@ -58,6 +58,34 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def require_clean_checkout(root: Path = ROOT) -> None:
+    # Some inherited blobs still contain CRLF despite the newer eol=lf
+    # attributes. A pristine Linux checkout consequently reports them dirty:
+    # the clean filter normalizes the worktree before comparing it to HEAD.
+    # Accept that false positive only when the ORIGINAL bytes and mode match
+    # HEAD exactly. Do not ignore whitespace, normalize contents, or waive
+    # real source changes merely because a build artifact already exists.
+    result = subprocess.run(
+        ["git", "diff", "--raw", "--no-renames", "--no-abbrev", "-z", "HEAD", "--"],
+        cwd=root, capture_output=True, check=True,
+    )
+    entries = result.stdout.split(b"\0")
+    require(entries[-1] == b"" and (len(entries) - 1) % 2 == 0,
+            "unexpected Git raw diff format")
+    for index in range(0, len(entries) - 1, 2):
+        fields = entries[index].split()
+        relative = entries[index + 1].decode("utf-8")
+        error = f"refusing exact-source packaging from a dirty tracked checkout: {relative}"
+        require(len(fields) == 5 and fields[0].startswith(b":"), error)
+        old_mode, new_mode = fields[0][1:], fields[1]
+        path = root / relative
+        require(old_mode == new_mode and old_mode in {b"100644", b"100755"}
+                and path.is_file() and not path.is_symlink(), error)
+        original = subprocess.run(["git", "show", "HEAD:" + relative], cwd=root,
+                                  capture_output=True, check=True).stdout
+        require(path.read_bytes() == original, error)
+
+
 def resolve_commit(explicit: str | None = None) -> str:
     result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                             capture_output=True, text=True, check=True)
@@ -65,8 +93,7 @@ def resolve_commit(explicit: str | None = None) -> str:
     require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "invalid checkout commit")
     require(explicit is None or explicit == commit,
             "requested source commit differs from the checked-out HEAD")
-    clean = subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=ROOT)
-    require(clean.returncode == 0, "refusing exact-source packaging from a dirty tracked checkout")
+    require_clean_checkout()
     return commit
 
 
