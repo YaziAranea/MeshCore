@@ -25,10 +25,10 @@ import validate_release_v3 as v3
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "V3"
-TAG = "smartui-v3"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_V3_RU.md"
-ARCHIVE_NAME = "SmartUI_V3_all-boards.zip"
+VERSION = "V4"
+TAG = "smartui-v4"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_V4_RU.md"
+ARCHIVE_NAME = "SmartUI_V4_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -185,7 +185,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI V3" in text, "release notes must identify this exact experimental version")
+    require("SmartUI V4" in text, "release notes must identify this exact experimental version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:
@@ -202,7 +202,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
         manifest = {
             "schema_version": 2, "version": VERSION, "tag": TAG, "commit": commit,
             "experimental": True, "board_count": 6, "firmware_count": 9,
-            "publication": {"draft": False, "prerelease": False, "make_latest": False},
+            "publication": {"draft": False, "prerelease": False, "make_latest": True},
             "firmware": [record(stage / name, **firmware_metadata(name, commit))
                          for name in sorted(FIRMWARE_NAMES)],
             "files": [record(path) for path in payloads],

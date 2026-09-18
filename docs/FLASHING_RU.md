@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-Эта ветка описывает единый экспериментальный `SmartUI V3` для шести плат. Предыдущая `v2.1.0-beta.2` остаётся Latest. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
+Эта ветка описывает единый экспериментальный `SmartUI V4` для шести плат. V4 отмечен Latest как текущая версия, не как подтверждение аппаратной стабильности; SmartUI V3 сохранён для отката. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
 
 > **V4.3/Paper: чистая установка на полностью очищенную память может дать `STORAGE ERROR`.** Их merged не содержит подготовленной SPIFFS; этот UI-выпуск механизм хранилища не меняет. Для работающей ноды используйте `update.bin` без Erase. Файл V3 на других платах не применять.
 
@@ -22,17 +22,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_UI_V3.uf2` |
-| Heltec T114 с TFT | `T114_UI_V3.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_V3.uf2` |
+| Heltec T096 FEM ON | `T096_UI_V4.uf2` |
+| Heltec T114 с TFT | `T114_UI_V4.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_V4.uf2` |
 
-Для отката на `v2.0.0-rc1` скачивайте его UF2 и манифест только со страницы старого Release.
+Для отката на SmartUI V3 скачивайте файл своей платы и манифест со страницы [его Release](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3).
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V3 OLED | `Heltec_V3_UI_V3-merged.bin` | `Heltec_V3_UI_V3-update.bin` |
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_V3-merged.bin` | `Heltec_V4.3_UI_V3-update.bin` |
-| Wireless Paper FULL | `Paper_UI_V3-merged.bin` | `Paper_UI_V3-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_UI_V4-merged.bin` | `Heltec_V3_UI_V4-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_V4-merged.bin` | `Heltec_V4.3_UI_V4-update.bin` |
+| Wireless Paper FULL | `Paper_UI_V4-merged.bin` | `Paper_UI_V4-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -56,7 +56,7 @@ SHA-256 и запишите приложение по `0x10000` **без Erase F
 
 **V3 уже очищена, после Erase появился `STORAGE ERROR`:**
 
-1. Заново скачайте `Heltec_V3_UI_V3-merged.bin`
+1. Заново скачайте `Heltec_V3_UI_V4-merged.bin`
    и актуальный `SHA256SUMS-ESP32.txt` из того же выпуска.
 2. Проверьте контрольную сумму. В общем `RELEASE-MANIFEST.json` запись V3
    должна содержать `storage.v3_fs2_recovery: true`; внутри прошивки сохранён маркер `FS2`.
@@ -83,7 +83,7 @@ FS1 не устранила ошибку на пользовательской V
 
 ### Ограничение прежних V4.3 / Wireless Paper
 
-Их исходные BIN остаются неизменными и не содержат исправление V3 FS2.
+Их механизм хранилища остаётся неизменным и не содержит исправление V3 FS2.
 После полной очистки пустое SPIFFS на этих целях также может вызвать
 `STORAGE ERROR`. Для работающей ноды используйте совместимый update без Erase;
 при установке после очистки учитывайте это ограничение. **Не прошивайте V3 BIN
@@ -131,7 +131,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- На странице версии виден уникальный маркер нужной платы с `SmartUI-V3`; заставка показывает короткое `V3`.
+- Заставка показывает `MeshCore` и короткое `V4`; уникальный маркер нужной платы с `SmartUI-V4` остаётся внутри прошивки и проверяется валидатором, отдельной страницы версии нет.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

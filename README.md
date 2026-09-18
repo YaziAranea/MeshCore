@@ -1,11 +1,11 @@
 # MeshCore Smart UI — PowerSaving17
 
 > [!WARNING]
-> **Эта ветка — отдельный экспериментальный UI `SmartUI V3`.**
-> [Скачать эксперимент](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3)
-> · [Что изменилось и какой файл выбрать](RELEASE_NOTES_SmartUI_V3_RU.md).
-> Прежняя [beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2)
-> сохранена и остаётся Latest. Эксперимент не объявляется стабильным.
+> **Эта ветка — отдельный экспериментальный UI `SmartUI V4`.**
+> [Скачать эксперимент](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v4)
+> · [Что изменилось и какой файл выбрать](RELEASE_NOTES_SmartUI_V4_RU.md).
+> Выпуск отмечен Latest как текущая версия, не как подтверждение аппаратной стабильности.
+> [SmartUI V3](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3) сохранён для отката.
 
 Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для шести плат:
 
@@ -18,9 +18,9 @@
 
 Основа эксперимента — `SmartUI 2.1.0-beta.2`. В `experimental.1` доработаны действия меню, выбор избранного, безопасная калибровка/отмена, адресная отправка с подтверждением, поиск контактов и пиктограммы. Разделы не переставлялись, черновики не добавлены. Изображения ниже показывают экспериментальную ветку, а не старую beta.2; аппаратная проверка каждого экземпляра не заявляется.
 
-[⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3) · [Как выбрать файл](RELEASE_NOTES_SmartUI_V3_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать экспериментальный SmartUI](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v4) · [Как выбрать файл](RELEASE_NOTES_SmartUI_V4_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
-**SmartUI V3 — единый выпуск шести плат:** тихий режим на главном экране показывает только mute-иконку, без слова «ТИХО». Заставка — `MeshCore` и короткая версия `V3`. Пиктограммы, меню и функции experimental.2 сохранены. Один `SmartUI_V3_all-boards.zip`, один commit и `RELEASE-MANIFEST.json` для всех прошивок. Исторические релизы не изменяются.
+**SmartUI V4 — исправление уведомлений, единый выпуск шести плат:** на nRF52840 восстановлены напоминания о непрочитанном ЛС/упоминании через две минуты от начала предыдущей серии и ровно два проигрывания мелодии за серию. Убрана лишняя серия от короткого burst-gap и перезапуск активной серии повторным callback. Исправлены недопустимый GPIO зуммера и конфликт LED/PWM на одном выводе. Настройки не сбрасываются: для звука выберите «Зумер» или «Оба» в важных уведомлениях. UI V3 сохранён: только mute-иконка, знакомые меню/шрифты; заставка `MeshCore` / `V4`. Один `SmartUI_V4_all-boards.zip`, один commit и `RELEASE-MANIFEST.json`.
 
 > [!WARNING]
 > **V3 FS2 добавляет восстановление при `STORAGE ERROR`; проверка на плате ещё нужна.**
@@ -43,10 +43,10 @@
 
 > Это независимая модификация. Она не является официальным выпуском MeshCore или IoTThinks. Порт закреплён на коммите [`a3b9ad91`](https://github.com/IoTThinks/MeshCore/commit/a3b9ad91a5bf04e7e00713595469dc868de53628) ветки `PowerSaving-v17` проекта IoTThinks/MeshCore. Новые цели V4.3/Wireless Paper пока проверены сборкой и точной симуляцией, но не объявлены физически испытанными.
 
-Стабильный RC находится в ветке [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1). Текущая beta находится в [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2); разницу можно смотреть обычным GitHub compare без ручного переноса файлов.
+История PS17-порта сохранена в ветках [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1) и [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2). Для отката текущего UI используйте выпуск SmartUI V3.
 
 Эксперимент — [`smartui-2.1-experimental.3`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-experimental.3).
-[Разница с beta.2](https://github.com/YaziAranea/MeshCore/compare/v2.1.0-beta.2...smartui-2.1-experimental.3).
+[Разница с SmartUI V3](https://github.com/YaziAranea/MeshCore/compare/smartui-v3...smartui-2.1-experimental.3).
 
 ## Что умеет интерфейс
 
@@ -56,7 +56,7 @@
 - Экранная клавиатура в быстрых ответах.
 - Адресная отправка набранного сообщения в известный чат или companion-контакту; ретрансляторы из списка контактов исключены.
 - Окно непрочитанных показывает только личные сообщения, сгруппированные по отправителям.
-- Одна общая мелодия важных уведомлений; серия ограничена двумя проигрываниями.
+- Одна общая мелодия важных уведомлений; на T096/T114/ProMicro серия ограничена двумя проигрываниями, повтор непрочитанного — через две минуты от начала предыдущей серии.
 - Ночной запрос тишины в 23:30 с отключением звука до 07:30.
 - Выбор шрифта и темы отдельными списками.
 - Аппаратный GPS на T096/T114/V4.3 с состояниями `GPS OFF` (выключен), `GPS ...` (поиск), `GPS FIX` (позиция получена); на ProMicro и Wireless Paper GPS скрыт.
@@ -86,7 +86,7 @@
 
 ## Быстрый старт
 
-Для проверки нового UI используйте [Release SmartUI V3 — ЭКСПЕРИМЕНТ](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3). Файлы доступны на обычной странице Release. Для возврата к предыдущему интерфейсу сохранена [v2.1.0-beta.2](https://github.com/YaziAranea/MeshCore/releases/tag/v2.1.0-beta.2); она остаётся Latest.
+Используйте [Release SmartUI V4 — ЭКСПЕРИМЕНТ](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v4), отмеченный Latest. Файлы доступны на обычной странице Release. Для отката сохранён [SmartUI V3](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v3). На физических платах новая версия ещё требует проверки.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Скачайте контрольные суммы из того же выпуска: `SHA256SUMS.txt` для трёх UF2 и `SHA256SUMS-ESP32.txt` для всех шести BIN. В общем ZIP находятся те же файлы и `RELEASE-MANIFEST.json`.
@@ -141,11 +141,11 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Изменения и границы проверки `SmartUI V3` описаны в [примечаниях к эксперименту](RELEASE_NOTES_SmartUI_V3_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
+Изменения и границы проверки `SmartUI V4` описаны в [примечаниях к эксперименту](RELEASE_NOTES_SmartUI_V4_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты эксперимента.
 
 Основной CI собирает все шесть релизных конфигураций из одного commit: девять прошивок, общий ZIP и 14 assets. V3 FS2 и подготовленная SPIFFS проверяются в этом же pipeline. Старый `Heltec_v3_companion_radio_ble` остаётся compile-only представителем общего драйвера, а не V3-файлом SmartUI. Xiao S3 WIO и Heltec T1 не добавляются в Release.
 
-Heltec T1 остаётся нерелизной контрольной платой. Её USB-вариант в CI проверяет общий UI/display-код; обе companion-конфигурации T1 используют `-Os` и помещаются в штатную flash-разметку с ExtraFS. Это не добавляет T1 в список поддерживаемых файлов Release. RAK4631 также не является релизной или обязательной compatibility-целью beta. Все пять публикуемых конфигураций собираются отдельно; [подробности](docs/BUILD_RU.md#целевые-сборки).
+Heltec T1 остаётся нерелизной контрольной платой. Её USB-вариант в CI проверяет общий UI/display-код; обе companion-конфигурации T1 используют `-Os` и помещаются в штатную flash-разметку с ExtraFS. Это не добавляет T1 в список поддерживаемых файлов Release. RAK4631 также не является релизной или обязательной compatibility-целью. Все шесть публикуемых конфигураций собираются отдельно; [подробности](docs/BUILD_RU.md#целевые-сборки).
 
 T096 симулируется с реальными bitmap-метриками, T114 — через масштабирование 128×64 → 240×135, OLED — по встроенным glyph-таблицам, Wireless Paper — в физической геометрии 250×122. Симуляция не заменяет проверку на устройстве, включая реальный порог отключения аккумулятора.
 
@@ -160,7 +160,8 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
-- [Примечания к SmartUI V3](RELEASE_NOTES_SmartUI_V3_RU.md)
+- [Примечания к SmartUI V4](RELEASE_NOTES_SmartUI_V4_RU.md)
+- [Прежний выпуск SmartUI V3](RELEASE_NOTES_SmartUI_V3_RU.md)
 - [Исторические примечания к experimental.2](RELEASE_NOTES_v2.1.0-experimental.2_RU.md)
 - [Историческое дополнение Heltec V3 OLED](V3_ADDENDUM_v2.1.0-experimental.1_RU.md)
 - [Примечания к v2.1.0-beta.2](RELEASE_NOTES_v2.1.0-beta.2_RU.md)

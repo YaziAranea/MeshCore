@@ -192,7 +192,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef SMARTUI_RELEASE_LABEL
-  #define SMARTUI_RELEASE_LABEL "V3"
+  #define SMARTUI_RELEASE_LABEL "V4"
 #endif
 
 #ifndef UI_RECENT_PAGE
@@ -807,6 +807,19 @@ static int getDefaultNotifyGpioPin() {
   }
   return notify_gpio_pins[0];
 }
+#ifdef PIN_MSG_TONE
+static int getDefaultNotifyTonePin() {
+  // Repair an invalid tone output to the sound role, not the alert LED role.
+#ifdef DEFAULT_NOTIFY_TONE_PIN
+  if (isNotifyGpioPinAllowed(DEFAULT_NOTIFY_TONE_PIN) && !isNotifyGpioPinBlockedByBuild(DEFAULT_NOTIFY_TONE_PIN)) return DEFAULT_NOTIFY_TONE_PIN;
+#endif
+  if (isNotifyGpioPinAllowed(PIN_MSG_TONE) && !isNotifyGpioPinBlockedByBuild(PIN_MSG_TONE)) return PIN_MSG_TONE;
+#ifdef PIN_BUZZER
+  if (isNotifyGpioPinAllowed(PIN_BUZZER) && !isNotifyGpioPinBlockedByBuild(PIN_BUZZER)) return PIN_BUZZER;
+#endif
+  return getDefaultNotifyGpioPin();
+}
+#endif
 #else
 static bool isNotifyGpioPinBlockedByBuild(int) {
   return false;
@@ -11502,7 +11515,7 @@ int UITask::getMsgTonePin() const {
   if (isNotifyToneBridgeEnabled()) pin = DEFAULT_NOTIFY_TONE_PIN;
 #endif
 #if UI_NOTIFY_GPIO_SELECT
-  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyGpioPin();
+  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyTonePin();
 #endif
   return pin;
 }
@@ -11513,7 +11526,7 @@ void UITask::configureMsgTonePin(int pin) {
   if (isNotifyToneBridgeEnabled()) pin = DEFAULT_NOTIFY_TONE_PIN;
 #endif
 #if UI_NOTIFY_GPIO_SELECT
-  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyGpioPin();
+  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyTonePin();
 #else
   pin = PIN_MSG_TONE;
 #endif
@@ -11958,9 +11971,9 @@ void UITask::beginImportantNotify(uint8_t flags, bool suppress_tone_repeats) {
   flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
   if (flags == UI_MSG_FLAG_NONE || areNotificationsMuted() || getImportantNotifyMode() == NOTIFY_MODE_SILENT) return;
 
-  // One active notification owns exactly one tone series.  BLE watchers and
-  // duplicate delivery callbacks may report the same unread event again while
-  // that series is playing; merge their flags without rearming the melody.
+  // One active notification owns its reminder schedule. BLE watchers and
+  // duplicate delivery callbacks must not restart a melody or postpone the
+  // next reminder; only importantNotifyHandler starts subsequent series.
   if (_important_notify_active) {
     _important_msg_flags |= flags;
     if (suppress_tone_repeats) {
@@ -12108,9 +12121,11 @@ void UITask::importantNotifyHandler() {
 
 #if defined(PIN_MSG_ALERT) && defined(PIN_MSG_TONE)
   bool tone_uses_led_pin = (mode & NOTIFY_MODE_TONE) && getMsgTonePin() == getMsgAlertPin();
-  bool defer_gpio_while_tone = false;
+  // A shared output belongs to the entire tone series, including silent gaps.
+  // GPIO writes would replace PWM or turn a pause into a solid LED/buzzer pulse.
+  bool defer_gpio_while_tone = tone_uses_led_pin && _msg_tone_active;
 #if !UI_IMPORTANT_NOTIFY_GPIO_DURING_TONE
-  defer_gpio_while_tone = (mode & NOTIFY_MODE_TONE) && !tone_uses_led_pin && _msg_tone_active;
+  defer_gpio_while_tone = defer_gpio_while_tone || ((mode & NOTIFY_MODE_TONE) && _msg_tone_active);
 #endif
   if (!allow_visual && getMsgTonePin() != getMsgAlertPin()) {
     digitalWrite(getMsgAlertPin(), PIN_MSG_ALERT_INACTIVE);
@@ -12140,43 +12155,26 @@ void UITask::importantNotifyHandler() {
   bool allow_first_tone = !_important_notify_tone_started;
   bool allow_tone_repeat = !UI_IMPORTANT_NOTIFY_TONE_SERIES_ONCE &&
                            !_important_notify_tone_repeat_suppressed && !hasConnection();
-#if defined(PIN_MSG_ALERT) && defined(PIN_MSG_TONE)
-  if ((mode & NOTIFY_MODE_TONE) && !tone_uses_led_pin && (allow_first_tone || allow_tone_repeat)) {
-    if (allow_first_tone && !_msg_tone_active) {
+  if (!(mode & NOTIFY_MODE_TONE) || !(allow_first_tone || allow_tone_repeat)) {
+    _important_notify_tone_next = 0;
+  } else if (!_msg_tone_active) {
+    bool reminder_due = allow_first_tone ||
+      (_important_notify_tone_next != 0 &&
+       smartui::deadlineReached((uint32_t)now, (uint32_t)_important_notify_tone_next));
+    if (reminder_due) {
       startMsgTone();
       _important_notify_tone_started = true;
-      _important_notify_tone_next = allow_tone_repeat ? now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS) : 0;
-    } else if (allow_tone_repeat && !_msg_tone_active) {
-      if (_important_notify_tone_next == 0) {
-        _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      } else if (smartui::deadlineReached((uint32_t)now,
-                                          (uint32_t)_important_notify_tone_next)) {
-        startMsgTone();
-        _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      }
+      _important_notify_tone_next = 0;
     }
-  } else if (!allow_tone_repeat) {
-    _important_notify_tone_next = 0;
-  }
-#else
-  if ((mode & NOTIFY_MODE_TONE) && (allow_first_tone || allow_tone_repeat)) {
-    if (allow_first_tone && !_msg_tone_active) {
-      startMsgTone();
-      _important_notify_tone_started = true;
-      _important_notify_tone_next = allow_tone_repeat ? now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS) : 0;
-    } else if (allow_tone_repeat && !_msg_tone_active) {
-      if (_important_notify_tone_next == 0) {
-        _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      } else if (smartui::deadlineReached((uint32_t)now,
-                                          (uint32_t)_important_notify_tone_next)) {
-        startMsgTone();
-        _important_notify_tone_next = now + nextImportantNotifyDelay(_important_notify_tone_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
-      }
+    if (allow_tone_repeat && _important_notify_tone_next == 0) {
+      // A series already contains UI_IMPORTANT_NOTIFY_TONE_PLAYS melodies.
+      // Do not apply the separate LED/vibration burst gap to sound: that
+      // would add another complete series a few seconds after the first.
+      _important_notify_tone_next = (uint32_t)now + (uint32_t)UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS;
+      // Zero means "not scheduled"; retain the reminder across millis wrap.
+      if (_important_notify_tone_next == 0) _important_notify_tone_next = 1;
     }
-  } else if (!allow_tone_repeat) {
-    _important_notify_tone_next = 0;
   }
-#endif
 #endif
   if ((mode & NOTIFY_MODE_VIBE) &&
       smartui::deadlineDueOrImmediate((uint32_t)now,
