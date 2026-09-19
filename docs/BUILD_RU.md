@@ -20,7 +20,7 @@ Set-Location MeshCore
 git switch smartui-2.1-experimental.3
 ```
 
-Текущий SmartUI V4 для шести плат находится в `smartui-2.1-experimental.3`; номер ветки оставлен прежним. Для исходников конкретного выпуска используйте `git switch --detach smartui-v4`, для предыдущего UI — тег `smartui-v3`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Текущий SmartUI V5 для шести плат находится в `smartui-2.1-experimental.3`; номер ветки оставлен прежним. Для исходников конкретного выпуска используйте `git switch --detach smartui-v5`, для предыдущего выпуска — тег `smartui-v4`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -78,12 +78,12 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. После копирования под публичными именами выполняйте `python tools/validate_release_esp32.py firmware`, а для V3 с подготовленной SPIFFS — дополнительно `python tools/validate_release_v3.py firmware`.
 
-Публичные stems `SmartUI V4`:
+Публичные stems `SmartUI V5`:
 
 ```text
-Heltec_V3_UI_V4
-Heltec_V4.3_UI_V4
-Paper_UI_V4
+Heltec_V3_UI_V5
+Heltec_V4.3_UI_V5
+Paper_UI_V5
 ```
 
 К каждому stem добавляются `-merged.bin` и `-update.bin`.
@@ -97,13 +97,13 @@ V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/�
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_UI_V4.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_UI_V5.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_UI_V4.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_UI_V5.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_UI_V4.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_UI_V5.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -113,11 +113,11 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_UI_V4.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_UI_V5.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_UI_V4.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_UI_V5.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_UI_V4.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_UI_V5.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 ```
 
@@ -133,11 +133,11 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Упаковщик SmartUI V4 принимает девять прошивок шести плат из одного
+Упаковщик SmartUI V5 принимает девять прошивок шести плат из одного
 чистого commit. Укажите новую, ещё не существующую папку:
 
 ```powershell
-python tools/package_smartui_release.py ../SmartUI_V4_RELEASE
+python tools/package_smartui_release.py ../SmartUI_V5_RELEASE
 ```
 
 Скрипт берёт файлы из `.pio/build`, проверяет UF2, три пары BIN и подготовленную
@@ -204,6 +204,8 @@ SmartUI использует особые модели дисплеев. Для 
 python tools/audit_smartui_ps17_contract.py
 python tools/test_important_notify_v4.py
 python tools/test_notify_pins_v4.py
+python tools/test_board_led_control_v5.py
+python tools/test_board_led_ui_v5.py
 python tools/test_splash_brand.py
 python tools/simulate_smartui_ps17_qa.py
 python tools/simulate_v4_3_oled_qa.py
@@ -242,7 +244,7 @@ python tools/generate_docs_assets.py
 
 ## Размеры текущего выпуска
 
-Размеры файлов SmartUI V4 берите из `RELEASE-MANIFEST.json` того же выпуска, расход RAM/flash — из финального отчёта линковщика соответствующего CI-run. Исторические размеры beta.2 сохранены в [её примечаниях](../RELEASE_NOTES_v2.1.0-beta.2_RU.md) и не являются измерением V4. Число изменённых байт исходников не равно изменению бинарника: код и выравнивание тоже меняются.
+Размеры файлов SmartUI V5 берите из `RELEASE-MANIFEST.json` того же выпуска, расход RAM/flash — из финального отчёта линковщика соответствующего CI-run. Исторические размеры beta.2 сохранены в [её примечаниях](../RELEASE_NOTES_v2.1.0-beta.2_RU.md) и не являются измерением V5. Число изменённых байт исходников не равно изменению бинарника: код и выравнивание тоже меняются.
 
 ## Стабильный baseline: размеры v2.0.0-rc1
 

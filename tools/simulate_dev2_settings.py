@@ -485,7 +485,9 @@ def main(no_docs=False):
                     ("Избранное: пример доступных функций",auxiliary(profile,"Избранное 1",choices,1,"Выбрать",active=2)),
                     ("ADC: сначала отмена",auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],0,"Отмена")),
                     ("Управление",auxiliary(profile,"Управление",help_labels(),0,"Назад")),
-                    ("Управление: CLI",auxiliary(profile,"Управление",help_labels(),6,"Назад"))]
+                    ("Управление: CLI",auxiliary(profile,"Управление",help_labels(),6,"Назад")),
+                    ("Управление: LED",auxiliary(profile,"Управление",help_labels(),7,"Назад")),
+                    ("Управление: LED выключен",auxiliary(profile,"Управление",help_labels(),8,"Назад"))]
         docs_sheet(aux_scenes, OUT / f"experimental-{board.lower().replace(' ','-')}-settings.png")
         if not no_docs:
             docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")

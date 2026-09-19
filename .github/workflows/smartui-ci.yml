@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish SmartUI V4 after all six-board checks pass
+        description: Publish SmartUI V5 after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -37,15 +37,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_V4.uf2
+            uf2_name: T096_UI_V5.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_V4.uf2
+            uf2_name: T114_UI_V5.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_V4.uf2
+            uf2_name: ProMicro_RA62_UI_V5.uf2
 
     steps:
       - name: Check out source
@@ -142,15 +142,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_V4
+            stem: Heltec_V3_UI_V5
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_V4
+            stem: Heltec_V4.3_UI_V5
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_V4
+            stem: Paper_UI_V5
 
     steps:
       - name: Check out source
@@ -453,6 +453,12 @@ jobs:
       - name: Check buzzer pin fallback and LED PWM collision handling
         run: python tools/test_notify_pins_v4.py
 
+      - name: Check board LED hardware gating during radio TX
+        run: python tools/test_board_led_control_v5.py
+
+      - name: Check board LED master setting and notification routing
+        run: python tools/test_board_led_ui_v5.py
+
       - name: Check icon-only mute state in production C++
         run: python tools/test_quiet_status.py
 
@@ -501,12 +507,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-experimental-release:
-    name: Publish SmartUI V4 (experimental UI)
+    name: Publish SmartUI V5 (experimental UI)
     if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.3'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-experimental-release-smartui-v4
+      group: publish-experimental-release-smartui-v5
       cancel-in-progress: false
     permissions:
       contents: write
@@ -528,9 +534,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tag="smartui-v4"
-          title="SmartUI V4"
-          notes="release/RELEASE_NOTES_SmartUI_V4_RU.md"
+          tag="smartui-v5"
+          title="SmartUI V5"
+          notes="release/RELEASE_NOTES_SmartUI_V5_RU.md"
           # Create the immutable tag only after all builds/tests passed. A
           # failed pre-release build therefore never leaves a broken tag.
           tag_json="$(mktemp)"

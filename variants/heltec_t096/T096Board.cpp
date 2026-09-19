@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <helpers/AdcCalibration.h>
+#include <helpers/BoardLedControl.h>
 
 #ifdef NRF52_POWER_MANAGEMENT
 // Static configuration for power management
@@ -73,7 +74,7 @@ void T096Board::begin() {
 }
 
 void T096Board::onBeforeTransmit() {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    digitalWrite(P_LORA_TX_LED, meshcoreBoardLedsEnabled() ? HIGH : LOW);
     loRaFEMControl.setTxModeEnable();
 }
 

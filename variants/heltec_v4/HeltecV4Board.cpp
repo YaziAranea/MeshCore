@@ -1,4 +1,5 @@
 #include "HeltecV4Board.h"
+#include <helpers/BoardLedControl.h>
 
 void HeltecV4Board::begin() {
     ESP32Board::begin();
@@ -23,7 +24,7 @@ void HeltecV4Board::begin() {
   }
 
   void HeltecV4Board::onBeforeTransmit(void) {
-    digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED on
+    digitalWrite(P_LORA_TX_LED, meshcoreBoardLedsEnabled() ? HIGH : LOW);
     loRaFEMControl.setTxModeEnable();
   }
 

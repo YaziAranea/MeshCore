@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <helpers/NRF52Board.h>
 #include <helpers/AdcCalibration.h>
+#include <helpers/BoardLedControl.h>
 
 // built-ins
 #define  PIN_VBAT_READ    4
@@ -24,7 +25,7 @@ public:
 
 #if defined(P_LORA_TX_LED)
   void onBeforeTransmit() override {
-    digitalWrite(P_LORA_TX_LED, LOW);   // turn TX LED on
+    digitalWrite(P_LORA_TX_LED, meshcoreBoardLedsEnabled() ? LOW : HIGH);
   }
   void onAfterTransmit() override {
     digitalWrite(P_LORA_TX_LED, HIGH);   // turn TX LED off

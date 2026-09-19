@@ -129,8 +129,12 @@ void SerialBLEInterface::begin(const char* prefix, char* name, uint32_t pin_code
   char charpin[20];
   snprintf(charpin, sizeof(charpin), "%lu", (unsigned long)pin_code);
   
-  // If we want to control BLE LED ourselves, uncomment this:
-  // Bluefruit.autoConnLed(false);
+#if defined(PROMICRO) && defined(SMARTUI_RELEASE_LABEL)
+  // SmartUI owns the ProMicro builtin LED. Disable Bluefruit's independent
+  // advertising timer before it is created; notification/UI policy may still
+  // use PIN_LED explicitly.
+  Bluefruit.autoConnLed(false);
+#endif
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
   Bluefruit.begin();
  

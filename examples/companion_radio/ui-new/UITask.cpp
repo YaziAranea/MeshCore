@@ -192,7 +192,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef SMARTUI_RELEASE_LABEL
-  #define SMARTUI_RELEASE_LABEL "V4"
+  #define SMARTUI_RELEASE_LABEL "V5"
 #endif
 
 #ifndef UI_RECENT_PAGE
@@ -411,9 +411,6 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
   #define UI_OFFLINE_IMPORTANT_NOTIFY_BURST_GAP_MS 3000UL
 #endif
 
-#ifndef UI_NOTIFY_LED_OVERRIDES_BOARD_LED_SETTING
-  #define UI_NOTIFY_LED_OVERRIDES_BOARD_LED_SETTING 0
-#endif
 
 #ifndef UI_NOTIFY_TONE_PLAYS
   #define UI_NOTIFY_TONE_PLAYS 1
@@ -3852,6 +3849,7 @@ class HomeScreen : public UIScreen {
   uint8_t _compact_undo_page = SETTINGS;
   smartui::ConfirmedChoice _favorite_picker;
   uint8_t _favorite_picker_slot = 0;
+  static constexpr uint8_t CONTROLS_HELP_LINE_COUNT = 10;
   uint8_t _controls_help_page = 0;
   uint8_t _hardware_test_step;
 #endif
@@ -5919,8 +5917,8 @@ class HomeScreen : public UIScreen {
         return true;
       }
       if (_page == HomePage::CONTROLS_HELP) {
-        if (c == KEY_LEFT || c == KEY_PREV) _controls_help_page = (_controls_help_page + 7) % 8;
-        else if (c == KEY_NEXT || c == KEY_RIGHT) _controls_help_page = (_controls_help_page + 1) % 8;
+        if (c == KEY_LEFT || c == KEY_PREV) _controls_help_page = (_controls_help_page + CONTROLS_HELP_LINE_COUNT - 1) % CONTROLS_HELP_LINE_COUNT;
+        else if (c == KEY_NEXT || c == KEY_RIGHT) _controls_help_page = (_controls_help_page + 1) % CONTROLS_HELP_LINE_COUNT;
         else if (c == KEY_ENTER) _page = HomePage::SETTINGS;
         return true;
       }
@@ -6144,7 +6142,7 @@ class HomeScreen : public UIScreen {
       snprintf(favorite_title, sizeof(favorite_title), "Избранное %u", _favorite_picker_slot + 1);
       title = favorite_title;
     } else if (_page == HomePage::CONTROLS_HELP) {
-      total = 8;
+      total = CONTROLS_HELP_LINE_COUNT;
       cursor = _controls_help_page;
       title = "Управление";
       hint = "Назад";
@@ -6176,7 +6174,9 @@ class HomeScreen : public UIScreen {
         active = page == resolvedFavoritePageAt(_favorite_picker_slot);
       } else if (_page == HomePage::CONTROLS_HELP) {
         static const char* lines[] = { "1x: далее", "2x: назад", "Удерж: выбрать", "3x: часы",
-          "Часы: удерж=тихо", "ADC правка:1x+2x-", "Старт8с:удерж=CLI", "Назад" };
+          "Часы: удерж=тихо", "ADC правка:1x+2x-", "Старт8с:удерж=CLI",
+          "LED: радио и ЛС", "ВЫКЛ: LED погаснут", "Назад" };
+        static_assert(sizeof(lines) / sizeof(lines[0]) == CONTROLS_HELP_LINE_COUNT, "Help navigation must match its rows");
         label = lines[index];
       }
 #endif
@@ -8823,7 +8823,7 @@ public:
 #if UI_V4_3_OLED_PROFILE
       char status_line[48];
       snprintf(status_line, sizeof(status_line), "Статус: %s", _task->areBoardLedsEnabled() ? "ВКЛ" : "ВЫКЛ");
-      drawOledCompactMenuPage(display, "LED платы", status_line, "штатные индик.", PRESS_LABEL);
+      drawOledCompactMenuPage(display, "LED платы", status_line, "Радио и ЛС", PRESS_LABEL);
 #else
       display.setColor(DisplayDriver::GREEN);
       display.setTextSize(1);
@@ -8832,7 +8832,7 @@ public:
       snprintf(tmp, sizeof(tmp), "Статус: %s", _task->areBoardLedsEnabled() ? "ВКЛ" : "ВЫКЛ");
       display.print(tmp);
       display.setCursor(0, 42);
-      display.print("штатные индик.");
+      display.print("Радио и ЛС");
       display.setCursor(0, 53);
       display.print(PRESS_LABEL);
 #endif
@@ -12188,10 +12188,8 @@ void UITask::importantNotifyHandler() {
 void UITask::triggerMsgAlert() {
   int alert_pin = getMsgAlertPin();
   if (areNotificationsMuted() ||
-      isNotifyGpioBlocked(alert_pin)
-#if !UI_NOTIFY_LED_OVERRIDES_BOARD_LED_SETTING
-      || (!areBoardLedsEnabled() && isBoardLedPin(alert_pin))
-#endif
+      isNotifyGpioBlocked(alert_pin) ||
+      (!areBoardLedsEnabled() && isBoardLedPin(alert_pin))
   ) {
     setBoardLedPinOff(alert_pin);
     _msg_alert_until = 0;
@@ -12204,10 +12202,8 @@ void UITask::triggerMsgAlert() {
 void UITask::messageAlertHandler() {
   int alert_pin = getMsgAlertPin();
   if (areNotificationsMuted() ||
-      isNotifyGpioBlocked(alert_pin)
-#if !UI_NOTIFY_LED_OVERRIDES_BOARD_LED_SETTING
-      || (!areBoardLedsEnabled() && isBoardLedPin(alert_pin))
-#endif
+      isNotifyGpioBlocked(alert_pin) ||
+      (!areBoardLedsEnabled() && isBoardLedPin(alert_pin))
   ) {
     setBoardLedPinOff(alert_pin);
     _msg_alert_until = 0;

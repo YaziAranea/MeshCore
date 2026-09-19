@@ -4,6 +4,7 @@ Bounded navigation/confirmation tests only: no display or hardware simulation.
 """
 from pathlib import Path
 import shutil
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +53,8 @@ struct HomeScreen {
  uint8_t compactSettingsPageAt(uint8_t,uint8_t) { return SETTINGS; }
  void activateCompactSetting(uint8_t) { ++activations; }
 '''
-    code = '#include "' + helper + '"\n' + code + body + "\n};\n"
+    help_count = re.search(r"static constexpr uint8_t CONTROLS_HELP_LINE_COUNT = \d+;", source)[0]
+    code = '#include "' + helper + '"\n' + code + help_count + "\n" + body + "\n};\n"
     code += r'''
 static int checks=0;
 #define CHECK(expr) do { ++checks; if(!(expr)) { fprintf(stderr,"failed line %d: %s\n",__LINE__,#expr); exit(1); } } while(0)
@@ -88,7 +90,7 @@ int main() {
  h._favorite_picker.add(8); h._favorite_picker.add(10); h._favorite_picker.begin(8);
  h.handleCompactSettingsInput(KEY_NEXT); the_mesh.ok=false; h.handleCompactSettingsInput(KEY_ENTER);
  CHECK(h.prefs.favorite_setting_1==8 && h.undos==3 && the_mesh.saves==4);
- h._page=HomeScreen::CONTROLS_HELP; h.handleCompactSettingsInput(KEY_PREV); CHECK(h._controls_help_page==7);
+ h._page=HomeScreen::CONTROLS_HELP; h.handleCompactSettingsInput(KEY_PREV); CHECK(h._controls_help_page==HomeScreen::CONTROLS_HELP_LINE_COUNT-1);
  h.handleCompactSettingsInput(KEY_NEXT); CHECK(h._controls_help_page==0);
  h.handleCompactSettingsInput(KEY_ENTER); CHECK(h._page==HomeScreen::SETTINGS);
  h._compact_settings_depth=0; h._compact_settings_cursor=7;
