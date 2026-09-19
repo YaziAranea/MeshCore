@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: false
+      expected_v5_commit:
+        description: Explicit V5 hotfix only; exact current V5 commit to advance after validation
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -83,6 +88,11 @@ jobs:
           mkdir -p firmware
           pio run -e "${{ matrix.environment }}" -t create_uf2
           test -s "${UF2_FILE_PATH}"
+
+      - name: Verify flash-cache LED interception in the linked firmware
+        run: |
+          python tools/verify_nrf52_led_gate_elf.py ".pio/build/${{ matrix.environment }}/firmware.elf"
+          python tools/test_nrf52_flash_led_gate.py
 
       - name: Upload board UF2
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -518,6 +528,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ github.token }}
+      EXPECTED_V5_COMMIT: ${{ inputs.expected_v5_commit }}
     steps:
       - name: Check out the exact validated source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -537,8 +548,9 @@ jobs:
           tag="smartui-v5"
           title="SmartUI V5"
           notes="release/RELEASE_NOTES_SmartUI_V5_RU.md"
-          # Create the immutable tag only after all builds/tests passed. A
-          # failed pre-release build therefore never leaves a broken tag.
+          update_tag_from=""
+          # Tags stay immutable unless this dispatch explicitly names the
+          # current V5 commit for a same-page hotfix. Never force-update a ref.
           tag_json="$(mktemp)"
           tag_status="$(curl --silent --show-error --output "$tag_json" --write-out '%{http_code}' \
             --header "Authorization: Bearer ${GH_TOKEN}" \
@@ -547,7 +559,14 @@ jobs:
           case "$tag_status" in
             200)
               tag_sha="$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["object"]["sha"])' "$tag_json")"
-              test "$tag_sha" = "$GITHUB_SHA" || { echo 'Refusing to move an existing release tag'; exit 1; }
+              if [[ "$tag_sha" != "$GITHUB_SHA" ]]; then
+                [[ "$EXPECTED_V5_COMMIT" =~ ^[0-9a-f]{40}$ ]] &&
+                  [[ "$tag_sha" = "$EXPECTED_V5_COMMIT" ]] ||
+                  { echo 'Refusing to move an existing release tag without its explicit expected commit'; exit 1; }
+                comparison="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${tag_sha}...${GITHUB_SHA}" --jq '.status')"
+                test "$comparison" = 'ahead' || { echo 'V5 hotfix must descend from the published commit'; exit 1; }
+                update_tag_from="$tag_sha"
+              fi
               ;;
             404)
               gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
@@ -602,7 +621,13 @@ jobs:
           esac
 
           if [[ -n "$release_id" ]]; then
-            # A rerun resumes an existing public page or unfinished draft.
+            # Hide a same-page hotfix while replacing assets. An interrupted
+            # upload remains a recoverable draft, never a mixed public bundle.
+            if [[ -n "$update_tag_from" ]]; then
+              gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+                -F draft=true > /dev/null
+            fi
+            # A rerun also resumes an unfinished draft via the listing fallback.
             gh release upload "$tag" release/* --clobber \
               --repo "$GITHUB_REPOSITORY"
           else
@@ -643,6 +668,17 @@ jobs:
                   expected = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
                   assert asset["digest"] == expected, f"Asset digest mismatch: {name}"
           PY
+
+          # Advance the tag only after the hidden bundle passes every check.
+          # Recheck its old SHA so a concurrent external edit is not overwritten.
+          if [[ -n "$update_tag_from" ]]; then
+            current_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '.object.sha')"
+            test "$current_tag_sha" = "$update_tag_from" || { echo 'Release tag changed during upload; leaving draft'; exit 1; }
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${tag}" \
+              -f "sha=${GITHUB_SHA}" -F force=false > /dev/null
+          fi
+          final_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '.object.sha')"
+          test "$final_tag_sha" = "$GITHUB_SHA" || { echo 'Release source does not match validated firmware'; exit 1; }
 
           gh release edit "$tag" \
             --title "$title" \

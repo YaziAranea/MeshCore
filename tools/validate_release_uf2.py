@@ -17,9 +17,9 @@ APP_START = 0x26000
 APP_END = 0xD4000  # Preserve the extra-FS region shared by these profiles.
 
 EXPECTED = {
-    "T096_UI_V5.uf2": b"T096 SmartUI-V5",
-    "T114_UI_V5.uf2": b"T114 SmartUI-V5",
-    "ProMicro_RA62_UI_V5.uf2": b"ProMicro SmartUI-V5",
+    "T096_UI_V5.uf2": b"T096 SmartUI-V5 LED2",
+    "T114_UI_V5.uf2": b"T114 SmartUI-V5 LED2",
+    "ProMicro_RA62_UI_V5.uf2": b"ProMicro SmartUI-V5 LED2",
 }
 
 
