@@ -96,6 +96,9 @@ MultiSerialInterface interface_manager;
 #ifdef DISPLAY_CLASS
   #include "UITask.h"
   UITask ui_task(&board, &interface_manager);
+  #if defined(HELTEC_WIRELESS_PAPER)
+    static bool paper_display_attached = false;
+  #endif
 #endif
 
 StdRNG fast_rng;
@@ -108,12 +111,44 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 
 /* END GLOBAL OBJECTS */
 
-#if defined(ESP32) && defined(DISPLAY_CLASS) && UI_V3_STORAGE_RECOVERY
+static bool radio_initialized = false;
+
+#include "ui-new/RecoveryBatteryGuard.h"
+
+static void serviceFatalBatterySafety() {
+#if defined(AUTO_SHUTDOWN_MILLIVOLTS) && AUTO_SHUTDOWN_MILLIVOLTS > 0
+  static smartui::RecoveryBatteryGuard guard;
+  const uint32_t now = millis();
+  if (guard.sampleDue(now) && guard.update(now, board.getBattMilliVolts(),
+      board.isExternalPowered(), AUTO_SHUTDOWN_MILLIVOLTS)) {
+    // No preferences or usable filesystem are assumed here. Never attempt a
+    // lazy write/format while the battery is already below the safe threshold.
+    board.powerOff();
+  }
+#endif
+#ifdef HAS_EXTERNAL_WATCHDOG
+  external_watchdog.loop();
+#endif
+}
+
+#if defined(ESP32) && defined(DISPLAY_CLASS) && (UI_V3_STORAGE_RECOVERY || UI_SAFE_STORAGE_RECOVERY)
   #include "ui-new/V3StorageRecovery.h"
 #endif
 
 void halt() {
-  while (1) ;
+  if (radio_initialized) radio_driver.powerOff();
+  const uint32_t started = millis();
+  bool display_off = false;
+  for (;;) {
+    serviceFatalBatterySafety();
+#ifdef DISPLAY_CLASS
+    if (!display_off && static_cast<uint32_t>(millis() - started) >= 30000) {
+      display.turnOff();
+      display_off = true;
+    }
+#endif
+    delay(20); // yield to RTOS/watchdog instead of spinning at full CPU load
+  }
 }
 
 #ifdef DISPLAY_CLASS
@@ -158,6 +193,7 @@ void setup() {
 #endif
 
   if (!radio_init()) { halt(); }
+  radio_initialized = true;
 
   fast_rng.begin(radio_driver.getRngSeed());
 
@@ -210,9 +246,9 @@ void setup() {
   }
 #elif defined(ESP32)
   // Never turn a transient mount failure into an implicit factory reset.
-  // V3 may initialize a hash-verified factory-empty image; other data requires
-  // an explicit recovery confirmation. Other board paths remain unchanged.
-#if UI_V3_STORAGE_RECOVERY && defined(DISPLAY_CLASS)
+  // Release boards may initialize only a hash-verified factory-empty image;
+  // other data requires explicit recovery confirmation, never a mount-failure wipe.
+#if (UI_V3_STORAGE_RECOVERY || UI_SAFE_STORAGE_RECOVERY) && defined(DISPLAY_CLASS)
   storage_ready = smartui::v3MountStorage(disp);
 #else
   storage_ready = SPIFFS.begin(false);
@@ -246,7 +282,7 @@ void setup() {
 #ifdef DISPLAY_CLASS
     showFatalStorageError(disp, "IDENTITY ERROR", "RESTORE / RESET");
 #endif
-#if defined(ESP32) && defined(DISPLAY_CLASS) && UI_V3_STORAGE_RECOVERY
+#if defined(ESP32) && defined(DISPLAY_CLASS) && (UI_V3_STORAGE_RECOVERY || UI_SAFE_STORAGE_RECOVERY)
     smartui::v3StorageRecoveryMenu(disp, true);
 #endif
     halt();
@@ -307,6 +343,9 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+  #if defined(HELTEC_WIRELESS_PAPER)
+    paper_display_attached = (disp != nullptr);
+  #endif
 #endif
 
   board.onBootComplete();
@@ -345,6 +384,13 @@ void setup() {
 }
 
 void loop() {
+#if defined(HELTEC_WIRELESS_PAPER) && defined(DISPLAY_CLASS)
+  // A bounded boot-time display failure must not make the node permanently
+  // headless. E213 owns the exponential backoff and bounds each retry.
+  if (!paper_display_attached && display.retryAfterMillis() == 0 && display.begin()) {
+    paper_display_attached = ui_task.attachDisplay(&display);
+  }
+#endif
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();

@@ -87,6 +87,7 @@ def check(label: str, condition: bool, detail: str) -> None:
 uitask = read("examples/companion_radio/ui-new/UITask.cpp")
 uitask_h = read("examples/companion_radio/ui-new/UITask.h")
 uitask_live = without_if_zero(uitask)
+abstract_ui = read("examples/companion_radio/AbstractUITask.h")
 mymesh = read("examples/companion_radio/MyMesh.cpp")
 mymesh_h = read("examples/companion_radio/MyMesh.h")
 meshcore_h = read("src/MeshCore.h")
@@ -279,8 +280,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI-V5" in block,
-        "every public profile must use DM-only unread and carry the SmartUI-V5 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.04" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.04 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -317,9 +318,11 @@ check(
 )
 
 check(
-    "ProMicro explicitly removes inherited GPS hardware support",
-    "-UENV_INCLUDE_GPS" in effective["ProMicro"],
-    "the RA62 target has no onboard GPS and must not inherit the generic ProMicro GPS flag",
+    "ProMicro explicitly opts into optional external UART GPS",
+    "SMARTUI_OPTIONAL_UART_GPS=1" in effective["ProMicro"]
+    and "-UENV_INCLUDE_GPS" not in effective["ProMicro"]
+    and "ENV_INCLUDE_GPS=1" in parse_ini_sections(config_sources["ProMicro"])["Promicro"],
+    "the RA62 target must use the nonblocking optional receiver, off by default",
 )
 
 gpsless_clock_guard = between(
@@ -404,6 +407,10 @@ for name, source in adc_boards.items():
     )
 
 adc_cancel = between(uitask, "void cancelAdcEdit()", "#endif")
+adc_adjust = between(uitask, "void adjustAdcMultiplier", "void cancelAdcEdit")
+adc_render = between(uitask, "} else if (_page == HomePage::ADC)", "#endif")
+adc_preview = between(uitask, "uint16_t UITask::getAdcPreviewMilliVolts", "bool UITask::setAdcMultiplier")
+adc_safety = between(uitask, "smartui::BatteryReading UITask::readSafetyBattery", "bool UITask::hasTrustedTime")
 adc_setter = between(uitask, "bool UITask::setAdcMultiplier", "void UITask::toggleBuzzer")
 adc_factory_reset = between(uitask, "bool restoreAdcDefault", "bool isBlePinPage")
 check(
@@ -420,14 +427,18 @@ check(
     )
     and all("normalizeAdcMultiplier" in source and "saturatingBatteryMilliVolts" in source
             for source in adc_boards.values())
-    and has_all(
-        adc_cancel,
-        (
-            "_task->setAdcMultiplier(_node_prefs->adc_multiplier, false)",
-            "_task->setAdcMultiplier(0.0f, false)",
-            "_adc_edit = false;",
-        ),
-    )
+    and has_all(adc_adjust, ("_adc_draft = clampAdcMultiplier",))
+    and "setAdcMultiplier" not in adc_adjust
+    and has_all(adc_cancel, ("_adc_edit = false;", "_adc_draft = 0.0f;"))
+    and "setAdcMultiplier" not in adc_cancel
+    and "_task->getAdcPreviewMilliVolts(_adc_draft)" in adc_render
+    and has_all(adc_preview, (
+        "smartui::adcPreviewMilliVolts(_board->getBattMilliVolts()",
+        "_board->getAdcMultiplier()",
+        "draft_multiplier",
+    ))
+    and adc_safety.count("_board->getBattMilliVolts()") == 3
+    and "getAdcPreviewMilliVolts" not in adc_safety
     and has_all(
         adc_setter,
         (
@@ -435,6 +446,7 @@ check(
             "if (!_board->setAdcMultiplier(multiplier))",
             "if (save)",
             "_node_prefs->adc_multiplier = multiplier;",
+            "_low_batt_strikes = 0;",
         ),
     )
     and has_all(
@@ -866,7 +878,7 @@ check(
 
 phone_command = between(mymesh, "} else if (cmd_frame[0] == CMD_SET_PHONE_GPS)",
                         "} else if (cmd_frame[0] == CMD_GET_DEVICE_TIME)")
-phone_source = between(mymesh, "void MyMesh::setGpsSource", "bool MyMesh::setPhoneGpsFix")
+phone_source = between(mymesh, "bool MyMesh::setGpsSource", "bool MyMesh::setPhoneGpsFix")
 phone_fix = between(mymesh, "bool MyMesh::setPhoneGpsFix", "bool MyMesh::getShareableLocation")
 phone_enabled = between(mymesh_h, "bool isPhoneGpsEnabled() const", "bool isPhoneGpsFresh() const")
 custom_vars = between(mymesh, "} else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS)",
@@ -875,7 +887,12 @@ phone_vars = between(custom_vars, "#if UI_PHONE_GPS == 1", "#endif")
 check(
     "Disabled Phone GPS is hardened at runtime and BLE boundary",
     has_all(phone_command, ("#if UI_PHONE_GPS == 1", "#else\n    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);"))
-    and "#else\n  source = GPS_SOURCE_HW;" in phone_source
+    and has_all(phone_source, (
+        "#else\n  source = GPS_SOURCE_HW;",
+        "if (_prefs.gps_source == source) return true;",
+        "if (save && !commitPrefsOrRollback(before))",
+        "return false;",
+    ))
     and "#if UI_PHONE_GPS != 1" in phone_fix and "return false;\n#else" in phone_fix
     and "#else\n    return false;" in phone_enabled
     and "_prefs.gps_source = GPS_SOURCE_HW;" in mymesh
@@ -1006,12 +1023,18 @@ notify_setter_blocks = [
 ]
 check(
     "Confirmed notification setters skip unchanged values and save only once",
-    all(block.count("the_mesh.savePrefs();") == 1
+    all(block.count("commitUiPrefs(before)") == 1
         and unchanged in block
-        and block.index(unchanged) < block.index("the_mesh.savePrefs();")
-        and "return;" in block[:block.index("the_mesh.savePrefs();")]
+        and block.index(unchanged) < block.index("const NodePrefs before")
+        and "return;" in block[:block.index("const NodePrefs before")]
+        and "the_mesh.savePrefs();" not in block
         for block, unchanged in notify_setter_blocks)
-    and "if (changed) the_mesh.savePrefs();" in between(
+    and has_all(between(
+        uitask, "void UITask::setCommonNotifyTone", "uint8_t UITask::getNotifyToneVolume"), (
+            "bool changed =",
+            "if (changed && !commitUiPrefs(before)) return;",
+        ))
+    and "the_mesh.savePrefs();" not in between(
         uitask, "void UITask::setCommonNotifyTone", "uint8_t UITask::getNotifyToneVolume"),
     "confirmation must not rewrite unchanged settings or duplicate the one durable preference write",
 )
@@ -1317,12 +1340,15 @@ check(
 )
 
 check(
-    "DM-only read/dequeue synchronization uses a no-double-delete debt",
+    "DM synchronization uses stable identity, generations and a no-double-delete debt",
     has_all(
         uitask,
         (
             "if (direct_preview) {",
-            "preview->addPreview(path_len, from_name, text, important_flags);",
+            "preview->addPreview(path_len, from_name, text, important_flags,",
+            "generation, sender_id, sender_id_len);",
+            "memcmp(a.sender_id, b.sender_id, a.sender_id_len) == 0",
+            "snprintf(out, out_len, \"%s #%02X%02X\", entry.sender,",
             "uint16_t direct_sync_debt = 0;",
             "if (locally_dismissed) addDirectSyncDebt(1);",
             "if (locally_dismissed && num_unread > 0) addDirectSyncDebt((uint16_t)num_unread);",
@@ -1330,9 +1356,24 @@ check(
             "if (!preview->consumeDirectSyncDebt()) preview->removeOldestPreview(false);",
             "_msgcount = preview->unreadPreviewCount();",
             "should_show_preview = should_show_preview && direct_preview;",
+            "void UITask::messageTransferState(uint32_t generation, uint8_t flags,",
+            "_ble_smart_notify_generation == generation",
+            "_important_notify_generation == generation",
+            "finishImportantNotify(false, false);",
         ),
-    ),
-    "local dismiss, clear and ring eviction must be acknowledged once by BLE without deleting the next visible DM",
+    )
+    and has_all(abstract_ui, (
+        "enum class UIMessageTransferState : uint8_t",
+        "virtual void messageTransferState(uint32_t generation, uint8_t flags,",
+    ))
+    and has_all(mymesh, (
+        "nextUiMessageGeneration()",
+        "offline_queue[offline_queue_len].ui_generation = ui_generation;",
+        "_ui->messageTransferState(\n                ui_generation, ui_flags,",
+        "UIMessageTransferState::queuedToCompanion",
+    ))
+    and has_all(mymesh_h, ("uint32_t ui_generation;", "uint8_t ui_flags;")),
+    "identity must survive duplicate names; only the exact transport-accepted generation may suppress its own reminder; local dismiss/clear/eviction still incurs one BLE debt",
 )
 
 night_handler = between(uitask, "void UITask::nightModeHandler", "void UITask::beginImportantNotify")
@@ -1441,7 +1482,7 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI-V5")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.04")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(

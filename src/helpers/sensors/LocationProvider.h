@@ -15,6 +15,10 @@ protected:
     unsigned long _last_valid_time_sync = 0;
 
 public:
+    // Optional receiver diagnostics. Existing onboard providers keep their API.
+    virtual bool supportsInputStatus() const { return false; }
+    virtual bool hasRecentInput() const { return false; }
+    virtual uint32_t getBaudRate() const { return 0; }
     virtual void syncTime() { _time_sync_needed = true; }
     virtual bool waitingTimeSync() { return _time_sync_needed; }
     virtual void stopTimeSync() { _time_sync_needed = false; }

@@ -766,6 +766,16 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
 #if ENV_INCLUDE_GPS
 void EnvironmentSensorManager::initBasicGPS() {
 
+#if defined(SMARTUI_OPTIONAL_UART_GPS) && SMARTUI_OPTIONAL_UART_GPS
+  // This is a user-connectable port, not an onboard receiver to probe at boot.
+  // Keep the setting available even with no module and keep UART/power disabled.
+  gps_detected = (_location != nullptr);
+  gps_active = false;
+  gps_wake = false;
+  if (_location) _location->stop();
+  return;
+#endif
+
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
 
   #ifdef GPS_BAUD_RATE

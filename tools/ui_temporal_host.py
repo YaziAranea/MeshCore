@@ -55,6 +55,9 @@ def run_temporal_host(out: Path) -> dict:
     e213 = (ROOT / "src/helpers/ui/E213Display.cpp").read_text(encoding="utf-8")
     config = (ROOT / "variants/heltec_wireless_paper/platformio.ini").read_text(encoding="utf-8")
     every = int(re.search(r"E213_FULL_REFRESH_EVERY=(\d+)", config).group(1))
+    busy = int(re.search(r"E213_BUSY_TIMEOUT_MILLIS=(\d+)", config).group(1))
+    frame = int(re.search(r"E213_FRAME_BUDGET_MILLIS=(\d+)", config).group(1))
+    guard = (ROOT / "src/helpers/ui/E213BusyGuard.h").read_text(encoding="utf-8")
     step, pause = marquee_parameters()
     code = r'''
 #include <stdint.h>
@@ -71,10 +74,16 @@ struct Panel {
 };
 struct E213Display {
  CRC display_crc{0}; uint32_t last_display_crc_value=0;
+ bool _isOn=true, _init=true, _has_display_crc=false;
+ E213BusyGuard _busy_guard;
  int _partial_refresh_count=0; Panel panel; Panel* display=&panel;
+ bool finishOperation() { return _busy_guard.finish(millis()); }
+ void completeOperation() {}
  void endFrame();
 };
 '''
+    code = guard.replace("#pragma once", "") + "\n" + code
+    code += f"\n#define E213_BUSY_TIMEOUT_MILLIS {busy}\n#define E213_FRAME_BUDGET_MILLIS {frame}\n"
     code += f"\n#define UI_TEXT_MARQUEE_STEP_MS {step}\n#define UI_TEXT_MARQUEE_EDGE_PAUSE_STEPS {pause}\n#define E213_FULL_REFRESH_EVERY {every}\n"
     code += function_body(ui, "static uint16_t uiMarqueeOffset(") + "\n"
     code += function_body(e213, "void E213Display::endFrame()") + "\n"

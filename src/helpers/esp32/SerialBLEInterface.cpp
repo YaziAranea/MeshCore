@@ -1,5 +1,6 @@
 #include "SerialBLEInterface.h"
 #include "esp_mac.h"
+#include <helpers/WrapTimer.h>
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -83,7 +84,8 @@ void SerialBLEInterface::onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) {
 
     //pServer->removePeerDevice(pServer->getConnId(), true);
     pServer->disconnect(pServer->getConnId());
-    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+    adv_restart_started = millis();
+    adv_restart_pending = true;
   }
 }
 
@@ -105,7 +107,8 @@ void SerialBLEInterface::onDisconnect(BLEServer* pServer) {
   BLE_DEBUG_PRINTLN("onDisconnect()");
   deviceConnected = false;
   if (_isEnabled) {
-    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+    adv_restart_started = millis();
+    adv_restart_pending = true;
   }
 }
 
@@ -150,7 +153,7 @@ void SerialBLEInterface::enable() {
   //pServer->getAdvertising()->setMaxInterval(1000);
 
   pServer->getAdvertising()->start();
-  adv_restart_time = 0;
+  adv_restart_pending = false;
 }
 
 void SerialBLEInterface::disable() {
@@ -162,7 +165,7 @@ void SerialBLEInterface::disable() {
   pServer->disconnect(last_conn_id);
   pService->stop();
   oldDeviceConnected = deviceConnected = false;
-  adv_restart_time = 0;
+  adv_restart_pending = false;
 }
 
 size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
@@ -193,12 +196,16 @@ bool SerialBLEInterface::isReadBusy() const {
 }
 
 bool SerialBLEInterface::isWriteBusy() const {
-  return millis() < _last_write + BLE_WRITE_MIN_INTERVAL;   // still too soon to start another write?
+  return !mesh::timing::elapsedAtLeast(
+      (uint32_t)millis(), (uint32_t)_last_write,
+      (uint32_t)BLE_WRITE_MIN_INTERVAL);
 }
 
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
   if (send_queue_len > 0   // first, check send queue
-    && millis() >= _last_write + BLE_WRITE_MIN_INTERVAL    // space the writes apart
+    && mesh::timing::elapsedAtLeast((uint32_t)millis(),
+                                    (uint32_t)_last_write,
+                                    (uint32_t)BLE_WRITE_MIN_INTERVAL)
   ) {
     _last_write = millis();
     pTxCharacteristic->setValue(send_queue[0].buf, send_queue[0].len);
@@ -228,24 +235,27 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
       //pServer->getAdvertising()->setMinInterval(500);
       //pServer->getAdvertising()->setMaxInterval(1000);
 
-      adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+      adv_restart_started = millis();
+      adv_restart_pending = true;
     } else {
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> stopping advertising");
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> connecting...");
       // connecting
       // do stuff here on connecting
       pServer->getAdvertising()->stop();
-      adv_restart_time = 0;
+      adv_restart_pending = false;
     }
     oldDeviceConnected = deviceConnected;
   }
 
-  if (adv_restart_time && millis() >= adv_restart_time) {
+  if (adv_restart_pending &&
+      mesh::timing::elapsedAtLeast((uint32_t)millis(), adv_restart_started,
+                                   (uint32_t)ADVERT_RESTART_DELAY)) {
     if (pServer->getConnectedCount() == 0) {
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> re-starting advertising");
       pServer->getAdvertising()->start();  // re-Start advertising
     }
-    adv_restart_time = 0;
+    adv_restart_pending = false;
   }
   return 0;
 }

@@ -30,7 +30,15 @@ def main():
 #define KEY_RIGHT 'r'
 #define KEY_ENTER 'e'
 struct NodePrefs { uint8_t favorite_setting_1=1, favorite_setting_2=2, favorite_setting_3=3; };
-struct Mesh { bool ok=true; int saves=0; bool savePrefs() { ++saves; return ok; } } the_mesh;
+struct Mesh {
+  bool ok=true; int saves=0; NodePrefs* prefs=nullptr;
+  bool commitPrefsOrRollback(const NodePrefs& before) {
+    ++saves;
+    if(ok) return true;
+    if(prefs) *prefs=before;
+    return false;
+  }
+} the_mesh;
 struct Task { void showAlert(const char*,int) {} void runHardwareTestStep(int) {} } task;
 struct HomeScreen {
  enum HomePage { SETTINGS, ADC, ADC_RESET, FAVORITE_PICKER, FAVORITE_SLOT_1,
@@ -60,6 +68,7 @@ static int checks=0;
 #define CHECK(expr) do { ++checks; if(!(expr)) { fprintf(stderr,"failed line %d: %s\n",__LINE__,#expr); exit(1); } } while(0)
 int main() {
  HomeScreen h;
+ the_mesh.prefs=&h.prefs;
  h._compact_settings_cursor=2; h._compact_root_cursor=2; h._compact_group_cursors[2]=3;
  h.handleCompactSettingsInput(KEY_ENTER);
  CHECK(h._compact_settings_group==2 && h._compact_settings_cursor==3 && h._compact_settings_depth==1);

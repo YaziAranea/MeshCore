@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise the real V3StorageRecovery.h with host ESP/display/flash stubs.
+"""Exercise real safe-storage recovery with host ESP/display/flash stubs.
 
 The SHA256 stub controls the digest: this tests authorization/control flow,
-NOT cryptography. validate_release_v3.py checks the real packaged SHA256.
+NOT cryptography. Release validators check real packaged SHA256 values.
 No firmware build, hardware access, or formatting of an actual filesystem.
 """
 from pathlib import Path
@@ -22,6 +22,37 @@ STUB = r'''
 #include <vector>
 #include <utility>
 
+#ifndef TEST_PROFILE
+#define TEST_PROFILE 1
+#endif
+#if TEST_PROFILE == 1
+static constexpr unsigned TEST_SPIFFS_OFFSET=0x670000;
+static constexpr unsigned TEST_SPIFFS_SIZE=0x180000;
+static constexpr unsigned TEST_FLASH_MINIMUM=0x7f0000;
+static constexpr unsigned TEST_FLASH_SIZE=0x800000;
+static constexpr const char* TEST_FACTORY_SHA256=
+    "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";
+static constexpr const char* TEST_PROFILE_NAME="V3";
+#elif TEST_PROFILE == 2
+static constexpr unsigned TEST_SPIFFS_OFFSET=0xc90000;
+static constexpr unsigned TEST_SPIFFS_SIZE=0x360000;
+static constexpr unsigned TEST_FLASH_MINIMUM=0xff0000;
+static constexpr unsigned TEST_FLASH_SIZE=0x1000000;
+static constexpr const char* TEST_FACTORY_SHA256=
+    "ec202a958aea323b1e5f8388ab92814695b85d5ac9c77227fdf47ed850fff7fe";
+static constexpr const char* TEST_PROFILE_NAME="V4.3";
+#elif TEST_PROFILE == 3
+static constexpr unsigned TEST_SPIFFS_OFFSET=0x670000;
+static constexpr unsigned TEST_SPIFFS_SIZE=0x180000;
+static constexpr unsigned TEST_FLASH_MINIMUM=0x7f0000;
+static constexpr unsigned TEST_FLASH_SIZE=0x800000;
+static constexpr const char* TEST_FACTORY_SHA256=
+    "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";
+static constexpr const char* TEST_PROFILE_NAME="Paper";
+#else
+#error "unknown TEST_PROFILE"
+#endif
+
 using esp_err_t = int;
 constexpr int ESP_OK=0, ESP_FAIL=-1, ESP_ERR_NO_MEM=0x101;
 constexpr int ESP_PARTITION_TYPE_DATA=1, ESP_PARTITION_SUBTYPE_DATA_SPIFFS=0x82;
@@ -39,14 +70,16 @@ static void expect_impl(bool value, const char* file, int line) {
   if (!value) { fprintf(stderr,"failed check %d at %s:%d\n",checks,file,line); throw Stop{99}; }
 }
 #define expect(value) expect_impl((value),__FILE__,__LINE__)
-static unsigned now_ms=0, deadline=20000, flash_size=0x800000;
+static unsigned now_ms=0, deadline=20000, flash_size=TEST_FLASH_SIZE;
 static int partition_count=1, iterator_value=1, releases=0;
-static esp_partition_t part={0x670000,0x180000,"spiffs",false};
+static esp_partition_t part={TEST_SPIFFS_OFFSET,TEST_SPIFFS_SIZE,"spiffs",false};
 static int read_calls=0, fail_read_call=-1;
 static size_t read_bytes=0, hash_bytes=0;
 static bool exact_digest=true, erased=false;
 static int begin_calls=0, format_calls=0, end_calls=0, reg_calls=0, unreg_calls=0;
 static int power_calls=0, reboot_calls=0;
+static int battery_service_calls=0;
+static void serviceFatalBatterySafety() { ++battery_service_calls; }
 static bool default_begin=false, format_result=true;
 static std::vector<bool> begin_results;
 static std::vector<std::pair<unsigned,bool>> button_events;
@@ -75,6 +108,7 @@ struct SPIFFSStub {
 } SPIFFS;
 struct UIColor { static constexpr int warning_txt=1; };
 struct DisplayDriver {
+  void turnOn() {} void turnOff() {}
   void startFrame() {} void endFrame() {} void setTextSize(int) {}
   void setColor(int) {} int width() const { return 128; }
   void drawTextCentered(int,int,const char*) {}
@@ -121,7 +155,7 @@ public:
   void update(const void*,size_t len) { hash_bytes+=len; }
   void finalize(void* data,size_t len) {
     expect(len==32 && hash_bytes==part.size);
-    const char* value="debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";
+    const char* value=TEST_FACTORY_SHA256;
     auto* out=static_cast<unsigned char*>(data);
     for(size_t i=0;i<len;++i) {
       unsigned v=0; sscanf(value+2*i,"%2x",&v); out[i]=static_cast<unsigned char>(v);
@@ -136,12 +170,13 @@ SOURCE = r'''
 #include "V3StorageRecovery.h"
 static DisplayDriver display;
 static void reset() {
-  now_ms=0; deadline=20000; flash_size=0x800000; partition_count=1;
-  releases=0; part={0x670000,0x180000,"spiffs",false};
+  now_ms=0; deadline=20000; flash_size=TEST_FLASH_SIZE; partition_count=1;
+  releases=0; part={TEST_SPIFFS_OFFSET,TEST_SPIFFS_SIZE,"spiffs",false};
   read_calls=0; fail_read_call=-1; read_bytes=hash_bytes=0;
   exact_digest=true; erased=false;
   begin_calls=format_calls=end_calls=reg_calls=unreg_calls=0;
-  power_calls=reboot_calls=0; default_begin=false; format_result=true;
+  power_calls=reboot_calls=battery_service_calls=0;
+  default_begin=false; format_result=true;
   begin_results.clear(); button_events.clear();
   register_result=ESP_FAIL; unregister_result=ESP_OK;
   smartui::v3StorageMountError=ESP_FAIL;
@@ -173,24 +208,25 @@ int main() {
     switch(case_id) {
       case 0: partition_count=0; break;
       case 1: partition_count=2; break;
-      case 2: part.address=0x290000; break;
-      case 3: part.size=0x170000; break;
+      case 2: part.address^=0x1000; break;
+      case 3: part.size-=0x1000; break;
       case 4: strcpy(part.label,"other"); break;
       case 5: part.encrypted=true; break;
-      case 6: flash_size=0x400000; break;
-      case 7: flash_size=0x7effff; break;
+      case 6: flash_size=TEST_FLASH_SIZE/2; break;
+      case 7: flash_size=TEST_FLASH_MINIMUM-1; break;
     }
     expect(!v3HasExactFactoryEmptyStorage());
     expect(read_calls==0 && hash_bytes==0 && format_calls==0);
     expect(releases==(case_id==1 ? 1 : 0));
   }
   reset(); expect(v3HasExactFactoryEmptyStorage());
-  expect(read_calls==3072 && read_bytes==0x180000 && hash_bytes==read_bytes);
+  expect(read_calls==static_cast<int>(TEST_SPIFFS_SIZE/512));
+  expect(read_bytes==TEST_SPIFFS_SIZE && hash_bytes==read_bytes);
   expect(format_calls==0); // recognition is not formatting itself
   reset(); exact_digest=false; expect(!v3HasExactFactoryEmptyStorage());
-  expect(read_bytes==0x180000 && format_calls==0);
+  expect(read_bytes==TEST_SPIFFS_SIZE && format_calls==0);
   reset(); erased=true; expect(!v3HasExactFactoryEmptyStorage());
-  expect(read_bytes==0x180000 && format_calls==0);
+  expect(read_bytes==TEST_SPIFFS_SIZE && format_calls==0);
   reset(); fail_read_call=10; expect(!v3HasExactFactoryEmptyStorage());
   expect(read_calls==10 && read_bytes==9*512 && hash_bytes==read_bytes && format_calls==0);
 
@@ -213,11 +249,11 @@ int main() {
 
   // Only a successful full digest check allows automatic native initialization.
   reset(); begin_results={false,true}; expect(v3MountStorage(&display));
-  expect(format_calls==1 && end_calls==1 && read_bytes==0x180000);
+  expect(format_calls==1 && end_calls==1 && read_bytes==TEST_SPIFFS_SIZE);
   expect(begin_calls==2 && reg_calls==1);
   reset(); exact_digest=false; powerScript(1000);
   stopped([]{v3MountStorage(&display);},1);
-  expect(format_calls==0 && power_calls==1 && read_bytes==0x180000);
+  expect(format_calls==0 && power_calls==1 && read_bytes==TEST_SPIFFS_SIZE);
   reset(); fail_read_call=10; powerScript(1000);
   stopped([]{v3MountStorage(&display);},1);
   expect(format_calls==0 && power_calls==1 && read_bytes==9*512);
@@ -252,7 +288,9 @@ int main() {
   reset(); startScript(); press(2100);
   stopped([]{v3StorageRecoveryMenu(&display,true);},2);
   expect(reboot_calls==1 && begin_calls==0 && format_calls==0);
-  printf("PASS: %d V3 recovery assertions (actual C++ header; mock SHA256, not crypto validation)\n",checks);
+  expect(battery_service_calls > 0);
+  printf("PASS: %d %s recovery assertions (actual C++ header; mock SHA256, not crypto validation)\n",
+      checks,TEST_PROFILE_NAME);
 }
 '''
 
@@ -263,7 +301,15 @@ def linux_path(path: Path) -> str:
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory(prefix="smartui-v3-storage-") as directory:
+    profiles = (
+        ("v3", ("-DTEST_PROFILE=1", "-DUI_V3_STORAGE_RECOVERY=1",
+                "-DUI_SAFE_STORAGE_RECOVERY=0")),
+        ("v43", ("-DTEST_PROFILE=2", "-DUI_V3_STORAGE_RECOVERY=0",
+                 "-DUI_SAFE_STORAGE_RECOVERY=1", "-DHELTEC_LORA_V4=1")),
+        ("paper", ("-DTEST_PROFILE=3", "-DUI_V3_STORAGE_RECOVERY=0",
+                   "-DUI_SAFE_STORAGE_RECOVERY=1", "-DHELTEC_WIRELESS_PAPER=1")),
+    )
+    with tempfile.TemporaryDirectory(prefix="smartui-safe-storage-") as directory:
         folder = Path(directory)
         (folder / "stub.h").write_text(STUB, encoding="utf-8")
         for name in ("SHA256.h", "esp_partition.h", "esp_spiffs.h", "SPIFFS.h"):
@@ -272,15 +318,20 @@ def main() -> None:
         flags = ["-std=c++11", "-Wall", "-Wextra", "-Werror", "-pedantic", "-O2"]
         compiler = shutil.which("g++")
         if compiler:
-            binary = folder / "test"
-            subprocess.run([compiler, *flags, "-I", str(folder), "-I", str(HEADERS),
-                            str(folder / "test.cpp"), "-o", str(binary)], check=True)
-            subprocess.run([str(binary)], check=True)
+            for profile, defines in profiles:
+                binary = folder / f"test-{profile}"
+                subprocess.run([compiler, *flags, *defines, "-I", str(folder),
+                                "-I", str(HEADERS), str(folder / "test.cpp"),
+                                "-o", str(binary)], check=True)
+                subprocess.run([str(binary)], check=True)
         elif shutil.which("wsl"):
             base, include = linux_path(folder), linux_path(HEADERS)
-            subprocess.run(["wsl", "--exec", "g++", *flags, "-I", base, "-I", include,
-                            base + "/test.cpp", "-o", base + "/test"], check=True)
-            subprocess.run(["wsl", "--exec", base + "/test"], check=True)
+            for profile, defines in profiles:
+                binary = base + f"/test-{profile}"
+                subprocess.run(["wsl", "--exec", "g++", *flags, *defines,
+                                "-I", base, "-I", include, base + "/test.cpp",
+                                "-o", binary], check=True)
+                subprocess.run(["wsl", "--exec", binary], check=True)
         else:
             raise SystemExit("A native g++ or WSL with g++ is required.")
 

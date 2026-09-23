@@ -92,7 +92,7 @@ def production_code(source):
     centered = source.index("static void drawRichTextCentered(DisplayDriver&")
     helpers = source[centered:source.index("\n}", centered) + 2] + "\n" + helpers
     release = re.search(r'#ifndef SMARTUI_RELEASE_LABEL\s+.*?#endif', source, re.S)
-    assert release and '"V5"' in release.group(), "release-label fallback must be V5"
+    assert release and '"0.04"' in release.group(), "release-label fallback must be 0.04"
     assert "Мешкор" not in method and "Омск" not in method
     assert not re.search(r'draw[^;\n]*MESHCORE_UI_VERSION', method), "internal marker must not be displayed"
     assert "_version_info" not in method
@@ -140,7 +140,7 @@ struct DisplayDriver {
   void setColor(int value) { color=value; }
   const Metric& metric() const { return table.at({font,size,bold}); }
   int getTextWidth(const char* text) const {
-    assert(!strcmp(text,"MeshCore") || !strcmp(text,"V5"));
+    assert(!strcmp(text,"MeshCore") || !strcmp(text,"0.04"));
     return !strcmp(text,"MeshCore") ? metric().brand : metric().label;
   }
   int getTextInkTop() const { return metric().top; }
@@ -161,7 +161,7 @@ struct UIScreen { virtual int render(DisplayDriver&)=0; virtual ~UIScreen()=defa
         for size in (1, 2):
             for bold in (False, True):
                 a = metrics(kind, font, size, bold, "MeshCore")
-                b = metrics(kind, font, size, bold, "V5")
+                b = metrics(kind, font, size, bold, "0.04")
                 code += f"d.table[{{{font},{size},{str(bold).lower()}}}]={{{a[0]},{b[0]},{a[1]},{a[2]},{a[3]}}};\n"
     first = 5 if kind == "t096" else 0
     code += f"for(int initial={first};initial<{count};++initial) {{\n"
@@ -169,7 +169,7 @@ struct UIScreen { virtual int render(DisplayDriver&)=0; virtual ~UIScreen()=defa
   d.font=initial; d.size=1; d.bold=false; d.draws.clear(); SplashScreen splash;
   assert(splash.render(d)==1000);
   assert(d.font==initial && d.size==1 && !d.bold);
-  assert(d.draws.size()==2 && d.draws[0].text=="MeshCore" && d.draws[1].text=="V5");
+  assert(d.draws.size()==2 && d.draws[0].text=="MeshCore" && d.draws[1].text=="0.04");
   for(const auto& draw:d.draws) {
     assert(draw.x>=4 && draw.x+draw.width<=d.w-4);
     assert(draw.x==d.w/2-draw.width/2);
@@ -288,10 +288,10 @@ def main(out, preview):
             _, brand_top, brand_ink, _ = metrics(kind, brand["font"], brand["size"], brand["bold"], "MeshCore")
             assert abs((brand["y"] + brand_top) * 2 + brand_ink - height) <= 1, "brand ink is not vertically centred"
             label = records[1]
-            _, label_top, label_ink, _ = metrics(kind, label["font"], label["size"], label["bold"], "V5")
+            _, label_top, label_ink, _ = metrics(kind, label["font"], label["size"], label["bold"], "0.04")
             assert label["y"] + label_top + label_ink == height - (10 if height >= 96 else 6), "release label bottom margin differs"
             assert label["bold"] == 0, "release label inherited hero bold"
-            assert records[1]["text"] == "V5" and len(records) == 2
+            assert records[1]["text"] == "0.04" and len(records) == 2
             image.save(out / f"{name.lower().replace(' ', '-')}-{initial}.png")
             checks += 1
             if initial == default:
@@ -318,7 +318,7 @@ def main(out, preview):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=ROOT / "qa_outputs/splash-smartui-v5")
-    parser.add_argument("--preview", type=Path, default=ROOT / "docs/assets/ui/boot-smartui-v5.png")
+    parser.add_argument("--out-dir", type=Path, default=ROOT / "qa_outputs/splash-smartui-0.04")
+    parser.add_argument("--preview", type=Path, default=ROOT / "docs/assets/ui/boot-smartui-0.04.png")
     arguments = parser.parse_args()
     main(arguments.out_dir, arguments.preview)

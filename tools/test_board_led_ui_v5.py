@@ -81,7 +81,7 @@ int main() {
   // Normal external buzzer remains active; still two plays and a 120 s reminder.
   now=100; UITask n; n._msg_alert_pin=PIN_LED;
   n.prefs.notify_tone_system_id=n.prefs.notify_tone_dm_id=n.prefs.notify_tone_mention_id=19;
-  io.clear(); n.beginImportantNotify(UI_MSG_FLAG_DIRECT,false);
+  io.clear(); n.beginImportantNotify(UI_MSG_FLAG_DIRECT,1,false);
   CHECK(n._msg_tone_active && sounds()>0);
   unsigned long reminder=n._important_notify_tone_next;
   n.prefs.board_leds_enabled=0; n.applyBoardLedsState();

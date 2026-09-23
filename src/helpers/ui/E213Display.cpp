@@ -20,6 +20,10 @@ ColorVal UIColor::corp_blue = DisplayDriver::BLUE;
 #define E213_BUSY_TIMEOUT_MILLIS 0
 #endif
 
+#ifndef E213_KEEP_SHARED_VEXT_ON
+#define E213_KEEP_SHARED_VEXT_ON 0
+#endif
+
 #if MESHCORE_E213_PROFILE_FONTS
 struct E213ProfileFont {
   const char* name;
@@ -58,23 +62,33 @@ static uint16_t readDisplayCodepoint(const char*& str) {
 
 #if E213_BUSY_TIMEOUT_MILLIS > 0
 class E213WirelessPaperV11Safe : public EInkDisplay_WirelessPaperV1_1 {
+  E213BusyGuard* _guard;
+
+public:
+  explicit E213WirelessPaperV11Safe(E213BusyGuard* guard) : _guard(guard) {}
+
 protected:
   void wait() override {
-    uint32_t started = millis();
+    const uint32_t started = millis();
     while (digitalRead(DISP_BUSY) == LOW) {
-      if ((uint32_t)(millis() - started) >= E213_BUSY_TIMEOUT_MILLIS) return;
-      yield();
+      if (!_guard->keepWaiting(millis(), started)) return;
+      delay(1);  // Block loopTask so ESP32 idle task can feed its watchdog.
     }
   }
 };
 
 class E213WirelessPaperV111Safe : public EInkDisplay_WirelessPaperV1_1_1 {
+  E213BusyGuard* _guard;
+
+public:
+  explicit E213WirelessPaperV111Safe(E213BusyGuard* guard) : _guard(guard) {}
+
 protected:
   void wait() override {
-    uint32_t started = millis();
+    const uint32_t started = millis();
     while (digitalRead(DISP_BUSY) == HIGH) {
-      if ((uint32_t)(millis() - started) >= E213_BUSY_TIMEOUT_MILLIS) return;
-      yield();
+      if (!_guard->keepWaiting(millis(), started)) return;
+      delay(1);  // Block loopTask so ESP32 idle task can feed its watchdog.
     }
   }
 };
@@ -94,7 +108,7 @@ BaseDisplay* E213Display::detectEInk() {
     return new EInkDisplay_VisionMasterE213;
 #else
 #if E213_BUSY_TIMEOUT_MILLIS > 0
-    return new E213WirelessPaperV11Safe;
+    return new E213WirelessPaperV11Safe(&_busy_guard);
 #else
     return new EInkDisplay_WirelessPaperV1_1;
 #endif
@@ -105,7 +119,7 @@ BaseDisplay* E213Display::detectEInk() {
   return new EInkDisplay_VisionMasterE213V1_1;
 #else
 #if E213_BUSY_TIMEOUT_MILLIS > 0
-  return new E213WirelessPaperV111Safe;
+  return new E213WirelessPaperV111Safe(&_busy_guard);
 #else
   return new EInkDisplay_WirelessPaperV1_1_1;
 #endif
@@ -115,20 +129,98 @@ BaseDisplay* E213Display::detectEInk() {
 bool E213Display::begin() {
   if (_init) return true;
 
+  const uint32_t now = millis();
+  if (!retryReady(now)) return false;
+
+  if (_needs_recreate && display != NULL) {
+    delete display;
+    display = NULL;
+  }
+  _needs_recreate = false;
+  _busy_guard.begin(now, E213_INIT_BUDGET_MILLIS, E213_BUSY_TIMEOUT_MILLIS);
+
   powerOn();
   if (display == NULL) display = detectEInk();
   display->begin();
+  if (_busy_guard.timedOut()) {
+    finishOperation();
+    return false;
+  }
   display->setRotation(3);
+  clear();
+  if (_busy_guard.timedOut()) {
+    finishOperation();
+    return false;
+  }
+  display->fastmodeOn();
+  if (!finishOperation()) return false;
 
   _init = true;
   _isOn = true;
-  clear();
-  display->fastmodeOn();
+  _has_display_crc = false;
   applyTextColor();
+  completeOperation();
   return true;
 }
 
+bool E213Display::retryReady(uint32_t now) const {
+  return !_retry_pending || (int32_t)(now - _retry_at_millis) >= 0;
+}
+
+bool E213Display::isOn() {
+  // UITask polls isOn() every loop even while a display is dark. Retry only
+  // when the wrap-safe deadline is due. failOperation() exponentially backs
+  // persistent faults off to a bounded interval, while each attempt itself is
+  // bounded by BUSY and whole-init budgets.
+  if (!_isOn && _retry_pending && retryReady(millis())) begin();
+  return _isOn;
+}
+
+uint32_t E213Display::retryAfterMillis() const {
+  if (!_retry_pending) return 0;
+  const uint32_t now = millis();
+  if ((int32_t)(now - _retry_at_millis) >= 0) return 0;
+  return (uint32_t)(_retry_at_millis - now);
+}
+
+bool E213Display::finishOperation() {
+  if (_busy_guard.finish(millis())) return true;
+  failOperation(E213_DISPLAY_BUSY_TIMEOUT);
+  return false;
+}
+
+void E213Display::failOperation(E213DisplayError error) {
+  _last_operation_millis = _busy_guard.lastElapsed();
+  _last_error = error;
+  uint32_t delay_millis = _retry_delay_millis;
+  if (delay_millis == 0) delay_millis = E213_RETRY_DELAY_MILLIS;
+  _retry_at_millis = millis() + delay_millis;
+  _retry_pending = true;
+  if (_retry_delay_millis < E213_RETRY_MAX_DELAY_MILLIS) {
+    if (_retry_delay_millis > E213_RETRY_MAX_DELAY_MILLIS / 2) {
+      _retry_delay_millis = E213_RETRY_MAX_DELAY_MILLIS;
+    } else {
+      _retry_delay_millis *= 2;
+    }
+  }
+  _isOn = false;
+  _init = false;
+  _needs_recreate = true;
+  _has_display_crc = false;
+#if !E213_KEEP_SHARED_VEXT_ON
+  powerOff();
+#endif
+}
+
+void E213Display::completeOperation() {
+  _last_operation_millis = _busy_guard.lastElapsed();
+  _last_error = E213_DISPLAY_OK;
+  _retry_pending = false;
+  _retry_delay_millis = E213_RETRY_DELAY_MILLIS;
+}
+
 void E213Display::powerOn() {
+  if (_power_claimed) return;
   if (_periph_power) {
     _periph_power->claim();
   } else {
@@ -141,10 +233,17 @@ void E213Display::powerOn() {
 #endif
 #endif
   }
+  _power_claimed = true;
   delay(50);
 }
 
 void E213Display::powerOff() {
+  if (!_power_claimed) return;
+#if E213_KEEP_SHARED_VEXT_ON
+  // Wireless Paper GPIO45 supplies both display and LoRa. A panel fault must
+  // never tear down radio power; only logical display state is disabled.
+  return;
+#else
   if (_periph_power) {
     _periph_power->release();
   } else {
@@ -156,16 +255,22 @@ void E213Display::powerOff() {
 #endif
 #endif
   }
+  _power_claimed = false;
+#endif
 }
 
 void E213Display::turnOn() {
   if (!_init) {
-    begin();
+    _isOn = begin();
   } else if (!_isOn) {
+    if (!retryReady(millis())) return;
+    _busy_guard.begin(millis(), E213_INIT_BUDGET_MILLIS, E213_BUSY_TIMEOUT_MILLIS);
     powerOn();
     display->fastmodeOn();
+    if (!finishOperation()) return;
+    completeOperation();
+    _isOn = true;
   }
-  _isOn = true;
 }
 
 void E213Display::turnOff() {
@@ -499,23 +604,43 @@ uint16_t E213Display::getTextWidth(const char* str) {
 }
 
 void E213Display::endFrame() {
+  if (!_isOn || !_init || display == NULL) return;
   uint32_t crc = display_crc.finalize();
-  if (crc == last_display_crc_value) return;
+  if (_has_display_crc && crc == last_display_crc_value) return;
 
+  _busy_guard.begin(millis(), E213_FRAME_BUDGET_MILLIS, E213_BUSY_TIMEOUT_MILLIS);
   yield();
 #if E213_FULL_REFRESH_EVERY > 0
-  _partial_refresh_count++;
-  if (_partial_refresh_count >= E213_FULL_REFRESH_EVERY) {
+  const bool full_refresh = _partial_refresh_count + 1 >= E213_FULL_REFRESH_EVERY;
+  if (full_refresh) {
     display->fastmodeOff();
+    if (_busy_guard.timedOut()) {
+      finishOperation();
+      return;
+    }
     display->update();
+    if (_busy_guard.timedOut()) {
+      finishOperation();
+      return;
+    }
     display->fastmodeOn(false);
-    _partial_refresh_count = 0;
   } else {
     display->update();
   }
 #else
   display->update();
 #endif
+  if (_busy_guard.timedOut()) {
+    finishOperation();
+    return;
+  }
   yield();
+  if (!finishOperation()) return;
+
+#if E213_FULL_REFRESH_EVERY > 0
+  _partial_refresh_count = full_refresh ? 0 : _partial_refresh_count + 1;
+#endif
   last_display_crc_value = crc;
+  _has_display_crc = true;
+  completeOperation();
 }

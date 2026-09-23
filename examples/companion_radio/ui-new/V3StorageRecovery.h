@@ -1,7 +1,8 @@
 #pragma once
 
-// Included only by the opt-in Heltec V3 companion startup path. This is not
-// normal UI: preferences, mesh identity and BLE may not be initialized yet.
+// Included only by opt-in ESP32 SmartUI startup paths. This is not normal UI:
+// preferences, mesh identity and BLE may not be initialized yet. Historical
+// v3* function names remain for source compatibility.
 #include <SHA256.h>
 #include <esp_partition.h>
 #include <esp_spiffs.h>
@@ -11,10 +12,33 @@
 namespace smartui {
 
 // Exact factory-empty SPIFFS shipped by our pinned fresh-install packager.
-// A failed mount alone, an erased partition, or a partial match NEVER grants
-// permission to format. Release validation binds these bytes to the merged BIN.
+// A failed mount alone, erased flash, or a partial match NEVER grants
+// permission to format. Release validation binds the selected hash/layout to
+// both merged storage bytes and the application image.
+#if UI_V3_STORAGE_RECOVERY
 static constexpr char kV3FactorySpiffsSha256Hex[] =
     "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";
+static constexpr size_t kFactorySpiffsOffset = 0x670000;
+static constexpr size_t kFactorySpiffsSize = 0x180000;
+static constexpr size_t kFactoryFlashMinimum = 0x7f0000;
+static constexpr char kStorageRecoveryBoard[] = "V3";
+#elif UI_SAFE_STORAGE_RECOVERY && defined(HELTEC_LORA_V4)
+static constexpr char kV3FactorySpiffsSha256Hex[] =
+    "ec202a958aea323b1e5f8388ab92814695b85d5ac9c77227fdf47ed850fff7fe";
+static constexpr size_t kFactorySpiffsOffset = 0xc90000;
+static constexpr size_t kFactorySpiffsSize = 0x360000;
+static constexpr size_t kFactoryFlashMinimum = 0xff0000;
+static constexpr char kStorageRecoveryBoard[] = "V4.3";
+#elif UI_SAFE_STORAGE_RECOVERY && defined(HELTEC_WIRELESS_PAPER)
+static constexpr char kV3FactorySpiffsSha256Hex[] =
+    "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";
+static constexpr size_t kFactorySpiffsOffset = 0x670000;
+static constexpr size_t kFactorySpiffsSize = 0x180000;
+static constexpr size_t kFactoryFlashMinimum = 0x7f0000;
+static constexpr char kStorageRecoveryBoard[] = "Paper";
+#else
+  #error "Safe SPIFFS recovery has no reviewed board layout/hash"
+#endif
 
 static esp_err_t v3StorageMountError = ESP_FAIL;
 
@@ -36,8 +60,8 @@ static bool v3TryMountStorage() {
       v3StorageMountError = ESP_FAIL;
     }
   }
-  Serial.printf("[V3 FS2] mount error=%s (0x%X) heap=%u flash=%u\r\n",
-      esp_err_to_name(v3StorageMountError), (unsigned)v3StorageMountError,
+  Serial.printf("[%s FS2] mount error=%s (0x%X) heap=%u flash=%u\r\n",
+      kStorageRecoveryBoard, esp_err_to_name(v3StorageMountError), (unsigned)v3StorageMountError,
       ESP.getFreeHeap(), ESP.getFlashChipSize());
   return false;
 }
@@ -53,8 +77,8 @@ static bool v3HasExactFactoryEmptyStorage() {
     return false;
   }
   if (strcmp(partition.label, "spiffs") != 0 || partition.encrypted ||
-      partition.address != 0x670000 || partition.size != 0x180000 ||
-      ESP.getFlashChipSize() < 0x7f0000) return false;
+      partition.address != kFactorySpiffsOffset || partition.size != kFactorySpiffsSize ||
+      ESP.getFlashChipSize() < kFactoryFlashMinimum) return false;
 
   SHA256 hash;
   uint8_t chunk[512];
@@ -75,7 +99,7 @@ static bool v3HasExactFactoryEmptyStorage() {
 
 static void v3StorageStatus(DisplayDriver* display, const char* title,
                             const char* detail) {
-  Serial.printf("[V3 FS2] %s: %s\r\n", title, detail);
+  Serial.printf("[%s FS2] %s: %s\r\n", kStorageRecoveryBoard, title, detail);
   if (!display) return;
   display->startFrame();
   display->setTextSize(1);
@@ -118,8 +142,8 @@ static bool v3FormatAndMountStorage(DisplayDriver* display) {
   SPIFFS.end();
   const bool formatted = SPIFFS.format();
   const bool mounted = formatted && v3TryMountStorage();
-  Serial.printf("[V3 FS2] native format=%d mount=%d heap=%u flash=%u\r\n",
-      formatted, mounted, ESP.getFreeHeap(), ESP.getFlashChipSize());
+  Serial.printf("[%s FS2] native format=%d mount=%d heap=%u flash=%u\r\n",
+      kStorageRecoveryBoard, formatted, mounted, ESP.getFreeHeap(), ESP.getFlashChipSize());
   if (!mounted) v3StorageStatus(display, "Память недоступна", "Сброс не помог");
   return mounted;
 }
@@ -132,12 +156,31 @@ static bool v3StorageRecoveryMenu(DisplayDriver* display, bool identity_error) {
   StorageRecoveryPolicy policy((uint32_t)millis(),
       digitalRead(PIN_USER_BTN) == USER_BTN_PRESSED);
   v3StorageMenu(display, policy, identity_error);
-  Serial.println("[V3 FS2] Recovery: click next, hold 2s then release to select. No automatic reset.");
+  uint32_t last_activity = millis();
+  bool screen_awake = true;
+  bool previous_button = digitalRead(PIN_USER_BTN) == USER_BTN_PRESSED;
+  Serial.printf("[%s FS2] Recovery: click next, hold 2s then release to select. No automatic reset.\r\n",
+      kStorageRecoveryBoard);
   for (;;) {
+    serviceFatalBatterySafety();
+    const bool pressed = digitalRead(PIN_USER_BTN) == USER_BTN_PRESSED;
+    if (pressed != previous_button) {
+      previous_button = pressed;
+      last_activity = millis();
+      if (display && !screen_awake) {
+        display->turnOn();
+        screen_awake = true;
+        v3StorageMenu(display, policy, identity_error);
+      }
+    }
+    if (display && screen_awake && static_cast<uint32_t>(millis() - last_activity) >= 30000) {
+      display->turnOff();
+      screen_awake = false;
+    }
     const unsigned previous_selection = policy.selectedIndex();
     const bool previous_confirmation = policy.confirmingReset();
     const StorageRecoveryAction action = policy.update((uint32_t)millis(),
-        digitalRead(PIN_USER_BTN) == USER_BTN_PRESSED);
+        pressed);
     if (action == StorageRecoveryAction::PowerOff) {
       board.powerOff();
     } else if (action == StorageRecoveryAction::RetryMount) {
@@ -164,8 +207,8 @@ static bool v3StorageRecoveryMenu(DisplayDriver* display, bool identity_error) {
 
 static bool v3MountStorage(DisplayDriver* display) {
   if (v3TryMountStorage()) return true;
-  Serial.printf("[V3 FS2] mount failed, heap=%u flash=%u; checking factory-empty image\r\n",
-      ESP.getFreeHeap(), ESP.getFlashChipSize());
+  Serial.printf("[%s FS2] mount failed, heap=%u flash=%u; checking factory-empty image\r\n",
+      kStorageRecoveryBoard, ESP.getFreeHeap(), ESP.getFlashChipSize());
   // Only a full match of the known-empty fresh-install bytes may trigger one
   // native initialization attempt. No user files can exist in those bytes.
   if (v3HasExactFactoryEmptyStorage() && v3FormatAndMountStorage(display)) return true;

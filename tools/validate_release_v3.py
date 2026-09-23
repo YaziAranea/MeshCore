@@ -19,8 +19,8 @@ from validate_release_esp32 import ImagePair, validate_pair, validate_exact_appl
 
 
 PAIR = ImagePair(
-    "Heltec_V3_UI_V5",
-    b"V3 OLED SmartUI-V5 FS2",
+    "Heltec_V3_UI_0.04",
+    b"V3 SmartUI 0.04 FS2",
 )
 
 PARTITION_OFFSET = 0x8000
@@ -145,8 +145,11 @@ def check_host_configuration(tool: Path, sdkconfig: Path | None = None) -> dict:
             "sdk_configs_checked": [str(config) for config in configs]}
 
 
-def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
-                         sdkconfig: Path | None = None) -> dict:
+def inspect_prepared_spiffs(merged: bytes, expected_layout: tuple[int, int], *,
+                            mkspiffs: Path | None = None,
+                            sdkconfig: Path | None = None,
+                            expected_sha256: str | None = None) -> dict:
+    """Prove one complete, canonical, empty SPIFFS at exact board layout."""
     partitions = parse_partitions(merged)
     matches = [entry for entry in partitions if (entry["type"], entry["subtype"]) == (1, 0x82)]
     if len(matches) != 1:
@@ -161,7 +164,7 @@ def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
         raise ValueError("SPIFFS partition is erased, not formatted")
     tool = find_mkspiffs(mkspiffs)
     configuration = check_host_configuration(tool, sdkconfig)
-    with tempfile.TemporaryDirectory(prefix="smartui-v3-fs1-check-") as folder:
+    with tempfile.TemporaryDirectory(prefix="smartui-empty-spiffs-check-") as folder:
         temp = Path(folder)
         snapshot = temp / "merged-spiffs.bin"
         snapshot.write_bytes(image)
@@ -177,15 +180,28 @@ def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
         run_tool(tool, "-c", empty, *args, canonical)
         if canonical.read_bytes() != image:
             raise ValueError("SPIFFS is not a pristine canonical empty image (stale data or geometry mismatch)")
-    if part["offset"] != 0x670000 or part["size"] != 0x180000:
-        raise ValueError("SPIFFS layout does not match the narrowly scoped V3 recovery guard")
-    if hashlib.sha256(image).hexdigest() != factory_spiffs_sha256():
+    if (part["offset"], part["size"]) != expected_layout:
+        raise ValueError(
+            "SPIFFS layout mismatch: got "
+            f"0x{part['offset']:X}+0x{part['size']:X}, expected "
+            f"0x{expected_layout[0]:X}+0x{expected_layout[1]:X}"
+        )
+    actual_sha256 = hashlib.sha256(image).hexdigest()
+    if expected_sha256 is not None and actual_sha256 != expected_sha256.lower():
         raise ValueError("factory SPIFFS SHA256 differs from V3StorageRecovery.h")
     return {**part, "page_size": PAGE_SIZE, "block_size": BLOCK_SIZE,
-            "sha256": hashlib.sha256(image).hexdigest().upper(), "empty": True,
+            "sha256": actual_sha256.upper(), "empty": True,
             "host_mount": "SPIFFS_mount via pinned mkspiffs -l; no auto-format",
             "configuration": configuration,
             "proof_limits": "Host on-disk compatibility and empty-image proof, not ESP32 execution or physical flash testing."}
+
+
+def inspect_fresh_spiffs(merged: bytes, *, mkspiffs: Path | None = None,
+                         sdkconfig: Path | None = None) -> dict:
+    """V3 FS2 compatibility wrapper, including runtime factory-hash proof."""
+    return inspect_prepared_spiffs(
+        merged, (0x670000, 0x180000), mkspiffs=mkspiffs,
+        sdkconfig=sdkconfig, expected_sha256=factory_spiffs_sha256())
 
 
 def validate_v3_pair(directory: Path, *, mkspiffs: Path | None = None,

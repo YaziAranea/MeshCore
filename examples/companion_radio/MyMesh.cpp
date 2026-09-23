@@ -287,6 +287,7 @@ bool MyMesh::textMentionsNodeName(const char* text, const char* node_name) {
 #define DIRECT_SEND_PERHOP_FACTOR       6.0f
 #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
 #define LAZY_CONTACTS_WRITE_DELAY       5000
+#define MAX_DIRTY_CONTACTS_AGE          30000
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 
@@ -426,7 +427,9 @@ bool MyMesh::Frame::isDisplayableDirectMsg() const {
          buf[txt_type_index] == TXT_TYPE_SIGNED_PLAIN;
 }
 
-void MyMesh::addToOfflineQueue(const uint8_t frame[], int len) {
+bool MyMesh::addToOfflineQueue(const uint8_t frame[], int len,
+                               uint32_t ui_generation, uint8_t ui_flags) {
+  if (frame == NULL || len <= 0 || len > MAX_FRAME_SIZE) return false;
   if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {
     MESH_DEBUG_PRINTLN("WARN: offline_queue is full!");
     int pos = 0;
@@ -438,30 +441,43 @@ void MyMesh::addToOfflineQueue(const uint8_t frame[], int len) {
         MESH_DEBUG_PRINTLN("INFO: removed oldest channel message from queue.");
         offline_queue[offline_queue_len - 1].len = len;
         memcpy(offline_queue[offline_queue_len - 1].buf, frame, len);
-        return;
+        offline_queue[offline_queue_len - 1].ui_generation = ui_generation;
+        offline_queue[offline_queue_len - 1].ui_flags = ui_flags;
+        return true;
       }
       pos++;
     }
     MESH_DEBUG_PRINTLN("INFO: no channel messages to remove from queue.");
+    return false;
   } else {
     offline_queue[offline_queue_len].len = len;
     memcpy(offline_queue[offline_queue_len].buf, frame, len);
+    offline_queue[offline_queue_len].ui_generation = ui_generation;
+    offline_queue[offline_queue_len].ui_flags = ui_flags;
     offline_queue_len++;
+    return true;
   }
 }
 
-int MyMesh::getFromOfflineQueue(uint8_t frame[]) {
-  if (offline_queue_len > 0) {         // check offline queue
-    size_t len = offline_queue[0].len; // take from top of queue
-    memcpy(frame, offline_queue[0].buf, len);
+int MyMesh::peekOfflineQueue(uint8_t frame[], uint32_t& ui_generation,
+                             uint8_t& ui_flags) const {
+  return mesh::companion::peekOfflineFrame(
+      offline_queue, offline_queue_len, frame, ui_generation, ui_flags);
+}
 
-    offline_queue_len--;
-    for (int i = 0; i < offline_queue_len; i++) { // delete top item from queue
-      offline_queue[i] = offline_queue[i + 1];
-    }
-    return len;
-  }
-  return 0; // queue is empty
+void MyMesh::commitOfflineQueue() {
+  mesh::companion::commitOfflineFrame(offline_queue, offline_queue_len);
+}
+
+uint32_t MyMesh::nextUiMessageGeneration() {
+  ++next_ui_message_generation;
+  if (next_ui_message_generation == 0) ++next_ui_message_generation;
+  return next_ui_message_generation;
+}
+
+void MyMesh::scheduleContactsSave() {
+  dirty_contacts.schedule((uint32_t)_ms->getMillis(),
+                          (uint32_t)LAZY_CONTACTS_WRITE_DELAY);
 }
 
 float MyMesh::getAirtimeBudgetFactor() const {
@@ -635,7 +651,7 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
     p->path_len = mesh::Packet::copyPath(p->path, path, path_len);
   }
 
-  if (!is_new) dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY); // only schedule lazy write for contacts that are in contacts[]
+  if (!is_new) scheduleContactsSave(); // only contacts already in contacts[] are dirty
 }
 
 static int sort_by_recent(const void *a, const void *b) {
@@ -802,7 +818,7 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
   memcpy(&out_frame[1], contact.id.pub_key, PUB_KEY_SIZE);
   _serial->writeFrame(out_frame, 1 + PUB_KEY_SIZE); // NOTE: app may not be connected
 
-  dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+  scheduleContactsSave();
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
@@ -864,20 +880,32 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
-  addToOfflineQueue(out_frame, i);
 
-  if (_serial->isConnected()) {
+  bool should_display = false;
+  uint32_t ui_generation = 0;
+#ifdef DISPLAY_CLASS
+  // CLI data remains available to the companion app but is not a UI event.
+  should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
+  if (should_display) ui_generation = nextUiMessageGeneration();
+#endif
+  const bool queued = addToOfflineQueue(
+      out_frame, i, ui_generation,
+      should_display ? UI_MSG_FLAG_DIRECT : UI_MSG_FLAG_NONE);
+
+  if (queued && _serial->isConnected()) {
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
 
 #ifdef DISPLAY_CLASS
-  // we only want to show text messages on display, not cli data
-  bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display && _ui) {
-    _ui->newMsg(path_len, from.name, text, offline_queue_len, UI_MSG_FLAG_DIRECT);
-    if (!_serial->isConnected()) {
+    _ui->newMsg(path_len, from.name, text, offline_queue_len,
+                UI_MSG_FLAG_DIRECT, ui_generation, from.id.pub_key,
+                PUB_KEY_SIZE);
+    // If the app queue is saturated, preserve local visibility even while a
+    // transport is connected: this message cannot be synced by this node.
+    if (!_serial->isConnected() || !queued) {
       _ui->notify(UIEventType::contactMessage);
     }
   }
@@ -949,7 +977,7 @@ void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uin
   markConnectionActive(from);
   noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
   // from.sync_since change needs to be persisted
-  dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+  scheduleContactsSave();
   queueMessage(from, TXT_TYPE_SIGNED_PLAIN, pkt, sender_timestamp, sender_prefix, 4, text);
 }
 
@@ -978,7 +1006,6 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   }
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
-  addToOfflineQueue(out_frame, i);
 
 #ifdef DISPLAY_CLASS
   const char* channel_name = "Unknown";
@@ -990,9 +1017,15 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   uint8_t ui_flags = textMentionsNodeName(mention_text, _prefs.node_name)
                          ? UI_MSG_FLAG_MENTION
                          : UI_MSG_FLAG_NONE;
+  const uint32_t ui_generation = nextUiMessageGeneration();
+#else
+  const uint8_t ui_flags = UI_MSG_FLAG_NONE;
+  const uint32_t ui_generation = 0;
 #endif
 
-  if (_serial->isConnected()) {
+  const bool queued = addToOfflineQueue(out_frame, i, ui_generation, ui_flags);
+
+  if (queued && _serial->isConnected()) {
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
@@ -1004,7 +1037,10 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
 #endif
   }
 #ifdef DISPLAY_CLASS
-  if (_ui) _ui->newMsg(path_len, channel_name, text, offline_queue_len, ui_flags);
+  if (_ui) {
+    _ui->newMsg(path_len, channel_name, text, offline_queue_len, ui_flags,
+                ui_generation, NULL, 0);
+  }
 #endif
 }
 
@@ -1034,9 +1070,9 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
     memcpy(&out_frame[i], data, copy_len);
     i += copy_len;
   }
-  addToOfflineQueue(out_frame, i);
+  const bool queued = addToOfflineQueue(out_frame, i);
 
-  if (_serial->isConnected()) {
+  if (queued && _serial->isConnected()) {
     uint8_t frame[1];
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
@@ -1290,7 +1326,10 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   memset(expected_ack_table, 0, sizeof(expected_ack_table));
   next_ack_idx = 0;
   sign_data = NULL;
-  dirty_contacts_expiry = 0;
+  dirty_contacts.clear();
+  storage_recovery_required = false;
+  storage_recovery_error_pending = false;
+  next_ui_message_generation = 0;
   memset(advert_paths, 0, sizeof(advert_paths));
   memset(network_status, 0, sizeof(network_status));
   memset(recent_chat, 0, sizeof(recent_chat));
@@ -1624,10 +1663,12 @@ void MyMesh::updateAutoAdvertTimer() {
   }
 }
 
-void MyMesh::cycleAutoAdvertInterval() {
+bool MyMesh::cycleAutoAdvertInterval() {
+  const NodePrefs before = _prefs;
   _prefs.auto_advert_interval_mins = nextAutoAdvertIntervalMins(_prefs.auto_advert_interval_mins);
+  if (!commitPrefsOrRollback(before)) return false;
   updateAutoAdvertTimer();
-  savePrefs();
+  return true;
 }
 
 void MyMesh::applyUiPrefsRuntime() {
@@ -1637,6 +1678,22 @@ void MyMesh::applyUiPrefsRuntime() {
   meshcoreSetBoardLedsEnabled(_prefs.board_leds_enabled != 0);
   board.setAdcMultiplier(_prefs.adc_multiplier);
   updateAutoAdvertTimer();
+#if ENV_INCLUDE_GPS == 1
+  applyGpsPrefs();
+#endif
+}
+
+bool MyMesh::commitPrefsOrRollback(const NodePrefs& before) {
+  return mesh::storage::persistOrRollback(
+      _prefs, before,
+      [this]() { return savePrefs(); },
+      [this]() { applyUiPrefsRuntime(); });
+}
+
+bool MyMesh::flushPendingStorage() {
+  return mesh::storage::flushDeferredSave(
+      dirty_contacts, storage_recovery_required,
+      [this]() { return saveContacts(); });
 }
 
 bool MyMesh::isPhoneGpsFresh() const {
@@ -1653,13 +1710,15 @@ const char* MyMesh::getGpsSourceName() const {
   return isPhoneGpsEnabled() ? "PHONE" : "HW";
 }
 
-void MyMesh::setGpsSource(uint8_t source, bool save) {
+bool MyMesh::setGpsSource(uint8_t source, bool save) {
 #if UI_PHONE_GPS == 1
   source = source == GPS_SOURCE_PHONE ? GPS_SOURCE_PHONE : GPS_SOURCE_HW;
 #else
   source = GPS_SOURCE_HW;
 #endif
-  if (_prefs.gps_source == source) return;
+  if (_prefs.gps_source == source) return true;
+  const NodePrefs before = _prefs;
+  const uint32_t previous_phone_gps_update = phone_gps_last_update_ms;
   _prefs.gps_source = source;
   phone_gps_last_update_ms = 0;
 #if ENV_INCLUDE_GPS == 1
@@ -1668,7 +1727,14 @@ void MyMesh::setGpsSource(uint8_t source, bool save) {
     _prefs.gps_enabled = 0;
   }
 #endif
-  if (save) savePrefs();
+  if (save && !commitPrefsOrRollback(before)) {
+    phone_gps_last_update_ms = previous_phone_gps_update;
+#if ENV_INCLUDE_GPS == 1
+    applyGpsPrefs();
+#endif
+    return false;
+  }
+  return true;
 }
 
 bool MyMesh::setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt) {
@@ -1681,7 +1747,7 @@ bool MyMesh::setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt) {
   if (lat < -90000000L || lat > 90000000L || lon < -180000000L || lon > 180000000L) {
     return false;
   }
-  if (!isPhoneGpsEnabled()) setGpsSource(GPS_SOURCE_PHONE, true);
+  if (!isPhoneGpsEnabled() && !setGpsSource(GPS_SOURCE_PHONE, true)) return false;
   sensors.node_lat = ((double)lat) / 1000000.0;
   sensors.node_lon = ((double)lon) / 1000000.0;
   sensors.node_altitude = ((double)alt) / 1000.0;
@@ -1931,11 +1997,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       _most_recent_lastmod = 0;
     }
   } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
+    const NodePrefs before = _prefs;
     int nlen = len - 1;
     if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
     memcpy(_prefs.node_name, &cmd_frame[1], nlen);
     _prefs.node_name[nlen] = 0; // null terminator
-    if (savePrefs()) writeOKFrame();
+    if (commitPrefsOrRollback(before)) writeOKFrame();
     else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
   } else if (cmd_frame[0] == CMD_SET_ADVERT_LATLON && len >= 9) {
     int32_t lat, lon, alt = 0;
@@ -1945,10 +2012,18 @@ void MyMesh::handleCmdFrame(size_t len) {
       memcpy(&alt, &cmd_frame[9], 4); // for FUTURE support
     }
     if (lat <= 90 * 1E6 && lat >= -90 * 1E6 && lon <= 180 * 1E6 && lon >= -180 * 1E6) {
+      const NodePrefs before = _prefs;
+      const double previous_lat = sensors.node_lat;
+      const double previous_lon = sensors.node_lon;
       sensors.node_lat = ((double)lat) / 1000000.0;
       sensors.node_lon = ((double)lon) / 1000000.0;
-      if (savePrefs()) writeOKFrame();
-      else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      if (commitPrefsOrRollback(before)) {
+        writeOKFrame();
+      } else {
+        sensors.node_lat = previous_lat;
+        sensors.node_lon = previous_lon;
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      }
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid geo coordinate
     }
@@ -2021,10 +2096,15 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
+      const uint8_t previous_path_len = recipient->out_path_len;
       recipient->out_path_len = OUT_PATH_UNKNOWN;
       // recipient->lastmod = ??   shouldn't be needed, app already has this version of contact
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
+      if (saveContacts()) {
+        writeOKFrame();
+      } else {
+        recipient->out_path_len = previous_path_len;
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      }
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // unknown contact
     }
@@ -2033,13 +2113,18 @@ void MyMesh::handleCmdFrame(size_t len) {
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     uint32_t last_mod = getRTCClock()->getCurrentTime();  // fallback value if not present in cmd_frame
     if (recipient) {
+      const ContactInfo previous_contact = *recipient;
       if (!updateContactFromFrame(*recipient, last_mod, cmd_frame, len)) {
         writeErrFrame(ERR_CODE_ILLEGAL_ARG);
         return;
       }
       recipient->lastmod = last_mod;
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
+      if (saveContacts()) {
+        writeOKFrame();
+      } else {
+        *recipient = previous_contact;
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      }
     } else {
       ContactInfo contact = {};
       if (!updateContactFromFrame(contact, last_mod, cmd_frame, len)) {
@@ -2049,8 +2134,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       contact.lastmod = last_mod;
       contact.sync_since = 0;
       if (addContact(contact)) {
-        dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-        writeOKFrame();
+        if (saveContacts()) {
+          writeOKFrame();
+        } else {
+          removeContact(contact);
+          writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+        }
       } else {
         writeErrFrame(ERR_CODE_TABLE_FULL);
       }
@@ -2058,10 +2147,19 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_REMOVE_CONTACT && len >= 1 + PUB_KEY_SIZE) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient && removeContact(*recipient)) {
-      _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
+    if (recipient) {
+      ContactInfo removed_contact = *recipient;
+      if (!removeContact(removed_contact)) {
+        writeErrFrame(ERR_CODE_NOT_FOUND);
+      } else if (saveContacts()) {
+        _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
+        writeOKFrame();
+      } else {
+        if (!addContact(removed_contact)) {
+          MESH_DEBUG_PRINTLN("ERROR: unable to restore contact after save failure");
+        }
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      }
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // not found, or unable to remove
     }
@@ -2122,21 +2220,31 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
-    int out_len;
-    bool direct_text_read = offline_queue_len > 0 && offline_queue[0].isDisplayableDirectMsg();
-    if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
-      _serial->writeFrame(out_frame, out_len);
+    mesh::companion::syncNextOfflineFrame(
+        out_frame, RESP_CODE_NO_MORE_MESSAGES,
+        [this](uint8_t* frame, uint32_t& generation, uint8_t& flags) {
+          return peekOfflineQueue(frame, generation, flags);
+        },
+        [this](const uint8_t* frame, size_t frame_len) {
+          return _serial->writeFrame(frame, frame_len);
+        },
+        [this]() { commitOfflineQueue(); },
+        [this](uint32_t ui_generation, uint8_t ui_flags) {
 #ifdef DISPLAY_CLASS
-      if (_ui) {
-        // A BLE dequeue is not the same as dismissing the local notification.
-        _ui->msgRead(offline_queue_len, false);
-        if (direct_text_read) _ui->directMsgRead(false);
-      }
+          if (_ui) {
+            // Queued-to-transport is not human read/dismissal and is not proof
+            // the phone received the frame. Generation binds one event.
+            _ui->msgRead(offline_queue_len, false);
+            _ui->messageTransferState(
+                ui_generation, ui_flags,
+                UIMessageTransferState::queuedToCompanion,
+                offline_queue_len);
+          }
+#else
+          (void)ui_generation;
+          (void)ui_flags;
 #endif
-    } else {
-      out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
-      _serial->writeFrame(out_frame, 1);
-    }
+        });
   } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS && len >= 11) {
     int i = 1;
     uint32_t freq;
@@ -2210,9 +2318,10 @@ void MyMesh::handleCmdFrame(size_t len) {
     i += 4;
     memcpy(&af, &cmd_frame[i], 4);
     i += 4;
+    const NodePrefs before = _prefs;
     _prefs.rx_delay_base = ((float)rx) / 1000.0f;
     _prefs.airtime_factor = ((float)af) / 1000.0f;
-    if (savePrefs()) writeOKFrame();
+    if (commitPrefsOrRollback(before)) writeOKFrame();
     else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
   } else if (cmd_frame[0] == CMD_GET_TUNING_PARAMS) {
     uint32_t rx = _prefs.rx_delay_base * 1000, af = _prefs.airtime_factor * 1000;
@@ -2222,6 +2331,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&out_frame[i], &af, 4); i += 4;
     _serial->writeFrame(out_frame, i);
   } else if (cmd_frame[0] == CMD_SET_OTHER_PARAMS && len >= 2) {
+    const NodePrefs before = _prefs;
     _prefs.manual_add_contacts = cmd_frame[1];
     if (len >= 3) {
       _prefs.telemetry_mode_base = cmd_frame[2] & 0x03; // v5+
@@ -2235,24 +2345,22 @@ void MyMesh::handleCmdFrame(size_t len) {
         }
       }
     }
-    if (savePrefs()) writeOKFrame();
+    if (commitPrefsOrRollback(before)) writeOKFrame();
     else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
   } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && len >= 3 && cmd_frame[1] == 0) {
     if (cmd_frame[2] >= 3) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
+      const NodePrefs before = _prefs;
       _prefs.path_hash_mode = cmd_frame[2];
-      if (savePrefs()) writeOKFrame();
+      if (commitPrefsOrRollback(before)) writeOKFrame();
       else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
     }
   } else if (cmd_frame[0] == CMD_REBOOT && len == 7 &&
              companion::FrameReader(cmd_frame, len).equalsAt(1, "reboot", 6)) {
-    if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
-      if (!saveContacts()) {
-        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
-        return;
-      }
-      dirty_contacts_expiry = 0;
+    if (!flushPendingStorage()) {
+      writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      return;
     }
     board.reboot();
   } else if (cmd_frame[0] == CMD_GET_BATT_AND_STORAGE) {
@@ -2590,8 +2698,9 @@ void MyMesh::handleCmdFrame(size_t len) {
 
     // ensure pin is zero, or a valid 6 digit pin
     if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
+      const NodePrefs before = _prefs;
       _prefs.ble_pin = pin;
-      if (savePrefs()) writeOKFrame();
+      if (commitPrefsOrRollback(before)) writeOKFrame();
       else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -2615,21 +2724,19 @@ void MyMesh::handleCmdFrame(size_t len) {
     char *np = strchr(sp, ':'); // look for separator char
     if (np) {
       *np++ = 0; // modify 'cmd_frame', replace ':' with null
+      const NodePrefs prefs_before = _prefs;
       bool success = false;
       if (strcmp(sp, "gps_source") == 0) {
 #if UI_PHONE_GPS == 1
         if (strcmp(np, "PHONE") == 0 || strcmp(np, "phone") == 0 || strcmp(np, "1") == 0) {
-          setGpsSource(GPS_SOURCE_PHONE);
-          success = true;
+          success = setGpsSource(GPS_SOURCE_PHONE);
         } else if (strcmp(np, "HW") == 0 || strcmp(np, "hw") == 0 || strcmp(np, "0") == 0) {
-          setGpsSource(GPS_SOURCE_HW);
-          success = true;
+          success = setGpsSource(GPS_SOURCE_HW);
         }
 #else
         // Keep compatibility with an explicit HW reset, but reject PHONE.
         if (strcmp(np, "HW") == 0 || strcmp(np, "hw") == 0 || strcmp(np, "0") == 0) {
-          setGpsSource(GPS_SOURCE_HW);
-          success = true;
+          success = setGpsSource(GPS_SOURCE_HW);
         }
 #endif
       } else {
@@ -2642,11 +2749,11 @@ void MyMesh::handleCmdFrame(size_t len) {
         if (strcmp(sp, "gps") == 0) {
           if (np[0] == '1') setGpsSource(GPS_SOURCE_HW, false);
           _prefs.gps_enabled = (np[0] == '1') ? 1 : 0;
-          durable = savePrefs();
+          durable = commitPrefsOrRollback(prefs_before);
         } else if (strcmp(sp, "gps_interval") == 0) {
           uint32_t interval_seconds = atoi(np);
           _prefs.gps_interval = constrain(interval_seconds, 0, 86400);
-          durable = savePrefs();
+          durable = commitPrefsOrRollback(prefs_before);
         }
         #endif
         if (durable) writeOKFrame();
@@ -2731,17 +2838,25 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
   } else if (cmd_frame[0] == CMD_FACTORY_RESET && len == 6 &&
              companion::FrameReader(cmd_frame, len).equalsAt(1, "reset", 5)) {
-    if (_serial) {
-      MESH_DEBUG_PRINTLN("Factory reset: disabling serial interface to prevent reconnects (BLE/WiFi)");
-      _serial->disable(); // Phone app disconnects before we can send OK frame so it's safe here
-    }
-    bool success = _store->formatFileSystem();
-    if (success) {
-      writeOKFrame();
-      delay(1000);
+    const uint8_t failures = _store->formatFileSystemDetailed();
+    if (failures == STORAGE_FORMAT_OK) {
+      // Successful reset deliberately ends the old authenticated session.  The
+      // historical code tried to queue OK after disable, so clients already
+      // use disconnect/reboot as completion and no wire contract is changed.
+      if (_serial) _serial->disable();
       board.reboot();  // doesn't return
     } else {
-      writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      MESH_DEBUG_PRINTLN("Factory reset incomplete, failure mask=%u", failures);
+      storage_recovery_required = true;
+      uint8_t error_frame[2] = {RESP_CODE_ERR, ERR_CODE_FILE_IO_ERROR};
+      storage_recovery_error_pending =
+          !_serial || _serial->writeFrame(error_frame, sizeof(error_frame)) !=
+                          sizeof(error_frame);
+#ifdef DISPLAY_CLASS
+      if (_ui) {
+        _ui->storageRecoveryRequired(StorageRecoveryReason::factoryResetFailed);
+      }
+#endif
     }
   } else if (cmd_frame[0] == CMD_SET_FLOOD_SCOPE_KEY && len >= 2 && cmd_frame[1] == 0) {
     if (len >= 2 + 16) {
@@ -2755,6 +2870,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     send_unscoped = true;
     writeOKFrame();
   } else if (cmd_frame[0] == CMD_SET_DEFAULT_FLOOD_SCOPE && len >= 1) {
+    const NodePrefs before = _prefs;
     if (len >= 1+31+16) {
       size_t n = 0;
       companion::FrameReader frame(cmd_frame, len);
@@ -2762,7 +2878,7 @@ void MyMesh::handleCmdFrame(size_t len) {
         memcpy(_prefs.default_scope_name, &cmd_frame[1], n);
         _prefs.default_scope_name[n] = 0;
         memcpy(_prefs.default_scope_key, &cmd_frame[1+31], 16);
-        if (savePrefs()) writeOKFrame();
+        if (commitPrefsOrRollback(before)) writeOKFrame();
         else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
       } else {
         writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -2770,7 +2886,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));  // set default scope to null
       memset(_prefs.default_scope_key, 0, sizeof(_prefs.default_scope_key));
-      if (savePrefs()) writeOKFrame();
+      if (commitPrefsOrRollback(before)) writeOKFrame();
       else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
     }
   } else if (cmd_frame[0] == CMD_GET_DEFAULT_FLOOD_SCOPE) {
@@ -2791,11 +2907,12 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
   } else if (cmd_frame[0] == CMD_SET_AUTOADD_CONFIG && len >= 2) {
+    const NodePrefs before = _prefs;
     _prefs.autoadd_config = cmd_frame[1];
     if (len >= 3) {
       _prefs.autoadd_max_hops = min(cmd_frame[2], (uint8_t)64);
     }
-    if (savePrefs()) writeOKFrame();
+    if (commitPrefsOrRollback(before)) writeOKFrame();
     else writeErrFrame(ERR_CODE_FILE_IO_ERROR);
   } else if (cmd_frame[0] == CMD_GET_AUTOADD_CONFIG) {
     int i = 0;
@@ -2837,7 +2954,9 @@ static bool save_filter(const ContactInfo& c) {
 }
 
 bool MyMesh::saveContacts() {
-  return _store->saveContacts(this, save_filter);
+  const bool saved = _store->saveContacts(this, save_filter);
+  if (saved) dirty_contacts.clear();
+  return saved;
 }
 
 void MyMesh::enterCLIRescue() {
@@ -3059,6 +3178,24 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+  if (storage_recovery_required) {
+    // Do not resume mesh/storage activity after a potentially partial erase.
+    // Keep pumping the transport so the initiating client can receive the
+    // explicit failure response; discard any later commands in this state.
+    if (_serial) {
+      memset(cmd_frame, 0, sizeof(cmd_frame));
+      _serial->checkRecvFrame(cmd_frame);
+      if (storage_recovery_error_pending) {
+        const uint8_t error_frame[2] = {RESP_CODE_ERR, ERR_CODE_FILE_IO_ERROR};
+        if (_serial->writeFrame(error_frame, sizeof(error_frame)) ==
+            sizeof(error_frame)) {
+          storage_recovery_error_pending = false;
+        }
+      }
+    }
+    return;
+  }
+
   BaseChatMesh::loop();
   sampleChannelBusy();
 
@@ -3067,14 +3204,17 @@ void MyMesh::loop() {
   } else {
     checkSerialInterface();
   }
+  if (storage_recovery_required) return;
 
-  // is there are pending dirty contacts write needed?
-  if (dirty_contacts_expiry && millisHasNowPassed(dirty_contacts_expiry)) {
+  // A future deadline is not immediate work and must not prevent idle sleep.
+  const uint32_t storage_now = (uint32_t)_ms->getMillis();
+  if (dirty_contacts.due(storage_now, (uint32_t)MAX_DIRTY_CONTACTS_AGE)) {
     if (saveContacts()) {
-      dirty_contacts_expiry = 0;
+      dirty_contacts.clear();
     } else {
       MESH_DEBUG_PRINTLN("ERROR: contacts save failed; retry scheduled");
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+      dirty_contacts.retryFrom(storage_now,
+                               (uint32_t)LAZY_CONTACTS_WRITE_DELAY);
     }
   }
 
@@ -3227,10 +3367,13 @@ bool MyMesh::sendQuickReplyToContactPubKey(const uint8_t pub_key[PUB_KEY_SIZE], 
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
+  if (storage_recovery_required) return false;
   bool calibration_active = false;
 #ifdef WRAPPER_CLASS
   const RxPowerSavingControl* rxps_control = &radio_driver;
   calibration_active = rxps_control->isRxPowerSavingCalibrationActive();
 #endif
-  return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0 || calibration_active;
+  const bool storage_due = dirty_contacts.due(
+      (uint32_t)_ms->getMillis(), (uint32_t)MAX_DIRTY_CONTACTS_AGE);
+  return _mgr->getOutboundTotal() > 0 || storage_due || calibration_active;
 }

@@ -13,6 +13,13 @@ public:
   virtual bool getChannelForSave(uint8_t channel_idx, ChannelDetails& ch) =0;
 };
 
+enum StorageFormatFailure : uint8_t {
+  STORAGE_FORMAT_OK = 0,
+  STORAGE_FORMAT_PRIMARY_FAILED = 1 << 0,
+  STORAGE_FORMAT_SECONDARY_FAILED = 1 << 1,
+  STORAGE_FORMAT_PLATFORM_STATE_FAILED = 1 << 2
+};
+
 class DataStore {
   FILESYSTEM* _fs;
   FILESYSTEM* _fsExtra;
@@ -29,6 +36,7 @@ public:
   DataStore(FILESYSTEM& fs, FILESYSTEM& fsExtra, mesh::RTCClock& clock);
   void begin();
   bool formatFileSystem();
+  uint8_t formatFileSystemDetailed();
   FILESYSTEM* getPrimaryFS() const { return _fs; }
   FILESYSTEM* getSecondaryFS() const { return _fsExtra; }
   bool loadMainIdentity(mesh::LocalIdentity &identity);

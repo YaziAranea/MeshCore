@@ -126,6 +126,7 @@ public:
   bool muted=false, connected=false, board_leds=true, offline_led=true, ble_led=true;
   bool _important_notify_active=false, _important_notify_tone_started=false;
   bool _important_notify_tone_repeat_suppressed=false, _important_notify_visual_repeat_suppressed=false;
+  uint32_t _important_notify_generation=0;
   bool _msg_tone_active=false;
   unsigned long _msg_alert_until=0, _msg_tone_next=0, _msg_tone_off=0;
   unsigned long _important_notify_led_next=0, _important_notify_tone_next=0;
@@ -153,7 +154,7 @@ public:
   uint8_t getNotifyMode() const;
   uint8_t getImportantNotifyMode() const;
   unsigned long nextImportantNotifyDelay(uint8_t&,unsigned long) const;
-  void beginImportantNotify(uint8_t,bool);
+  void beginImportantNotify(uint8_t,uint32_t,bool);
   void importantNotifyHandler();
   void triggerMsgAlert();
   void messageAlertHandler();
@@ -187,7 +188,7 @@ int main() {
   for(bool shared : {false,true}) for(uint8_t mode : {0,1,2,3}) {
     now=100; UITask t; t.prefs.important_notify_mode=mode;
     if(shared) t.configureMsgTonePin(DEFAULT_NOTIFY_GPIO_PIN);
-    io.clear(); t.beginImportantNotify(UI_MSG_FLAG_DIRECT,false);
+    io.clear(); t.beginImportantNotify(UI_MSG_FLAG_DIRECT,1,false);
     assert((sounds()>0)==bool(mode&NOTIFY_MODE_TONE));
     assert((lights(t.getMsgAlertPin())>0)==bool(mode&NOTIFY_MODE_GPIO));
     assert(t.getImportantNotifyMode()==mode); ++checks;
@@ -212,14 +213,14 @@ int main() {
   }
   for(bool muted : {false,true}) for(bool offline_led : {false,true}) {
     now=100; UITask t; t.muted=muted; t.offline_led=offline_led;
-    io.clear(); t.beginImportantNotify(UI_MSG_FLAG_DIRECT,false);
+    io.clear(); t.beginImportantNotify(UI_MSG_FLAG_DIRECT,1,false);
     assert((sounds()>0)==!muted);
     assert((lights(t.getMsgAlertPin())>0)==(!muted && offline_led)); ++checks;
   }
   // Reach an actual inter-play gap through the production melody state machine.
   // A due visual reminder must not steal a shared pin during that silent gap.
   now=100; UITask shared; shared.configureMsgTonePin(DEFAULT_NOTIFY_GPIO_PIN);
-  shared.beginImportantNotify(UI_MSG_FLAG_DIRECT,false);
+  shared.beginImportantNotify(UI_MSG_FLAG_DIRECT,1,false);
   bool real_gap_seen=false;
   for(unsigned elapsed=0; shared._msg_tone_active && elapsed<100000; ++elapsed) {
     ++now; shared._important_notify_led_next=0; io.clear(); shared.outputLoop();

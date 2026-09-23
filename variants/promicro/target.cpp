@@ -11,8 +11,14 @@ WRAPPER_CLASS radio_driver(radio, board);
 VolatileRTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
 #if ENV_INCLUDE_GPS
+  #if defined(SMARTUI_OPTIONAL_UART_GPS) && SMARTUI_OPTIONAL_UART_GPS
+  #include <helpers/sensors/OptionalUartNmeaLocationProvider.h>
+  OptionalUartNmeaLocationProvider<decltype(Serial1)> nmea(Serial1, &rtc_clock,
+      PIN_GPS_RX, PIN_GPS_TX, PIN_GPS_EN);
+  #else
   #include <helpers/sensors/MicroNMEALocationProvider.h>
   MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
+  #endif
   EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 #else
   EnvironmentSensorManager sensors;

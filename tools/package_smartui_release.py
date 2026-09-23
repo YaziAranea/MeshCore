@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Validate and package one exact-source, six-board SmartUI experimental release.
+"""Validate and package one exact-source, six-board SmartUI release.
 
 Reads PlatformIO outputs or the release-named CI firmware directory. Does not
 build, flash, upload, move a tag, or overwrite an existing output directory.
-V3 retains its narrowly guarded FS2 recovery and prepared clean-install SPIFFS;
-V4.3/Paper storage behavior is deliberately unchanged.
+All ESP32 merged images contain validated formatted-empty clean-install SPIFFS.
+Application-only update images contain no filesystem bytes and preserve state.
 """
 
 from __future__ import annotations
@@ -20,15 +20,16 @@ import tempfile
 import zipfile
 
 import validate_release_esp32 as esp32
+import validate_release_fresh_spiffs as fresh_spiffs
 import validate_release_uf2 as uf2
 import validate_release_v3 as v3
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "V5"
-TAG = "smartui-v5"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_V5_RU.md"
-ARCHIVE_NAME = "SmartUI_V5_all-boards.zip"
+VERSION = "0.04"
+TAG = "smartui-0.04"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.04_RU.md"
+ARCHIVE_NAME = "SmartUI_0.04_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -127,11 +128,24 @@ def firmware_metadata(name: str, commit: str) -> dict:
                 "flash_offset": None}
     index = next(i for i, pair in enumerate(ESP_PAIRS) if name.startswith(pair.stem + "-"))
     fresh = name.endswith("-merged.bin")
+    if index == 0:
+        recovery_layout = (0x670000, 0x180000)
+        recovery_hash = v3.factory_spiffs_sha256()
+    else:
+        recovery_pair = ESP_PAIRS[index]
+        recovery_layout = fresh_spiffs.LAYOUTS[recovery_pair.stem]
+        recovery_hash = fresh_spiffs.FACTORY_SPIFFS_SHA256[recovery_pair.stem]
     storage = {
-        "contains_formatted_empty_spiffs": index == 0 and fresh,
-        "prepared_clean_install_storage": index == 0 and fresh,
+        "contains_formatted_empty_spiffs": fresh,
+        "prepared_clean_install_storage": fresh,
         "preserves_existing_filesystem": not fresh,
         "v3_fs2_recovery": index == 0,
+        "safe_factory_empty_native_recovery": True,
+        "factory_spiffs_layout": {
+            "offset": f"0x{recovery_layout[0]:X}",
+            "size": f"0x{recovery_layout[1]:X}",
+        },
+        "factory_spiffs_sha256": recovery_hash,
         "hardware_storage_success_confirmed": False,
     }
     if index == 0:
@@ -142,8 +156,9 @@ def firmware_metadata(name: str, commit: str) -> dict:
         )
     else:
         storage["warning"] = (
-            "Storage unchanged: merged has no prepared SPIFFS; fresh erased installation may show STORAGE ERROR."
-            if fresh else "App-only update; no new storage recovery or formatting policy."
+            "Fresh merged contains canonical empty SPIFFS and overwrites identity/settings; clean installation only."
+            if fresh else
+            "App-only update preserves existing SPIFFS identity/settings; never flash it at 0x00000."
         )
     return {"board": BOARD_NAMES[index + 3], "environment": ESP_ENVS[index],
             "source_commit": commit,
@@ -161,6 +176,8 @@ def validate_stage(stage: Path, *, mkspiffs: Path | None = None,
         uf2.validate(stage / name, marker)
     for pair in esp32.EXPECTED:
         esp32.validate_pair(stage, pair)
+        fresh_spiffs.validate_prepared_pair(
+            stage, pair, mkspiffs=mkspiffs, sdkconfig=sdkconfig)
     v3.validate_v3_pair(stage, mkspiffs=mkspiffs, sdkconfig=sdkconfig)
 
 
@@ -185,7 +202,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI V5" in text, "release notes must identify this exact experimental version")
+    require("SmartUI 0.04" in text, "release notes must identify this exact release version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:

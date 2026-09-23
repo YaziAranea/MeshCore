@@ -166,21 +166,30 @@ bool DataStore::removeFile(FILESYSTEM* fs, const char* filename) {
 }
 
 bool DataStore::formatFileSystem() {
+  return formatFileSystemDetailed() == STORAGE_FORMAT_OK;
+}
+
+uint8_t DataStore::formatFileSystemDetailed() {
+  uint8_t failures = STORAGE_FORMAT_OK;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  if (_fsExtra == nullptr) {
-    return _fs->format();
-  } else {
-    return _fs->format() && _fsExtra->format();
+  // A confirmed factory reset attempts every configured store.  Do not
+  // short-circuit: the returned bitmask must describe each step honestly.
+  if (!_fs->format()) failures |= STORAGE_FORMAT_PRIMARY_FAILED;
+  if (_fsExtra != nullptr && !_fsExtra->format()) {
+    failures |= STORAGE_FORMAT_SECONDARY_FAILED;
   }
 #elif defined(RP2040_PLATFORM)
-  return LittleFS.format();
+  if (!LittleFS.format()) failures |= STORAGE_FORMAT_PRIMARY_FAILED;
 #elif defined(ESP32)
-  bool fs_success = ((fs::SPIFFSFS *)_fs)->format();
+  if (!((fs::SPIFFSFS *)_fs)->format()) {
+    failures |= STORAGE_FORMAT_PRIMARY_FAILED;
+  }
   esp_err_t nvs_err = nvs_flash_erase(); // no need to reinit, will be done by reboot
-  return fs_success && (nvs_err == ESP_OK);
+  if (nvs_err != ESP_OK) failures |= STORAGE_FORMAT_PLATFORM_STATE_FAILED;
 #else
   #error "need to implement format()"
 #endif
+  return failures;
 }
 
 bool DataStore::loadMainIdentity(mesh::LocalIdentity &identity) {

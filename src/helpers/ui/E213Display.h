@@ -7,6 +7,7 @@
 #include <heltec-eink-modules.h>
 #include <CRC32.h>
 #include <helpers/RefCountedDigitalPin.h>
+#include "E213BusyGuard.h"
 
 #ifndef MESHCORE_E213_PROFILE_FONTS
 #define MESHCORE_E213_PROFILE_FONTS 0
@@ -16,12 +17,42 @@
 #define E213_FULL_REFRESH_EVERY 0
 #endif
 
+#ifndef E213_INIT_BUDGET_MILLIS
+#define E213_INIT_BUDGET_MILLIS 0
+#endif
+
+#ifndef E213_FRAME_BUDGET_MILLIS
+#define E213_FRAME_BUDGET_MILLIS 0
+#endif
+
+#ifndef E213_RETRY_DELAY_MILLIS
+#define E213_RETRY_DELAY_MILLIS 5000
+#endif
+
+#ifndef E213_RETRY_MAX_DELAY_MILLIS
+#define E213_RETRY_MAX_DELAY_MILLIS 60000
+#endif
+
+enum E213DisplayError : uint8_t {
+  E213_DISPLAY_OK = 0,
+  E213_DISPLAY_BUSY_TIMEOUT = 1,
+};
+
 // Display driver for E213 e-ink display
 class E213Display : public DisplayDriver {
   BaseDisplay* display=NULL;
   bool _init = false;
   bool _isOn = false;
   RefCountedDigitalPin* _periph_power;
+  bool _power_claimed = false;
+  bool _needs_recreate = false;
+  bool _has_display_crc = false;
+  E213BusyGuard _busy_guard;
+  E213DisplayError _last_error = E213_DISPLAY_OK;
+  uint32_t _last_operation_millis = 0;
+  uint32_t _retry_at_millis = 0;
+  uint32_t _retry_delay_millis = E213_RETRY_DELAY_MILLIS;
+  bool _retry_pending = false;
   CRC32 display_crc;
   uint32_t last_display_crc_value = 0;
 #if E213_FULL_REFRESH_EVERY > 0
@@ -44,8 +75,13 @@ public:
     }
   }
   bool begin();
-  bool isOn() override { return _isOn; }
+  bool isOn() override;
   bool isEink() override { return true; }
+  E213DisplayError lastError() const { return _last_error; }
+  bool hasPendingRetry() const { return _retry_pending; }
+  uint32_t lastOperationMillis() const { return _last_operation_millis; }
+  uint32_t retryAfterMillis() const;
+  void clearError() { _last_error = E213_DISPLAY_OK; }
   void turnOn() override;
   void turnOff() override;
   void clear() override;
@@ -71,6 +107,10 @@ public:
 
 private:
   BaseDisplay* detectEInk();
+  bool retryReady(uint32_t now) const;
+  bool finishOperation();
+  void failOperation(E213DisplayError error);
+  void completeOperation();
   void powerOn();
   void powerOff();
 #if MESHCORE_E213_PROFILE_FONTS

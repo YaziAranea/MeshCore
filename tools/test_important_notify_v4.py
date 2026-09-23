@@ -22,21 +22,23 @@ def harness(source, flags):
     )
     # These are explicit in every tested public profile; fail if a flag vanishes.
     code = "\n".join(f"#define {n} {flags[n]}" for n in names) + "\n" + code
-    code = code.replace("class UITask {", "struct MsgPreviewScreen { bool hasUnreadPreviews() { return false; } };\nclass UITask {")
+    code = code.replace("class UITask {", "enum class UIMessageTransferState : uint8_t { queuedToCompanion };\nstruct MsgPreviewScreen { bool hasUnreadPreviews() { return false; } };\nclass UITask {")
     code = code.replace("  void clearImportantNotify() { _important_notify_active=false; }", r'''
   void clearImportantNotify();
   void stopNotifyOutputs();
-  void finishImportantNotify(bool);
+  void finishImportantNotify(bool,bool=true);
   void clearBleSmartNotify();
-  void scheduleBleSmartNotify(uint8_t);
+  void scheduleBleSmartNotify(uint8_t,uint32_t);
   void bleSmartNotifyHandler();
-  void startImportantNotify(uint8_t);
+  void startImportantNotify(uint8_t,uint32_t);
   void msgRead(int,bool);
+  void messageTransferState(uint32_t,uint8_t,UIMessageTransferState,int);
   void stopMsgVibe() {}
   void gotoHomeScreen() {}
   void* curr=nullptr; void* msg_preview=nullptr;
   int _msgcount=0;
   uint8_t _ble_smart_notify_flags=0;
+  uint32_t _ble_smart_notify_generation=0;
   bool _ble_smart_notify_read_zero_seen=false;
   unsigned long _ble_smart_notify_due=0, _next_refresh=0;
 ''')
@@ -46,6 +48,7 @@ def harness(source, flags):
         "void UITask::finishImportantNotify(", "void UITask::clearBleSmartNotify()",
         "void UITask::scheduleBleSmartNotify(", "void UITask::bleSmartNotifyHandler()",
         "void UITask::startImportantNotify(", "void UITask::msgRead(int msgcount, bool",
+        "void UITask::messageTransferState(",
     )
     code += "\n" + "\n".join(function(source, m) for m in methods)
     return code
@@ -81,12 +84,12 @@ int main() {
   // All actual melodies: exactly two complete plays per series, none at the
   // old 3-second burst gap, then another series at 2 and 4 minutes.
   for(int id=0;id<notify_tone_count;++id) {
-    now=100; UITask t; fresh(t,id); t.startImportantNotify(UI_MSG_FLAG_DIRECT);
+    now=100; UITask t; fresh(t,id); t.startImportantNotify(UI_MSG_FLAG_DIRECT,100+id);
     assert(t._important_notify_active && t._msg_tone_active);
     auto due=t._important_notify_tone_next;
     tick(t,500);
-    t.beginImportantNotify(UI_MSG_FLAG_DIRECT,false); // duplicate delivery
-    t.beginImportantNotify(UI_MSG_FLAG_MENTION,false); // merged active notification
+    t.beginImportantNotify(UI_MSG_FLAG_DIRECT,100+id,false); // duplicate delivery
+    t.beginImportantNotify(UI_MSG_FLAG_MENTION,100+id,false); // merged active notification
     assert(t._important_notify_tone_next==due);
     tick(t,119499);
     assert(!t._msg_tone_active && playedNotes()==notes(id)*2);
@@ -97,24 +100,24 @@ int main() {
     ++checks;
   }
   // Local acknowledgement interrupts an active series and cancels its timer.
-  now=100; UITask local; fresh(local); local.startImportantNotify(UI_MSG_FLAG_DIRECT);
+  now=100; UITask local; fresh(local); local.startImportantNotify(UI_MSG_FLAG_DIRECT,200);
   local.msgRead(0,true); int before=sounds();
   assert(!local._important_notify_active && !local._msg_tone_active);
   tick(local,250000); assert(sounds()==before); ++checks;
 
   // Global mute (also used by night quiet) cancels, never silently re-arms.
-  now=100; UITask mute; fresh(mute); mute.startImportantNotify(UI_MSG_FLAG_DIRECT);
+  now=100; UITask mute; fresh(mute); mute.startImportantNotify(UI_MSG_FLAG_DIRECT,201);
   mute.muted=true; tick(mute,1); before=sounds();
   assert(!mute._important_notify_active && !mute._msg_tone_active);
   tick(mute,240000); mute.muted=false; tick(mute,240000);
   assert(sounds()==before); ++checks;
   now=100; UITask disabled; fresh(disabled); disabled.prefs.important_notify_mode=0;
-  disabled.startImportantNotify(UI_MSG_FLAG_DIRECT); tick(disabled,240000);
+  disabled.startImportantNotify(UI_MSG_FLAG_DIRECT,202); tick(disabled,240000);
   assert(sounds()==0 && !disabled._important_notify_active); ++checks;
 
   // Connecting BLE pauses reminders. Unread state survives the connection;
   // on disconnect the next reminder is scheduled two minutes later.
-  now=100; UITask ble; fresh(ble); ble.startImportantNotify(UI_MSG_FLAG_DIRECT);
+  now=100; UITask ble; fresh(ble); ble.startImportantNotify(UI_MSG_FLAG_DIRECT,203);
   tick(ble,10000); assert(sounds()==2*notes(19)); ble.connected=true;
   tick(ble,240000); assert(sounds()==2*notes(19) && ble._important_notify_tone_next==0);
   ble.connected=false; tick(ble,1); auto disconnected=now;
@@ -123,27 +126,59 @@ int main() {
 
   // Real BLE read callback ends an active unread event. No reminder after
   // disconnect; this is distinct from a mere BLE connection.
-  ble.connected=true; ble.msgRead(0,false);
+  ble.connected=true;
+  ble.messageTransferState(203,UI_MSG_FLAG_DIRECT,
+                           UIMessageTransferState::queuedToCompanion,0);
   assert(!ble._important_notify_active); tick(ble,10000); before=sounds();
   ble.connected=false; tick(ble,240000); assert(sounds()==before); ++checks;
 
   // Arrives while BLE connected: delayed first series, no periodic series.
   now=100; UITask incoming; fresh(incoming); incoming.connected=true;
-  incoming.startImportantNotify(UI_MSG_FLAG_DIRECT);
+  incoming.startImportantNotify(UI_MSG_FLAG_DIRECT,204);
   assert(!incoming._important_notify_active && incoming._ble_smart_notify_flags);
   tick(incoming,7999); assert(sounds()==0);
   tick(incoming,1); assert(incoming._msg_tone_active);
   tick(incoming,250000); assert(sounds()==2*notes(19)); ++checks;
   // Disconnect before BLE delay expires starts the offline notification.
   now=100; UITask queued; fresh(queued); queued.connected=true;
-  queued.startImportantNotify(UI_MSG_FLAG_DIRECT); tick(queued,1000);
+  queued.startImportantNotify(UI_MSG_FLAG_DIRECT,205); tick(queued,1000);
   queued.connected=false; tick(queued,1); assert(queued._msg_tone_active);
   tick(queued,119999); assert(sounds()==2*notes(19));
   tick(queued,1); assert(queued._msg_tone_active); ++checks;
 
+  // A transport callback belongs only to its generation. A was transferred,
+  // then B arrived before the BLE delay: neither A's stored marker nor a late
+  // duplicate callback may suppress B after disconnect.
+  now=100; UITask mixed; fresh(mixed); mixed.connected=true;
+  mixed.startImportantNotify(UI_MSG_FLAG_DIRECT,300);
+  mixed.messageTransferState(300,UI_MSG_FLAG_DIRECT,
+                             UIMessageTransferState::queuedToCompanion,1);
+  assert(mixed._ble_smart_notify_generation==300 && mixed._ble_smart_notify_read_zero_seen);
+  mixed.startImportantNotify(UI_MSG_FLAG_DIRECT,301);
+  assert(mixed._ble_smart_notify_generation==301 && !mixed._ble_smart_notify_read_zero_seen);
+  mixed.messageTransferState(300,UI_MSG_FLAG_DIRECT,
+                             UIMessageTransferState::queuedToCompanion,0);
+  assert(!mixed._ble_smart_notify_read_zero_seen);
+  mixed.connected=false; tick(mixed,1);
+  assert(mixed._important_notify_generation==301 && mixed._msg_tone_active &&
+         !mixed._important_notify_tone_repeat_suppressed); ++checks;
+
+  // A transferred while connected and then disconnected before its due time
+  // still gets the intended first two-play series, but no 2-minute repeats.
+  now=100; UITask transferred; fresh(transferred); transferred.connected=true;
+  transferred.startImportantNotify(UI_MSG_FLAG_DIRECT,302);
+  transferred.messageTransferState(302,UI_MSG_FLAG_DIRECT,
+                                   UIMessageTransferState::queuedToCompanion,0);
+  transferred.connected=false; tick(transferred,1);
+  assert(transferred._important_notify_generation==302 &&
+         transferred._important_notify_tone_repeat_suppressed && transferred._msg_tone_active);
+  tick(transferred,250000);
+  assert(sounds()==2*notes(19) && !transferred._msg_tone_active &&
+         transferred._important_notify_tone_next==0); ++checks;
+
   // millis wrap, including a next deadline that would equal the zero sentinel.
   for(uint32_t start : {uint32_t(0xffff0000),uint32_t(0U-120000U)}) {
-    now=start; UITask wrap; fresh(wrap); wrap.startImportantNotify(UI_MSG_FLAG_DIRECT);
+    now=start; UITask wrap; fresh(wrap); wrap.startImportantNotify(UI_MSG_FLAG_DIRECT,206);
     tick(wrap,119999); assert(sounds()==2*notes(19));
     tick(wrap,2); assert(wrap._msg_tone_active && sounds()>2*notes(19)); ++checks;
   }

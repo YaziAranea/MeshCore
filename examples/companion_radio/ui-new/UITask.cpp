@@ -192,7 +192,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef SMARTUI_RELEASE_LABEL
-  #define SMARTUI_RELEASE_LABEL "V5"
+  #define SMARTUI_RELEASE_LABEL "0.04"
 #endif
 
 #ifndef UI_RECENT_PAGE
@@ -737,6 +737,19 @@ static bool isNotifyGpioPinAllowed(int pin) {
 }
 
 static bool isNotifyGpioPinBlockedByBuild(int pin) {
+#if defined(SMARTUI_OPTIONAL_UART_GPS) && SMARTUI_OPTIONAL_UART_GPS && ENV_INCLUDE_GPS
+  // These pins remain unsafe even when the diagnostic risky-pin list is
+  // enabled: driving a notification can corrupt UART NMEA or GPS power.
+#ifdef PIN_GPS_RX
+  if (PIN_GPS_RX >= 0 && pin == PIN_GPS_RX) return true;
+#endif
+#ifdef PIN_GPS_TX
+  if (PIN_GPS_TX >= 0 && pin == PIN_GPS_TX) return true;
+#endif
+#ifdef PIN_GPS_EN
+  if (PIN_GPS_EN >= 0 && pin == PIN_GPS_EN) return true;
+#endif
+#endif
 #if UI_BLOCK_BOARD_LED_NOTIFY
   if (pin < 0) return false;
 #ifdef PIN_LED
@@ -1183,7 +1196,8 @@ static void importantNotifyPixelsHandler(bool allow_visual) {
   }
   important_notify_pixels.show();
   important_notify_pixels_step++;
-  important_notify_pixels_next = now + UI_IMPORTANT_NOTIFY_NEOPIXEL_STEP_MS;
+  important_notify_pixels_next = smartui::optionalDeadlineAfter(
+      now, (uint32_t)UI_IMPORTANT_NOTIFY_NEOPIXEL_STEP_MS);
 }
 #endif
 
@@ -4211,7 +4225,8 @@ class HomeScreen : public UIScreen {
       _chat_latest_ts = newest_ts;
       _chat_scroll_px = max_scroll;
       _chat_scroll_dir = -1;
-      _chat_pause_until = millis() + UI_CHAT_EDGE_PAUSE_MILLIS;
+      _chat_pause_until = smartui::optionalDeadlineAfter(
+          (uint32_t)millis(), (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
     }
 
     if (_chat_scroll_px > max_scroll) _chat_scroll_px = max_scroll;
@@ -4227,11 +4242,13 @@ class HomeScreen : public UIScreen {
     if (_chat_scroll_px <= 0) {
       _chat_scroll_px = 0;
       _chat_scroll_dir = 1;
-      _chat_pause_until = now + UI_CHAT_EDGE_PAUSE_MILLIS;
+      _chat_pause_until = smartui::optionalDeadlineAfter(
+          (uint32_t)now, (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
     } else if (_chat_scroll_px >= max_scroll) {
       _chat_scroll_px = max_scroll;
       _chat_scroll_dir = -1;
-      _chat_pause_until = now + UI_CHAT_EDGE_PAUSE_MILLIS;
+      _chat_pause_until = smartui::optionalDeadlineAfter(
+          (uint32_t)now, (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
     }
 
   }
@@ -4319,15 +4336,9 @@ class HomeScreen : public UIScreen {
 
   void adjustAdcMultiplier(float delta) {
     _adc_draft = clampAdcMultiplier(_adc_draft + delta);
-    _task->setAdcMultiplier(_adc_draft, false);
   }
 
   void cancelAdcEdit() {
-    if (_adc_edit) {
-      if (!_task->setAdcMultiplier(_node_prefs->adc_multiplier, false)) {
-        _task->setAdcMultiplier(0.0f, false);
-      }
-    }
     _adc_edit = false;
     _adc_draft = 0.0f;
   }
@@ -5756,14 +5767,20 @@ class HomeScreen : public UIScreen {
         break;
 #if UI_AUTO_ADVERT_PAGE == 1
       case HomePage::ADVERT_TIMER:
-        the_mesh.cycleAutoAdvertInterval();
-        _task->showAlert(autoAdvertLabel(), 800);
+        if (the_mesh.cycleAutoAdvertInterval()) {
+          _task->showAlert(autoAdvertLabel(), 800);
+        } else {
+          _task->showAlert("Не сохранено: память", 1400);
+        }
         break;
 #endif
 #if UI_CLIENT_REPEAT_PAGE == 1
       case HomePage::CLIENT_REPEAT:
-        the_mesh.toggleClientRepeat();
-        _task->showAlert(the_mesh.isClientRepeatEnabled() ? "Ретранс: ВКЛ" : "Ретранс: ВЫКЛ", 800);
+        if (the_mesh.toggleClientRepeat()) {
+          _task->showAlert(the_mesh.isClientRepeatEnabled() ? "Ретранс: ВКЛ" : "Ретранс: ВЫКЛ", 800);
+        } else {
+          _task->showAlert("Не сохранено: память", 1400);
+        }
         break;
 #endif
 #if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
@@ -5830,7 +5847,9 @@ class HomeScreen : public UIScreen {
         break;
       case HomePage::UNDO_SETTING:
         if (_compact_undo.available()) {
-          smartui::SettingUndo::Result result = _compact_undo.apply([]() { return the_mesh.savePrefs(); });
+          const NodePrefs current = *_node_prefs;
+          smartui::SettingUndo::Result result = _compact_undo.apply(
+              [&current]() { return the_mesh.commitPrefsOrRollback(current); });
           if (result == smartui::SettingUndo::Applied) {
             _task->applyImportedPrefs();
             _task->showAlert("Изменение отменено", 1000);
@@ -5867,9 +5886,13 @@ class HomeScreen : public UIScreen {
     bool favorite_config = page == HomePage::FAVORITE_SLOT_1 ||
                            page == HomePage::FAVORITE_SLOT_2 ||
                            page == HomePage::FAVORITE_SLOT_3;
-    if (prefs_changed && page != HomePage::SMART_PROFILE && !favorite_config) {
+    if (prefs_changed && page != HomePage::SMART_PROFILE && !favorite_config &&
+        _node_prefs->smart_profile_id != SMART_PROFILE_CUSTOM) {
+      NodePrefs after_action = *_node_prefs;
       _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
-      the_mesh.savePrefs();
+      if (!the_mesh.commitPrefsOrRollback(after_action)) {
+        _task->showAlert("Не сохранено: память", 1400);
+      }
     }
 #endif
     if (track_undo && prefs_changed) {
@@ -5902,12 +5925,10 @@ class HomeScreen : public UIScreen {
           if (_favorite_picker.selected(selected) && selected != favoriteIdAt(_favorite_picker_slot)) {
             NodePrefs before = *_node_prefs;
             setFavoriteId(_favorite_picker_slot, selected);
-            if (the_mesh.savePrefs()) {
+            if (the_mesh.commitPrefsOrRollback(before)) {
               rememberSettingUndo(before, HomePage::FAVORITE_SLOT_1 + _favorite_picker_slot);
               _task->showAlert("Избранное сохранено", 900);
             } else {
-              setFavoriteId(_favorite_picker_slot, _favorite_picker_slot == 0 ? before.favorite_setting_1 :
-                  (_favorite_picker_slot == 1 ? before.favorite_setting_2 : before.favorite_setting_3));
               _task->showAlert("Ошибка сохранения", 1100);
             }
           }
@@ -7489,6 +7510,20 @@ public:
     return !_settings_open && _page == HomePage::CLOCK;
   }
 
+  bool isIdleForNightPrompt() const {
+    if (_settings_open || _quick_reply_open || _shutdown_init) return false;
+#if UI_QUICK_REPLY_KEYBOARD
+    if (_quick_keyboard_open || _quick_confirm_open) return false;
+#endif
+#if UI_ADC_MULTIPLIER_PAGE == 1
+    if (_adc_edit || _adc_reset_confirm) return false;
+#endif
+#if UI_COMPACT_SETTINGS_MENU == 1
+    if (_compact_settings_depth != 0) return false;
+#endif
+    return _page == defaultHomePage() || isClockPage();
+  }
+
 #if UI_ADC_MULTIPLIER_PAGE == 1
   bool restoreAdcDefaultConfirmed() {
     if (!smartui::adcFactoryResetConfirmed(_settings_open, _page == HomePage::ADC_RESET,
@@ -8985,6 +9020,9 @@ public:
 #if UI_PHONE_GPS == 1
       phone_source = the_mesh.isPhoneGpsEnabled();
 #endif
+      const bool reports_input = !phone_source && nmea != NULL &&
+                                 nmea->supportsInputStatus();
+      const bool recent_input = reports_input && nmea->hasRecentInput();
       readGpsUiState(gps_state, gps_valid, sats);
       drawUiGpsStatusIcon(display, 0, y + 1, gps_state, gps_valid);
       display.drawTextLeftAlign(uiGpsStatusIconWidth(display) + 4, y,
@@ -9006,7 +9044,10 @@ public:
 
         if (!gps_valid) {
           y += row_step;
-          drawRichTextEllipsized(display, 0, y, display.width(), "Ожидание координат");
+          const char* wait_text = reports_input
+            ? (recent_input ? "Поиск спутников" : "Нет данных UART")
+            : "Ожидание координат";
+          drawRichTextEllipsized(display, 0, y, display.width(), wait_text);
         } else {
           const double latitude = phone_source
             ? sensors.node_lat : nmea->getLatitude() / 1000000.0;
@@ -9108,7 +9149,9 @@ public:
     } else if (_page == HomePage::ADC) {
       display.setColor(DisplayDriver::GREEN);
       display.setTextSize(1);
-      uint16_t batteryMilliVolts = _task->getBattMilliVolts();
+      uint16_t batteryMilliVolts = _adc_edit
+        ? _task->getAdcPreviewMilliVolts(_adc_draft)
+        : _task->getBattMilliVolts();
       float multiplier = _adc_edit ? _adc_draft : _task->getAdcMultiplier();
       char adc_buf[18];
       formatAdcMultiplier(adc_buf, sizeof(adc_buf), multiplier);
@@ -9509,8 +9552,11 @@ public:
 #endif
 #if UI_CLIENT_REPEAT_PAGE == 1
     if (c == KEY_ENTER && _settings_open && _page == HomePage::CLIENT_REPEAT) {
-      the_mesh.toggleClientRepeat();
-      _task->showAlert(the_mesh.isClientRepeatEnabled() ? "Ретранс: ВКЛ" : "Ретранс: ВЫКЛ", 900);
+      if (the_mesh.toggleClientRepeat()) {
+        _task->showAlert(the_mesh.isClientRepeatEnabled() ? "Ретранс: ВКЛ" : "Ретранс: ВЫКЛ", 900);
+      } else {
+        _task->showAlert("Не сохранено: память", 1400);
+      }
       return true;
     }
 #endif
@@ -9557,10 +9603,13 @@ public:
     }
 #if UI_AUTO_ADVERT_PAGE == 1
     if (c == KEY_ENTER && _settings_open && _page == HomePage::ADVERT_TIMER) {
-      the_mesh.cycleAutoAdvertInterval();
-      char alert[32];
-      snprintf(alert, sizeof(alert), "Анонс: %s", autoAdvertLabel());
-      _task->showAlert(alert, 900);
+      if (the_mesh.cycleAutoAdvertInterval()) {
+        char alert[32];
+        snprintf(alert, sizeof(alert), "Анонс: %s", autoAdvertLabel());
+        _task->showAlert(alert, 900);
+      } else {
+        _task->showAlert("Не сохранено: память", 1400);
+      }
       return true;
     }
 #endif
@@ -9593,10 +9642,6 @@ public:
         NodePrefs before = *_node_prefs;
 #endif
         if (_task->setAdcMultiplier(_adc_draft, true)) {
-#if UI_SMART_B11_EXTRAS == 1
-          _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
-          the_mesh.savePrefs();
-#endif
 #if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
           rememberSettingUndo(before, HomePage::ADC);
 #endif
@@ -9630,6 +9675,35 @@ public:
   }
 };
 
+class StorageRecoveryScreen : public UIScreen {
+public:
+  int render(DisplayDriver& display) override {
+    display.setColor(DisplayDriver::DARK);
+    display.fillRect(0, 0, display.width(), display.height());
+    display.setTextSize(1);
+    display.setBold(true);
+    display.setColor(DisplayDriver::RED);
+    const int line_h = display.getTextLineHeight() > 7
+      ? display.getTextLineHeight() : 8;
+    int y = display.height() / 2 - line_h * 2;
+    if (y < 0) y = 0;
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y,
+                                   display.width() - 4, "ОШИБКА ПАМЯТИ");
+    display.setBold(false);
+    display.setColor(DisplayDriver::LIGHT);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y + line_h,
+                                   display.width() - 4, "Сброс не завершен");
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y + line_h * 2,
+                                   display.width() - 4, "Обычная работа остановлена");
+    display.setColor(DisplayDriver::YELLOW);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y + line_h * 3,
+                                   display.width() - 4, "Удерж: перезапуск");
+    return 10000;
+  }
+
+  bool keepDisplayOn() const override { return true; }
+};
+
 class MsgPreviewScreen : public UIScreen {
   UITask* _task;
   mesh::RTCClock* _rtc;
@@ -9637,7 +9711,10 @@ class MsgPreviewScreen : public UIScreen {
   struct MsgEntry {
     uint32_t timestamp;
     uint32_t arrived_ms;
+    uint32_t generation;
     uint8_t notify_flags;
+    uint8_t sender_id_len;
+    uint8_t sender_id[PUB_KEY_SIZE];
     char sender[62];
     char msg[UI_UNREAD_TEXT_LEN];
   };
@@ -9672,20 +9749,50 @@ class MsgPreviewScreen : public UIScreen {
     return (entry.notify_flags & UI_MSG_FLAG_DIRECT) != 0;
   }
 
-  bool senderWasShownFromNewer(int offset) const {
-    const MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
-    for (int newer = 0; newer < offset; newer++) {
-      const MsgEntry& candidate = unread[unreadIndexFromNewest(newer)];
-      if (isDirectPreview(candidate) && strcmp(candidate.sender, entry.sender) == 0) return true;
+  bool sameSender(const MsgEntry& a, const MsgEntry& b) const {
+    if (a.sender_id_len != 0 || b.sender_id_len != 0) {
+      return a.sender_id_len == b.sender_id_len &&
+             a.sender_id_len != 0 &&
+             memcmp(a.sender_id, b.sender_id, a.sender_id_len) == 0;
+    }
+    return strcmp(a.sender, b.sender) == 0;
+  }
+
+  bool senderNameConflicts(const MsgEntry& entry) const {
+    if (entry.sender_id_len == 0) return false;
+    for (int offset = 0; offset < num_unread; offset++) {
+      const MsgEntry& candidate = unread[unreadIndexFromNewest(offset)];
+      if (&candidate != &entry && isDirectPreview(candidate) &&
+          strcmp(candidate.sender, entry.sender) == 0 &&
+          !sameSender(candidate, entry)) return true;
     }
     return false;
   }
 
-  int senderMessageCount(const char* sender) const {
+  void formatSenderLabel(const MsgEntry& entry, char* out, size_t out_len) const {
+    if (out_len == 0) return;
+    if (!senderNameConflicts(entry) || entry.sender_id_len < 2) {
+      StrHelper::strncpy(out, entry.sender, out_len);
+      return;
+    }
+    snprintf(out, out_len, "%s #%02X%02X", entry.sender,
+             entry.sender_id[0], entry.sender_id[1]);
+  }
+
+  bool senderWasShownFromNewer(int offset) const {
+    const MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
+    for (int newer = 0; newer < offset; newer++) {
+      const MsgEntry& candidate = unread[unreadIndexFromNewest(newer)];
+      if (isDirectPreview(candidate) && sameSender(candidate, entry)) return true;
+    }
+    return false;
+  }
+
+  int senderMessageCount(const MsgEntry& sender) const {
     int count = 0;
     for (int offset = 0; offset < num_unread; offset++) {
       const MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
-      if (isDirectPreview(entry) && strcmp(entry.sender, sender) == 0) count++;
+      if (isDirectPreview(entry) && sameSender(entry, sender)) count++;
     }
     return count;
   }
@@ -9747,13 +9854,15 @@ class MsgPreviewScreen : public UIScreen {
       const MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
       if (!isDirectPreview(entry) || senderWasShownFromNewer(offset)) continue;
 
-      snprintf(count_label, sizeof(count_label), "(%d)", senderMessageCount(entry.sender));
+      snprintf(count_label, sizeof(count_label), "(%d)", senderMessageCount(entry));
       const int count_w = unreadTextWidth(display, count_label);
       int name_w = body_w - count_w - 3;
       if (name_w < 1) name_w = body_w;
       if (draw && y >= y_start && y < display.height()) {
         display.setColor(DisplayDriver::YELLOW);
-        drawFittedUnreadText(display, body_x, y, name_w, entry.sender);
+        char sender_label[72];
+        formatSenderLabel(entry, sender_label, sizeof(sender_label));
+        drawFittedUnreadText(display, body_x, y, name_w, sender_label);
         if (count_w < body_w) {
           display.setColor(DisplayDriver::GREEN);
           drawUnreadTextLine(display, body_x + body_w - count_w, y, count_label);
@@ -9825,7 +9934,9 @@ public:
     scroll_entry = -1;
   }
 
-  void addPreview(uint8_t path_len, const char* from_name, const char* msg, uint8_t notify_flags) {
+  void addPreview(uint8_t path_len, const char* from_name, const char* msg,
+                  uint8_t notify_flags, uint32_t generation,
+                  const uint8_t* sender_id, uint8_t sender_id_len) {
     if (num_unread >= MAX_UNREAD_MSGS) {
       // The oldest direct frame is still queued for BLE, but no longer fits on
       // the node's small preview ring.  Treat the eviction like a local hide.
@@ -9837,7 +9948,14 @@ public:
     auto p = &unread[head];
     p->timestamp = _rtc->getCurrentTime();
     p->arrived_ms = millis();
+    p->generation = generation;
     p->notify_flags = notify_flags & (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
+    p->sender_id_len = sender_id != NULL && sender_id_len <= PUB_KEY_SIZE
+      ? sender_id_len : 0;
+    memset(p->sender_id, 0, sizeof(p->sender_id));
+    if (p->sender_id_len != 0) {
+      memcpy(p->sender_id, sender_id, p->sender_id_len);
+    }
     StrHelper::strncpy(p->sender, from_name != NULL && from_name[0] != 0 ? from_name : "Без имени",
                        sizeof(p->sender));
 
@@ -9890,7 +10008,8 @@ public:
       scroll_arrived_ms = latest_arrived_ms;
       scroll_px = 0;
       scroll_dir = 1;
-      scroll_pause_until = millis() + UI_CHAT_EDGE_PAUSE_MILLIS;
+      scroll_pause_until = smartui::optionalDeadlineAfter(
+          (uint32_t)millis(), (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
     }
     if (scroll_px > max_scroll) scroll_px = max_scroll;
     if (scroll_px < 0) scroll_px = 0;
@@ -9904,11 +10023,13 @@ public:
         if (scroll_px <= 0) {
           scroll_px = 0;
           scroll_dir = 1;
-          scroll_pause_until = now + UI_CHAT_EDGE_PAUSE_MILLIS;
+          scroll_pause_until = smartui::optionalDeadlineAfter(
+              (uint32_t)now, (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
         } else if (scroll_px >= max_scroll) {
           scroll_px = max_scroll;
           scroll_dir = -1;
-          scroll_pause_until = now + UI_CHAT_EDGE_PAUSE_MILLIS;
+          scroll_pause_until = smartui::optionalDeadlineAfter(
+              (uint32_t)now, (uint32_t)UI_CHAT_EDGE_PAUSE_MILLIS);
         }
       }
     }
@@ -10056,16 +10177,54 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   idle_saver = NULL;
 #endif
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
+  storage_recovery = new StorageRecoveryScreen();
   setCurrScreen(splash);
+}
+
+bool UITask::attachDisplay(DisplayDriver* display) {
+  if (display == NULL) return false;
+  display->turnOn();
+  if (!display->isOn()) return false;
+
+  _display = display;
+  if (_node_prefs != NULL) {
+#if UI_T096_PREMIUM_TFT
+    _node_prefs->ui_font = uiT096NormalizeFontProfile(_node_prefs->ui_font);
+    _display->setUiFont(uiOledFontForRole(_node_prefs->ui_font, UI_OLED_FONT_M));
+    _display->setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_M));
+#elif UI_V4_3_OLED_PROFILE
+    _node_prefs->ui_font = uiOledStyleFromFont(_node_prefs->ui_font);
+    _display->setUiFont(uiOledFontForRole(_node_prefs->ui_font, UI_OLED_FONT_M));
+    _display->setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_M));
+#else
+    if (_node_prefs->ui_font >= _display->getUiFontCount()) _node_prefs->ui_font = 0;
+    _display->setUiFont(_node_prefs->ui_font);
+    _display->setTextSize(1);
+#endif
+    _display->setUiTheme(_node_prefs->ui_theme);
+  }
+  if (_storage_recovery_active && storage_recovery != NULL) {
+    setCurrScreen(storage_recovery);
+  }
+  markDisplayWake(false);
+  return true;
 }
 
 void UITask::showAlert(const char* text, int duration_millis) {
   snprintf(_alert, sizeof(_alert), "%s", text ? text : "");
-  _alert_expiry = millis() + duration_millis;
+  _alert_expiry = smartui::optionalDeadlineAfter((uint32_t)millis(),
+                                                  (uint32_t)duration_millis);
 }
 
 void UITask::invalidateBatteryCache() {
   _battery_display.invalidate();
+}
+
+bool UITask::commitUiPrefs(const NodePrefs& before) {
+  if (the_mesh.commitPrefsOrRollback(before)) return true;
+  showAlert("Не сохранено: память", 1400);
+  _next_refresh = 0;
+  return false;
 }
 
 uint16_t UITask::getBattMilliVolts() const {
@@ -10099,14 +10258,10 @@ int16_t UITask::getTimezoneOffsetMinutes() const {
 bool UITask::setTimezoneOffsetMinutes(int16_t minutes, bool save) {
   if (_node_prefs == NULL || minutes < -720 || minutes > 840 ||
       (minutes % 30) != 0) return false;
-  const int16_t previous_minutes = _node_prefs->timezone_offset_minutes;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->timezone_offset_minutes = minutes;
   if (save) {
-    if (!the_mesh.savePrefs()) {
-      _node_prefs->timezone_offset_minutes = previous_minutes;
-      _next_refresh = 0;
-      return false;
-    }
+    if (!commitUiPrefs(before)) return false;
     notify(UIEventType::ack);
   }
   _next_refresh = 0;
@@ -10259,7 +10414,12 @@ void UITask::applyBoardLedsState() {
 }
 
 void UITask::toggleBoardLeds() {
-  the_mesh.toggleBoardLeds();
+  const bool enabled = !areBoardLedsEnabled();
+  if (!the_mesh.setBoardLedsEnabled(enabled)) {
+    applyBoardLedsState();
+    showAlert("Не сохранено: память", 1400);
+    return;
+  }
   applyBoardLedsState();
   showAlert(areBoardLedsEnabled() ? "LED платы: ВКЛ" : "LED платы: ВЫКЛ", 900);
 }
@@ -10287,7 +10447,10 @@ bool UITask::areMsgPopupsEnabled() const {
 }
 
 void UITask::toggleMsgPopups() {
-  the_mesh.toggleMsgPopups();
+  if (!the_mesh.setMsgPopupsEnabled(!areMsgPopupsEnabled())) {
+    showAlert("Не сохранено: память", 1400);
+    return;
+  }
   showAlert(areMsgPopupsEnabled() ? "Всплыв. сообщ.: ВКЛ" : "Всплыв. сообщ.: ВЫКЛ", 900);
   _next_refresh = 0;
 }
@@ -10297,7 +10460,10 @@ bool UITask::isUnreadLedEnabled() const {
 }
 
 void UITask::toggleUnreadLed() {
-  the_mesh.toggleUnreadLed();
+  if (!the_mesh.setUnreadLedEnabled(!isUnreadLedEnabled())) {
+    showAlert("Не сохранено: память", 1400);
+    return;
+  }
 #ifdef PIN_MSG_ALERT
   if (!isUnreadLedEnabled()) {
     digitalWrite(getMsgAlertPin(), PIN_MSG_ALERT_INACTIVE);
@@ -10325,8 +10491,9 @@ bool UITask::isOfflineDmLedEnabled() const {
 void UITask::toggleOfflineDmLed() {
   if (_node_prefs == NULL) return;
 
+  const NodePrefs before = *_node_prefs;
   _node_prefs->offline_dm_led_enabled = _node_prefs->offline_dm_led_enabled ? 0 : 1;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
 #ifdef PIN_MSG_ALERT
   if (!isOfflineDmLedEnabled() && !hasConnection() && (_important_msg_flags & UI_MSG_FLAG_DIRECT)) {
@@ -10346,8 +10513,9 @@ bool UITask::isBleDmLedEnabled() const {
 void UITask::toggleBleDmLed() {
   if (_node_prefs == NULL) return;
 
+  const NodePrefs before = *_node_prefs;
   _node_prefs->ble_dm_led_enabled = _node_prefs->ble_dm_led_enabled ? 0 : 1;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
 #ifdef PIN_MSG_ALERT
   if (!isBleDmLedEnabled() && hasConnection() && (_important_msg_flags & UI_MSG_FLAG_DIRECT)) {
@@ -10382,9 +10550,10 @@ void UITask::toggleLowBatteryShutdown() {
 #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
   if (_node_prefs == NULL) return;
 
+  const NodePrefs before = *_node_prefs;
   _node_prefs->low_battery_shutdown_enabled = _node_prefs->low_battery_shutdown_enabled ? 0 : 1;
+  if (!commitUiPrefs(before)) return;
   _low_batt_strikes = 0;  // Start a fresh confirmation sequence for the new threshold.
-  the_mesh.savePrefs();
   char alert[48];
   uint16_t threshold = getLowBatteryShutdownThreshold();
   if (threshold) {
@@ -10506,11 +10675,13 @@ void UITask::setUiFontChoice(uint8_t choice) {
   uint8_t count = getUiFontCount();
   if (count == 0) count = 1;
   if (choice >= count) choice = 0;
+  const NodePrefs before = *_node_prefs;
 #if UI_T096_PREMIUM_TFT
   _node_prefs->ui_font = UI_T096_FONT_VISIBLE_FIRST + choice;
 #else
   _node_prefs->ui_font = choice;
 #endif
+  if (!commitUiPrefs(before)) return;
 #if UI_T096_PREMIUM_TFT
   _display->setUiFont(uiOledFontForRole(_node_prefs->ui_font, UI_OLED_FONT_M));
   _display->setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_M));
@@ -10521,8 +10692,6 @@ void UITask::setUiFontChoice(uint8_t choice) {
   _display->setUiFont(_node_prefs->ui_font);
   _display->setTextSize(1);
 #endif
-  the_mesh.savePrefs();
-
   char alert[56];
   snprintf(alert, sizeof(alert), "Шрифт: %s", getUiFontName());
   showAlert(alert, 1000);
@@ -10533,9 +10702,10 @@ void UITask::setUiThemeChoice(uint8_t choice) {
   uint8_t count = getUiThemeCount();
   if (count == 0) count = 1;
   if (choice >= count) choice = 0;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->ui_theme = choice;
+  if (!commitUiPrefs(before)) return;
   _display->setUiTheme(_node_prefs->ui_theme);
-  the_mesh.savePrefs();
 
   char alert[56];
   snprintf(alert, sizeof(alert), "Цвет: %s", _display->getUiThemeName(_node_prefs->ui_theme));
@@ -10556,8 +10726,9 @@ void UITask::cycleUiTheme() {
 
 void UITask::cycleUiTopColor() {
   if (_node_prefs == NULL) return;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->ui_top_color = (_node_prefs->ui_top_color + 1) % 6;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[40];
   snprintf(alert, sizeof(alert), "Верх: %s", getUiTopColorName());
@@ -10566,8 +10737,9 @@ void UITask::cycleUiTopColor() {
 
 void UITask::cycleUiBottomColor() {
   if (_node_prefs == NULL) return;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->ui_bottom_color = (_node_prefs->ui_bottom_color + 1) % 6;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[40];
   snprintf(alert, sizeof(alert), "Низ: %s", getUiBottomColorName());
@@ -10596,8 +10768,9 @@ uint32_t UITask::getBacklightTimeoutMillis() const {
 
 void UITask::cycleBacklightTimeout() {
   if (_node_prefs == NULL) return;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->backlight_timeout_idx = (_node_prefs->backlight_timeout_idx + 1) % 3;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
   extendAutoOff();
 
   char alert[40];
@@ -10663,6 +10836,7 @@ void UITask::applyImportedPrefs() {
 void UITask::cycleSmartProfile() {
 #if UI_SMART_B11_EXTRAS == 1
   if (_node_prefs == NULL) return;
+  const NodePrefs before = *_node_prefs;
   uint8_t profile = _node_prefs->smart_profile_id;
   if (profile < SMART_PROFILE_QUIET || profile >= SMART_PROFILE_NIGHT) {
     profile = SMART_PROFILE_QUIET;
@@ -10695,8 +10869,8 @@ void UITask::cycleSmartProfile() {
 #endif
   }
 
+  if (!commitUiPrefs(before)) return;
   applyImportedPrefs();
-  the_mesh.savePrefs();
   char alert[40];
   snprintf(alert, sizeof(alert), "Профиль: %s", getSmartProfileName());
   showAlert(alert, 1000);
@@ -10948,6 +11122,7 @@ const char* UITask::getNotifyToneName(uint8_t tone_id) const {
 void UITask::setCommonNotifyTone(uint8_t tone_id) {
 #ifdef PIN_MSG_TONE
   if (_node_prefs == NULL || tone_id >= notify_tone_count) return;
+  const NodePrefs before = *_node_prefs;
   bool changed = _node_prefs->notify_tone_id != tone_id ||
                  _node_prefs->notify_tone_system_id != tone_id ||
                  _node_prefs->notify_tone_dm_id != tone_id ||
@@ -10956,7 +11131,7 @@ void UITask::setCommonNotifyTone(uint8_t tone_id) {
   _node_prefs->notify_tone_system_id = tone_id;
   _node_prefs->notify_tone_dm_id = tone_id;
   _node_prefs->notify_tone_mention_id = tone_id;
-  if (changed) the_mesh.savePrefs();
+  if (changed && !commitUiPrefs(before)) return;
 
   char alert[48];
   snprintf(alert, sizeof(alert), "Мелодия: %s", getNotifyToneName(tone_id));
@@ -11077,11 +11252,12 @@ void UITask::cycleImportantNotifyMode() {
   uint8_t mode = getImportantNotifyMode();
   uint8_t next = uiNextNotifyMode(mode, supported);
 
+  const NodePrefs before = *_node_prefs;
   _node_prefs->important_notify_mode = next;
+  if (!commitUiPrefs(before)) return;
   if (next == NOTIFY_MODE_SILENT) {
     clearImportantNotify();
   }
-  the_mesh.savePrefs();
 
   char alert[48];
   snprintf(alert, sizeof(alert), "ЛС/упомин.: %s", getImportantNotifyModeName());
@@ -11170,12 +11346,16 @@ void UITask::setNotifyLedPin(int pin) {
       (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
 #endif
   if (getMsgAlertPin() == pin) return;
+  const NodePrefs before = *_node_prefs;
   configureMsgAlertPin(pin);
   _node_prefs->notify_gpio_pin = pin;
 #if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
   _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
 #endif
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) {
+    configureMsgAlertPin(before.notify_gpio_pin);
+    return;
+  }
   char alert[32];
   snprintf(alert, sizeof(alert), "Свет: D%d", pin);
   showAlert(alert, 900);
@@ -11189,12 +11369,16 @@ void UITask::setNotifyTonePin(int pin) {
 #if defined(PIN_MSG_TONE) && UI_NOTIFY_GPIO_SELECT
   if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
   if (isNotifyToneBridgeEnabled() || getMsgTonePin() == pin) return;
+  const NodePrefs before = *_node_prefs;
   configureMsgTonePin(pin);
   _node_prefs->notify_tone_pin = pin;
 #if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
   _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
 #endif
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) {
+    configureMsgTonePin(before.notify_tone_pin);
+    return;
+  }
   char alert[32];
   snprintf(alert, sizeof(alert), "Зумер: D%d", pin);
   showAlert(alert, 900);
@@ -11212,12 +11396,16 @@ void UITask::setNotifyVibePin(int pin) {
       (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
 #endif
   if (getMsgVibePin() == pin) return;
+  const NodePrefs before = *_node_prefs;
   configureMsgVibePin(pin);
   _node_prefs->notify_vibe_pin = pin;
 #if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
   _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
 #endif
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) {
+    configureMsgVibePin(before.notify_vibe_pin);
+    return;
+  }
   char alert[32];
   snprintf(alert, sizeof(alert), "Вибро: D%d", pin);
   showAlert(alert, 900);
@@ -11237,8 +11425,9 @@ void UITask::cycleNotifyDmSound() {
 #if UI_SMART_B12_TONE_LIST == 1
   setCommonNotifyTone((getNotifyToneId() + 1) % notify_tone_count);
 #else
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_dm_id = (_node_prefs->notify_tone_dm_id + 1) % notify_tone_count;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[48];
   snprintf(alert, sizeof(alert), "ЛС: %s", getNotifyDmSoundName());
@@ -11254,8 +11443,9 @@ void UITask::cycleNotifyMentionSound() {
 #if UI_SMART_B12_TONE_LIST == 1
   setCommonNotifyTone((getNotifyToneId() + 1) % notify_tone_count);
 #else
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_mention_id = (_node_prefs->notify_tone_mention_id + 1) % notify_tone_count;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[48];
   snprintf(alert, sizeof(alert), "Упомин.: %s", getNotifyMentionSoundName());
@@ -11271,9 +11461,10 @@ void UITask::cycleNotifySystemSound() {
 #if UI_SMART_B12_TONE_LIST == 1
   setCommonNotifyTone((getNotifyToneId() + 1) % notify_tone_count);
 #else
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_system_id = (_node_prefs->notify_tone_system_id + 1) % notify_tone_count;
   _node_prefs->notify_tone_id = _node_prefs->notify_tone_system_id;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[48];
   snprintf(alert, sizeof(alert), "Система: %s", getNotifySystemSoundName());
@@ -11294,11 +11485,12 @@ void UITask::cycleNotifyToneVolume() {
 void UITask::setNotifyToneVolume(uint8_t volume) {
 #if defined(PIN_MSG_TONE) && UI_TONE_HIGH_DRIVE_PAGE != 1
   if (!_node_prefs || volume < 1 || volume > 10 || getNotifyToneVolume() == volume) return;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_volume = volume;
 #if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
   _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
 #endif
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[32];
   snprintf(alert, sizeof(alert), "Громк: %u/10", volume);
@@ -11312,9 +11504,10 @@ void UITask::setNotifyToneVolume(uint8_t volume) {
 void UITask::toggleNotifyTone8Bit() {
 #if UI_TONE_8BIT_PAGE == 1 && defined(PIN_MSG_TONE)
   if (_node_prefs == NULL) return;
-  stopNotifyOutputs();
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_8bit_enabled = isNotifyTone8BitEnabled() ? 0 : 1;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
+  stopNotifyOutputs();
   showAlert(isNotifyTone8BitEnabled() ? "Звук: 8-bit" : "Звук: обычный", 900);
   startMsgTone();
 #endif
@@ -11323,10 +11516,11 @@ void UITask::toggleNotifyTone8Bit() {
 void UITask::toggleNotifyToneHighDrive() {
 #if UI_TONE_HIGH_DRIVE_PAGE == 1 && defined(PIN_MSG_TONE)
   if (_node_prefs == NULL) return;
-  stopNotifyOutputs();
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_high_drive_enabled = isNotifyToneHighDriveEnabled() ? 0 : 1;
   _node_prefs->notify_tone_volume = 10;
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
+  stopNotifyOutputs();
   showAlert(isNotifyToneHighDriveEnabled() ? "Громкость: максимум" : "Громкость: обычная", 1000);
   startMsgTone();
 #endif
@@ -11353,11 +11547,12 @@ void UITask::setNotifyToneResonanceHz(uint16_t frequency) {
 #if UI_TONE_RESONANCE_PAGE == 1 && defined(PIN_MSG_TONE)
   if (!_node_prefs || frequency < 1800 || frequency > 4200 ||
       (frequency - 1800) % 400 != 0 || getNotifyToneResonanceHz() == frequency) return;
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_resonance_hz = frequency;
 #if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
   _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
 #endif
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
 
   char alert[40];
   snprintf(alert, sizeof(alert), "Тест: %u Гц", frequency);
@@ -11372,6 +11567,7 @@ void UITask::toggleNotifyToneBridge() {
 #if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
   if (_node_prefs == NULL) return;
 
+  const NodePrefs before = *_node_prefs;
   stopNotifyOutputs();
   bool enable = !isNotifyToneBridgeEnabled();
   _node_prefs->notify_tone_bridge_enabled = enable ? 1 : 0;
@@ -11397,7 +11593,15 @@ void UITask::toggleNotifyToneBridge() {
     configureMsgTonePin(DEFAULT_NOTIFY_TONE_PIN);
   }
 
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) {
+    uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
+#ifdef PIN_MSG_ALERT
+    configureMsgAlertPin(before.notify_gpio_pin);
+#endif
+    configureMsgTonePin(before.notify_tone_pin);
+    configureMsgVibePin(before.notify_vibe_pin);
+    return;
+  }
   char alert[48];
   if (enable) {
     snprintf(alert, sizeof(alert), "МОСТ: D%d-D%d", DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
@@ -11426,7 +11630,12 @@ void UITask::cycleNotifyMode() {
   uint8_t mode = getNotifyMode();
   uint8_t next = uiNextNotifyMode(mode, supported);
 
+  const NodePrefs before = *_node_prefs;
   _node_prefs->notify_mode = next;
+#ifdef PIN_BUZZER
+  _node_prefs->buzzer_quiet = (next & NOTIFY_MODE_TONE) ? 0 : 1;
+#endif
+  if (!commitUiPrefs(before)) return;
 #ifdef PIN_MSG_TONE
   if ((next & NOTIFY_MODE_TONE) == 0) {
     silenceMsgTonePin(getMsgTonePin());
@@ -11448,10 +11657,8 @@ void UITask::cycleNotifyMode() {
     stopMsgVibe();
   }
 #ifdef PIN_BUZZER
-  _node_prefs->buzzer_quiet = (next & NOTIFY_MODE_TONE) ? 0 : 1;
   buzzer.quiet(_node_prefs->buzzer_quiet);
 #endif
-  the_mesh.savePrefs();
 
   char alert[48];
   snprintf(alert, sizeof(alert), "Сигналы: %s", getNotifyModeName());
@@ -11632,7 +11839,8 @@ void UITask::triggerMsgVibe() {
     return;
   }
   pinMode(pin, OUTPUT);
-  _msg_vibe_until = millis() + MSG_VIBE_BURST_MILLIS;
+  _msg_vibe_until = smartui::optionalDeadlineAfter(
+      (uint32_t)millis(), (uint32_t)MSG_VIBE_BURST_MILLIS);
   _msg_vibe_next = 0;
   _msg_vibe_on = false;
   messageVibeHandler();
@@ -11655,7 +11863,9 @@ void UITask::messageVibeHandler() {
 
   _msg_vibe_on = !_msg_vibe_on;
   digitalWrite(pin, _msg_vibe_on ? HIGH : LOW);
-  _msg_vibe_next = now + (_msg_vibe_on ? MSG_VIBE_ON_MILLIS : MSG_VIBE_OFF_MILLIS);
+  _msg_vibe_next = smartui::optionalDeadlineAfter(
+      (uint32_t)now,
+      (uint32_t)(_msg_vibe_on ? MSG_VIBE_ON_MILLIS : MSG_VIBE_OFF_MILLIS));
 }
 
 void UITask::previewNotifyMode() {
@@ -11727,18 +11937,17 @@ void UITask::stopNotifyOutputs() {
 #endif
 }
 
-void UITask::finishImportantNotify(bool stop_tone) {
+void UITask::finishImportantNotify(bool stop_tone, bool clear_pending) {
   if (!_important_notify_active &&
       _important_msg_flags == UI_MSG_FLAG_NONE &&
-      _ble_smart_notify_flags == UI_MSG_FLAG_NONE) return;
+      (!clear_pending || _ble_smart_notify_flags == UI_MSG_FLAG_NONE)) return;
 
   _important_notify_active = false;
   _important_msg_flags = UI_MSG_FLAG_NONE;
-  _ble_smart_notify_flags = UI_MSG_FLAG_NONE;
+  _important_notify_generation = 0;
   _important_notify_tone_started = false;
   _important_notify_tone_repeat_suppressed = false;
   _important_notify_visual_repeat_suppressed = false;
-  _ble_smart_notify_read_zero_seen = false;
   _important_notify_visual_until = 0;
   _important_notify_led_next = 0;
   _important_notify_tone_next = 0;
@@ -11746,7 +11955,7 @@ void UITask::finishImportantNotify(bool stop_tone) {
   _important_notify_led_burst_step = 0;
   _important_notify_tone_burst_step = 0;
   _important_notify_vibe_burst_step = 0;
-  _ble_smart_notify_due = 0;
+  if (clear_pending) clearBleSmartNotify();
 
   if (stop_tone) {
     stopNotifyOutputs();
@@ -11782,27 +11991,13 @@ void UITask::toggleNotificationsMuted() {
 
   // A manual change owns the mute state from this point on.  Morning auto-unmute
   // must never undo a mute that the user selected manually.
+  const NodePrefs before = *_node_prefs;
   _node_prefs->night_quiet_active = 0;
   _node_prefs->notifications_muted = _node_prefs->notifications_muted ? 0 : 1;
+  if (!commitUiPrefs(before)) return;
   if (_node_prefs->notifications_muted) {
-    _important_notify_active = false;
-    _important_msg_flags = UI_MSG_FLAG_NONE;
-    _ble_smart_notify_flags = UI_MSG_FLAG_NONE;
-    _important_notify_tone_started = false;
-    _important_notify_tone_repeat_suppressed = false;
-    _important_notify_visual_repeat_suppressed = false;
-    _ble_smart_notify_read_zero_seen = false;
-    _important_notify_visual_until = 0;
-    _important_notify_led_next = 0;
-    _important_notify_tone_next = 0;
-    _important_notify_vibe_next = 0;
-    _important_notify_led_burst_step = 0;
-    _important_notify_tone_burst_step = 0;
-    _important_notify_vibe_burst_step = 0;
-    _ble_smart_notify_due = 0;
-    stopNotifyOutputs();
+    clearImportantNotify();
   }
-  the_mesh.savePrefs();
   showAlert(_node_prefs->notifications_muted ? "Тишина: ВКЛ" : "Тишина: ВЫКЛ", 900);
   _next_refresh = 0;
 }
@@ -11815,17 +12010,20 @@ void UITask::closeNightPrompt(bool enable_quiet, bool timed_out) {
   _night_prompt_expires = 0;
   _night_prompt_yes = true;
 
+  const NodePrefs before = *_node_prefs;
   if (enable_quiet) {
     _node_prefs->night_quiet_active = 1;
     _node_prefs->notifications_muted = 1;
-    stopNotifyOutputs();
   } else {
     _node_prefs->night_quiet_active = 0;
   }
-  the_mesh.savePrefs();
-
-  if (!timed_out) {
-    showAlert(enable_quiet ? "Ночной режим: ВКЛ" : "Ночной режим: НЕТ", 1200);
+  if (!the_mesh.commitPrefsOrRollback(before)) {
+    if (!timed_out) showAlert("Не сохранено: память", 1400);
+  } else {
+    if (enable_quiet) stopNotifyOutputs();
+    if (!timed_out) {
+      showAlert(enable_quiet ? "Ночной режим: ВКЛ" : "Ночной режим: НЕТ", 1200);
+    }
   }
   _last_activity_ms = millis();
   extendAutoOff();
@@ -11842,7 +12040,8 @@ bool UITask::handleNightPromptInput(char c) {
 
   if (c == KEY_NEXT || c == KEY_PREV || c == KEY_LEFT || c == KEY_RIGHT) {
     _night_prompt_yes = !_night_prompt_yes;
-    _night_prompt_expires = millis() + UI_NIGHT_MODE_PROMPT_TIMEOUT_MS;
+    _night_prompt_expires = smartui::optionalDeadlineAfter(
+        (uint32_t)millis(), (uint32_t)UI_NIGHT_MODE_PROMPT_TIMEOUT_MS);
     _next_refresh = 0;
     return true;
   }
@@ -11897,7 +12096,7 @@ void UITask::renderNightPrompt(DisplayDriver& display) {
 
 void UITask::nightModeHandler() {
 #if UI_NIGHT_MODE_PROMPT
-  if (_node_prefs == NULL || _display == NULL) return;
+  if (_node_prefs == NULL || _display == NULL || _storage_recovery_active) return;
 
   if (_night_prompt_active) {
     if (_night_prompt_expires != 0 &&
@@ -11918,12 +12117,13 @@ void UITask::nightModeHandler() {
   if (_node_prefs->night_quiet_active) {
     bool morning = minute_of_day >= UI_NIGHT_MODE_END_MINUTE &&
                    minute_of_day < UI_NIGHT_MODE_PROMPT_MINUTE;
-    bool missed_morning = local_day != _node_prefs->night_prompt_day &&
+    bool missed_morning = local_day > _node_prefs->night_prompt_day &&
                           minute_of_day >= UI_NIGHT_MODE_PROMPT_MINUTE;
     if (morning || missed_morning) {
+      const NodePrefs before = *_node_prefs;
       _node_prefs->night_quiet_active = 0;
       _node_prefs->notifications_muted = 0;
-      the_mesh.savePrefs();
+      if (!the_mesh.commitPrefsOrRollback(before)) return;
       _next_refresh = 0;
     } else {
       return;
@@ -11932,6 +12132,10 @@ void UITask::nightModeHandler() {
 
   if (minute_of_day < UI_NIGHT_MODE_PROMPT_MINUTE ||
       _node_prefs->night_prompt_day == local_day) return;
+
+  // Defer before recording the day.  A background prompt must not consume an
+  // active editor, picker, quick reply, or shutdown confirmation.
+  if (curr != home || home == NULL || !((HomeScreen*)home)->isIdleForNightPrompt()) return;
 
   // A night-mode suggestion must never cover or steal input from a message.
   // Keep the offer eligible until every pending notification/output is idle.
@@ -11947,14 +12151,18 @@ void UITask::nightModeHandler() {
 
   // Remember the offer before showing it, so a reset cannot make the node
   // repeatedly chirp during the same night.
+  const NodePrefs before = *_node_prefs;
   _node_prefs->night_prompt_day = local_day;
-  the_mesh.savePrefs();
+  if (!the_mesh.commitPrefsOrRollback(before)) {
+    showAlert("Не сохранено: память", 1400);
+    return;
+  }
   if (areNotificationsMuted()) return;
 
   _night_prompt_active = true;
   _night_prompt_yes = true;
-  _night_prompt_expires = millis() + UI_NIGHT_MODE_PROMPT_TIMEOUT_MS;
-  gotoHomeFirstScreen();
+  _night_prompt_expires = smartui::optionalDeadlineAfter(
+      (uint32_t)millis(), (uint32_t)UI_NIGHT_MODE_PROMPT_TIMEOUT_MS);
   _display->turnOn();
   markDisplayWake(false);
 #if AUTO_OFF_MILLIS > 0
@@ -11967,7 +12175,8 @@ void UITask::nightModeHandler() {
 #endif
 }
 
-void UITask::beginImportantNotify(uint8_t flags, bool suppress_tone_repeats) {
+void UITask::beginImportantNotify(uint8_t flags, uint32_t generation,
+                                  bool suppress_tone_repeats) {
   flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
   if (flags == UI_MSG_FLAG_NONE || areNotificationsMuted() || getImportantNotifyMode() == NOTIFY_MODE_SILENT) return;
 
@@ -11975,15 +12184,35 @@ void UITask::beginImportantNotify(uint8_t flags, bool suppress_tone_repeats) {
   // duplicate delivery callbacks must not restart a melody or postpone the
   // next reminder; only importantNotifyHandler starts subsequent series.
   if (_important_notify_active) {
-    _important_msg_flags |= flags;
-    if (suppress_tone_repeats) {
-      _important_notify_tone_repeat_suppressed = true;
+    const bool new_generation = generation != 0 &&
+                                generation != _important_notify_generation;
+    if (new_generation) {
+      _important_notify_generation = generation;
+      _important_msg_flags = flags;
+      _important_notify_tone_repeat_suppressed = suppress_tone_repeats;
+      _important_notify_visual_repeat_suppressed = suppress_tone_repeats;
+      _important_notify_visual_until = suppress_tone_repeats
+        ? smartui::optionalDeadlineAfter(
+            (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS)
+        : 0;
+      _important_notify_led_next = 0;
+      if (!suppress_tone_repeats && _important_notify_tone_started &&
+          _important_notify_tone_next == 0) {
+        _important_notify_tone_next = smartui::optionalDeadlineAfter(
+            (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
+      }
+    } else {
+      _important_msg_flags |= flags;
+      if (suppress_tone_repeats) {
+        _important_notify_tone_repeat_suppressed = true;
+      }
     }
     return;
   }
 
   _important_notify_active = true;
-  _important_msg_flags |= flags;
+  _important_msg_flags = flags;
+  _important_notify_generation = generation;
   _important_notify_tone_started = false;
   _important_notify_tone_repeat_suppressed = suppress_tone_repeats;
   _important_notify_visual_repeat_suppressed = false;
@@ -11991,7 +12220,8 @@ void UITask::beginImportantNotify(uint8_t flags, bool suppress_tone_repeats) {
 #if UI_BLE_READ_SUPPRESSES_IMPORTANT_VISUAL_REPEAT
   if (suppress_tone_repeats) {
     _important_notify_visual_repeat_suppressed = true;
-    _important_notify_visual_until = millis() + UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS;
+    _important_notify_visual_until = smartui::optionalDeadlineAfter(
+        (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS);
   }
 #endif
   _important_notify_led_next = 0;
@@ -12005,20 +12235,30 @@ void UITask::beginImportantNotify(uint8_t flags, bool suppress_tone_repeats) {
 
 void UITask::clearBleSmartNotify() {
   _ble_smart_notify_flags = UI_MSG_FLAG_NONE;
+  _ble_smart_notify_generation = 0;
   _ble_smart_notify_read_zero_seen = false;
   _ble_smart_notify_due = 0;
 }
 
-void UITask::scheduleBleSmartNotify(uint8_t flags) {
+void UITask::scheduleBleSmartNotify(uint8_t flags, uint32_t generation) {
 #if UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS > 0
   flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
   if (flags == UI_MSG_FLAG_NONE) return;
 
-  if (_ble_smart_notify_flags == UI_MSG_FLAG_NONE) {
+  const bool new_generation = generation != 0 &&
+                              generation != _ble_smart_notify_generation;
+  if (_ble_smart_notify_flags == UI_MSG_FLAG_NONE || new_generation) {
+    _ble_smart_notify_flags = flags;
+    _ble_smart_notify_generation = generation;
     _ble_smart_notify_read_zero_seen = false;
+    _ble_smart_notify_due = smartui::optionalDeadlineAfter(
+        (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS);
+    _next_refresh = 0;
+    return;
   }
   _ble_smart_notify_flags |= flags;
-  unsigned long due = millis() + UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS;
+  unsigned long due = smartui::optionalDeadlineAfter(
+      (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS);
   if (_ble_smart_notify_due == 0 ||
       smartui::deadlinePending((uint32_t)due, (uint32_t)_ble_smart_notify_due)) {
     _ble_smart_notify_due = due;
@@ -12026,6 +12266,7 @@ void UITask::scheduleBleSmartNotify(uint8_t flags) {
   _next_refresh = 0;
 #else
   (void)flags;
+  (void)generation;
 #endif
 }
 
@@ -12043,14 +12284,17 @@ void UITask::bleSmartNotifyHandler() {
                                              (uint32_t)_ble_smart_notify_due);
   if (!hasConnection()) {
     uint8_t flags = _ble_smart_notify_flags;
+    uint32_t generation = _ble_smart_notify_generation;
+    bool transferred = _ble_smart_notify_read_zero_seen;
     clearBleSmartNotify();
-    beginImportantNotify(flags, false);
+    beginImportantNotify(flags, generation, transferred);
     return;
   }
 
   if (!due) return;
 
   uint8_t flags = _ble_smart_notify_flags;
+  uint32_t generation = _ble_smart_notify_generation;
 #if UI_SMART_NOTIFY_WATCHER_CANCEL_PENDING_ON_BLE_READ
   if (_ble_smart_notify_read_zero_seen) {
     clearBleSmartNotify();
@@ -12060,16 +12304,16 @@ void UITask::bleSmartNotifyHandler() {
 #endif
   bool suppress_tone_repeats = _ble_smart_notify_read_zero_seen;
   clearBleSmartNotify();
-  beginImportantNotify(flags, suppress_tone_repeats);
+  beginImportantNotify(flags, generation, suppress_tone_repeats);
 #endif
 }
 
-void UITask::startImportantNotify(uint8_t flags) {
+void UITask::startImportantNotify(uint8_t flags, uint32_t generation) {
   flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
   if (flags == UI_MSG_FLAG_NONE || areNotificationsMuted() || getImportantNotifyMode() == NOTIFY_MODE_SILENT) return;
 #if UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS > 0
   if (hasConnection()) {
-    scheduleBleSmartNotify(flags);
+    scheduleBleSmartNotify(flags, generation);
     return;
   }
 #elif UI_IMPORTANT_NOTIFY_LOCAL_ONLY_WHEN_DISCONNECTED
@@ -12079,7 +12323,7 @@ void UITask::startImportantNotify(uint8_t flags) {
   }
 #endif
 
-  beginImportantNotify(flags, false);
+  beginImportantNotify(flags, generation, false);
 }
 
 void UITask::clearImportantNotify() {
@@ -12108,7 +12352,8 @@ void UITask::importantNotifyHandler() {
 #if UI_BLE_READ_SUPPRESSES_IMPORTANT_VISUAL_REPEAT
   if (allow_visual && _important_notify_visual_repeat_suppressed) {
     if (_important_notify_visual_until == 0) {
-      _important_notify_visual_until = now + UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS;
+      _important_notify_visual_until = smartui::optionalDeadlineAfter(
+          (uint32_t)now, (uint32_t)UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS);
     }
     allow_visual = smartui::deadlinePending((uint32_t)now,
                                             (uint32_t)_important_notify_visual_until);
@@ -12136,7 +12381,10 @@ void UITask::importantNotifyHandler() {
       smartui::deadlineDueOrImmediate((uint32_t)now,
                                       (uint32_t)_important_notify_led_next)) {
     triggerMsgAlert();
-    _important_notify_led_next = now + nextImportantNotifyDelay(_important_notify_led_burst_step, UI_IMPORTANT_NOTIFY_LED_REPEAT_MS);
+    _important_notify_led_next = smartui::optionalDeadlineAfter(
+        (uint32_t)now,
+        (uint32_t)nextImportantNotifyDelay(_important_notify_led_burst_step,
+                                           UI_IMPORTANT_NOTIFY_LED_REPEAT_MS));
   }
 #elif defined(PIN_MSG_ALERT)
   if (!allow_visual) {
@@ -12147,7 +12395,10 @@ void UITask::importantNotifyHandler() {
       smartui::deadlineDueOrImmediate((uint32_t)now,
                                       (uint32_t)_important_notify_led_next)) {
     triggerMsgAlert();
-    _important_notify_led_next = now + nextImportantNotifyDelay(_important_notify_led_burst_step, UI_IMPORTANT_NOTIFY_LED_REPEAT_MS);
+    _important_notify_led_next = smartui::optionalDeadlineAfter(
+        (uint32_t)now,
+        (uint32_t)nextImportantNotifyDelay(_important_notify_led_burst_step,
+                                           UI_IMPORTANT_NOTIFY_LED_REPEAT_MS));
   }
 #endif
 
@@ -12170,9 +12421,8 @@ void UITask::importantNotifyHandler() {
       // A series already contains UI_IMPORTANT_NOTIFY_TONE_PLAYS melodies.
       // Do not apply the separate LED/vibration burst gap to sound: that
       // would add another complete series a few seconds after the first.
-      _important_notify_tone_next = (uint32_t)now + (uint32_t)UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS;
-      // Zero means "not scheduled"; retain the reminder across millis wrap.
-      if (_important_notify_tone_next == 0) _important_notify_tone_next = 1;
+      _important_notify_tone_next = smartui::optionalDeadlineAfter(
+          (uint32_t)now, (uint32_t)UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
     }
   }
 #endif
@@ -12180,7 +12430,10 @@ void UITask::importantNotifyHandler() {
       smartui::deadlineDueOrImmediate((uint32_t)now,
                                       (uint32_t)_important_notify_vibe_next)) {
     triggerMsgVibe();
-    _important_notify_vibe_next = now + nextImportantNotifyDelay(_important_notify_vibe_burst_step, UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS);
+    _important_notify_vibe_next = smartui::optionalDeadlineAfter(
+        (uint32_t)now,
+        (uint32_t)nextImportantNotifyDelay(_important_notify_vibe_burst_step,
+                                           UI_IMPORTANT_NOTIFY_TONE_REPEAT_MS));
   }
 }
 
@@ -12196,7 +12449,8 @@ void UITask::triggerMsgAlert() {
     return;
   }
   digitalWrite(alert_pin, PIN_MSG_ALERT_ACTIVE);
-  _msg_alert_until = millis() + MSG_ALERT_ON_MILLIS;
+  _msg_alert_until = smartui::optionalDeadlineAfter(
+      (uint32_t)millis(), (uint32_t)MSG_ALERT_ON_MILLIS);
 }
 
 void UITask::messageAlertHandler() {
@@ -12342,8 +12596,11 @@ void UITask::messageToneHandler() {
       _msg_tone_step = 0;
       _msg_tone_fx_remaining = 0;
       _msg_tone_fx_phase = 0;
-      _msg_tone_next = millis() +
-        (_important_notify_active ? UI_IMPORTANT_NOTIFY_TONE_REPEAT_GAP_MS : UI_NOTIFY_TONE_REPEAT_GAP_MS);
+      _msg_tone_next = smartui::optionalDeadlineAfter(
+          (uint32_t)millis(),
+          (uint32_t)(_important_notify_active
+              ? UI_IMPORTANT_NOTIFY_TONE_REPEAT_GAP_MS
+              : UI_NOTIFY_TONE_REPEAT_GAP_MS));
       _msg_tone_off = 0;
       return;
     }
@@ -12419,14 +12676,14 @@ void UITask::messageToneHandler() {
 
   uint16_t on_millis = getMsgToneOnMillis(duration, freq);
   if (freq != 0 && on_millis < duration) {
-    _msg_tone_off = millis() + on_millis;
+    _msg_tone_off = smartui::optionalDeadlineAfter((uint32_t)millis(), on_millis);
   }
   if (advance_step) {
     _msg_tone_step++;
     _msg_tone_fx_remaining = 0;
     _msg_tone_fx_phase = 0;
   }
-  _msg_tone_next = millis() + duration;
+  _msg_tone_next = smartui::optionalDeadlineAfter((uint32_t)millis(), duration);
 }
 #endif
 
@@ -12436,7 +12693,11 @@ void UITask::msgRead(int msgcount) {
 
 void UITask::msgRead(int msgcount, bool dismiss_notification) {
 #if UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS > 0
-  if (!dismiss_notification && msgcount == 0 && hasConnection() &&
+  // Legacy callers have no generation.  Once detailed callbacks are active,
+  // a total queue count must not acknowledge a different important message.
+  const bool legacy_notification = _ble_smart_notify_generation == 0 &&
+                                   _important_notify_generation == 0;
+  if (legacy_notification && !dismiss_notification && msgcount == 0 && hasConnection() &&
       (_ble_smart_notify_flags != UI_MSG_FLAG_NONE ||
        _important_notify_active ||
        _important_msg_flags != UI_MSG_FLAG_NONE)) {
@@ -12455,7 +12716,8 @@ void UITask::msgRead(int msgcount, bool dismiss_notification) {
     if (_important_notify_active || _important_msg_flags != UI_MSG_FLAG_NONE) {
       _important_notify_visual_repeat_suppressed = true;
       if (_important_notify_visual_until == 0) {
-        _important_notify_visual_until = millis() + UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS;
+        _important_notify_visual_until = smartui::optionalDeadlineAfter(
+            (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS);
       }
     }
 #endif
@@ -12477,6 +12739,12 @@ void UITask::msgRead(int msgcount, bool dismiss_notification) {
     return;
   }
 #endif
+
+  if (!dismiss_notification &&
+      (_ble_smart_notify_generation != 0 || _important_notify_generation != 0)) {
+    _next_refresh = 0;
+    return;
+  }
 
 #if UI_UNREAD_DIRECT_ONLY
   if (dismiss_notification && msg_preview != NULL) {
@@ -12525,6 +12793,12 @@ void UITask::directMsgRead(bool dismiss_notification) {
 }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, uint8_t flags) {
+  newMsg(path_len, from_name, text, msgcount, flags, 0, NULL, 0);
+}
+
+void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text,
+                    int msgcount, uint8_t flags, uint32_t generation,
+                    const uint8_t* sender_id, uint8_t sender_id_len) {
 #if UI_UNREAD_DIRECT_ONLY
   (void)msgcount;
 #else
@@ -12597,16 +12871,18 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, i
     triggerMsgVibe();
   }
 
-  startImportantNotify(important_flags);
+  startImportantNotify(important_flags, generation);
 
   MsgPreviewScreen* preview = (MsgPreviewScreen *)msg_preview;
 #if UI_UNREAD_DIRECT_ONLY
   if (direct_preview) {
-    preview->addPreview(path_len, from_name, text, important_flags);
+    preview->addPreview(path_len, from_name, text, important_flags,
+                        generation, sender_id, sender_id_len);
   }
   _msgcount = preview->unreadPreviewCount();
 #else
-  preview->addPreview(path_len, from_name, text, important_flags);
+  preview->addPreview(path_len, from_name, text, important_flags,
+                      generation, sender_id, sender_id_len);
 #endif
   bool should_show_preview = areMsgPopupsEnabled();
 #if UI_UNREAD_DIRECT_ONLY
@@ -12636,7 +12912,8 @@ void UITask::userLedHandler() {
   if (_msgcount > 0 && !isUnreadLedEnabled()) {
     setBoardLedPinOff(PIN_STATUS_LED);
     led_state = 0;
-    next_led_change = millis() + LED_CYCLE_MILLIS;
+    next_led_change = smartui::optionalDeadlineAfter(
+        (uint32_t)millis(), (uint32_t)LED_CYCLE_MILLIS);
     return;
   }
   uint32_t cur_time = (uint32_t)millis();
@@ -12648,10 +12925,12 @@ void UITask::userLedHandler() {
       } else {
         last_led_increment = LED_ON_MILLIS;
       }
-      next_led_change = cur_time + last_led_increment;
+      next_led_change = smartui::optionalDeadlineAfter(
+          cur_time, (uint32_t)last_led_increment);
     } else {
       led_state = 0;
-      next_led_change = cur_time + LED_CYCLE_MILLIS - last_led_increment;
+      next_led_change = smartui::optionalDeadlineAfter(
+          cur_time, (uint32_t)(LED_CYCLE_MILLIS - last_led_increment));
     }
     digitalWrite(PIN_STATUS_LED, led_state == LED_STATE_ON);
   }
@@ -12675,7 +12954,7 @@ void UITask::extendAutoOff(unsigned long now) {
 #if AUTO_OFF_MILLIS > 0
   uint32_t timeout = getBacklightTimeoutMillis();
   if (timeout == 0) timeout = AUTO_OFF_MILLIS;
-  _auto_off = now + timeout;
+  _auto_off = smartui::optionalDeadlineAfter((uint32_t)now, timeout);
 #else
   (void)now;
 #endif
@@ -12696,7 +12975,8 @@ void UITask::markDisplayWake(bool reset_to_clock) {
   _display_recover_reset_to_clock = false;
   _button_wake_pending = false;
   _button_wake_pending_until = 0;
-  _display_wake_lock_until = now + UI_DISPLAY_WAKE_LOCK_MS;
+  _display_wake_lock_until = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_DISPLAY_WAKE_LOCK_MS);
   if (reset_to_clock) {
     gotoHomeFirstScreen();
   }
@@ -12759,10 +13039,13 @@ bool UITask::handleRawButtonWakeWhenDark() {
 
 void UITask::scheduleDisplayRecover(bool reset_to_clock, unsigned long now) {
 #if UI_DISPLAY_RECOVER_WINDOW_MS > 0
-  _display_recover_until = now + UI_DISPLAY_RECOVER_WINDOW_MS;
-  _display_recover_next = now + UI_DISPLAY_RECOVER_RETRY_MS;
+  _display_recover_until = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_DISPLAY_RECOVER_WINDOW_MS);
+  _display_recover_next = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_DISPLAY_RECOVER_RETRY_MS);
   _display_recover_reset_to_clock = reset_to_clock;
-  _display_wake_lock_until = now + UI_DISPLAY_RECOVER_WINDOW_MS;
+  _display_wake_lock_until = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_DISPLAY_RECOVER_WINDOW_MS);
 #else
   (void)reset_to_clock;
   (void)now;
@@ -12776,8 +13059,10 @@ void UITask::noteButtonWakeFromSleep(unsigned long now) {
                 now, (_display != NULL && _display->isOn()) ? 1 : 0);
 #endif
   _button_wake_pending = true;
-  _button_wake_pending_until = now + UI_BUTTON_WAKE_LATCH_MS;
-  _display_wake_lock_until = now + UI_BUTTON_WAKE_LATCH_MS;
+  _button_wake_pending_until = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_BUTTON_WAKE_LATCH_MS);
+  _display_wake_lock_until = smartui::optionalDeadlineAfter(
+      (uint32_t)now, (uint32_t)UI_BUTTON_WAKE_LATCH_MS);
 #else
   (void)now;
 #endif
@@ -12860,7 +13145,8 @@ void UITask::displayRecoverHandler() {
     _display_recover_reset_to_clock = false;
     markDisplayWake(reset_to_clock);
   } else {
-    _display_recover_next = now + UI_DISPLAY_RECOVER_RETRY_MS;
+    _display_recover_next = smartui::optionalDeadlineAfter(
+        (uint32_t)now, (uint32_t)UI_DISPLAY_RECOVER_RETRY_MS);
   }
 #endif
 }
@@ -12880,7 +13166,7 @@ void UITask::updateConnectionState() {
 }
 
 void UITask::handlePendingPopupWake() {
-  if (!_popup_pending) return;
+  if (!_popup_pending || _storage_recovery_active) return;
   if (!areMsgPopupsEnabled()) {
     _popup_pending = false;
     return;
@@ -12890,10 +13176,15 @@ void UITask::handlePendingPopupWake() {
     return;
   }
 
+  const unsigned long now = millis();
   setCurrScreen(msg_preview);
+  // A newly accepted popup owns a full visible lifetime even when an e-paper
+  // display was already on after a long idle period.  Without this reset the
+  // auto-home check later in the same loop can replace it before first render.
+  _last_activity_ms = now;
 
   if (_display->isOn()) {
-    extendAutoOff();
+    extendAutoOff(now);
     _next_refresh = 0;
     _popup_pending = false;
     return;
@@ -12906,7 +13197,6 @@ void UITask::handlePendingPopupWake() {
   }
 #endif
 
-  unsigned long now = millis();
   if ((unsigned long)(now - _ble_state_changed_at) < UI_POPUP_BLE_STATE_SETTLE_MS) {
     _next_refresh = now + UI_POPUP_BLE_STATE_SETTLE_MS;
     return;
@@ -12928,7 +13218,18 @@ void UITask::handlePendingPopupWake() {
 /*
   hardware-agnostic pre-shutdown activity should be done here
 */
-void UITask::shutdown(bool restart, bool preserve_eink_frame) {
+void UITask::shutdown(bool restart, bool preserve_eink_frame, bool emergency) {
+
+  // Controlled shutdown must not discard contact changes that were accepted
+  // into RAM but still wait on the deferred storage deadline.  Critical-low
+  // battery and recovery paths make exactly one attempt, then prioritize a
+  // safe power transition even if flash is unavailable.
+  const bool storage_flushed = the_mesh.flushPendingStorage();
+  if (!storage_flushed && !emergency) {
+    showAlert("Не выключено: память", 1600);
+    _next_refresh = 0;
+    return;
+  }
 
   #ifdef PIN_BUZZER
   /* note: we have a choice here -
@@ -13182,7 +13483,7 @@ void UITask::loop() {
 #endif
 
 #if UI_MENU_AUTO_HOME_MILLIS > 0
-  if (home != NULL && curr != NULL && curr != splash &&
+  if (!_storage_recovery_active && home != NULL && curr != NULL && curr != splash &&
       smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry) &&
 #if UI_EINK_IDLE_SCREENSAVER
       curr != idle_saver &&
@@ -13242,7 +13543,8 @@ void UITask::loop() {
       _display->endFrame();
     }
 #if AUTO_OFF_MILLIS > 0
-    if (_display->isOn() && (UI_AUTO_OFF_ALL_WINDOWS || !curr->keepDisplayOn()) &&
+    if (!_storage_recovery_active && _display->isOn() &&
+        (UI_AUTO_OFF_ALL_WINDOWS || !curr->keepDisplayOn()) &&
         smartui::deadlineReached((uint32_t)millis(), (uint32_t)_auto_off)) {
 #if UI_WAKE_DEBUG_LOG
       Serial.printf("[DBG UI] autoOff turnOff now=%lu auto_off=%lu curr_keep=%d\r\n",
@@ -13286,12 +13588,62 @@ void UITask::loop() {
       #endif
 
       // E-paper retains this safety message without consuming standby power.
-      shutdown(false, true);
+      shutdown(false, true, true);
 
     }
     next_batt_chck = (uint32_t)millis() + LOW_BATTERY_SHUTDOWN_CHECK_MILLIS;
   }
 #endif
+}
+
+void UITask::messageTransferState(uint32_t generation, uint8_t flags,
+                                  UIMessageTransferState state,
+                                  int pending_count) {
+  (void)pending_count;  // Total transport backlog is not an important-message ACK.
+  flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
+  if (state != UIMessageTransferState::queuedToCompanion ||
+      generation == 0 || flags == UI_MSG_FLAG_NONE) return;
+
+#if UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS > 0
+  if (_ble_smart_notify_generation == generation &&
+      _ble_smart_notify_flags != UI_MSG_FLAG_NONE) {
+    _ble_smart_notify_read_zero_seen = true;
+  }
+#endif
+
+  if (_important_notify_generation == generation &&
+      (_important_notify_active || _important_msg_flags != UI_MSG_FLAG_NONE)) {
+#if UI_BLE_READ_SUPPRESSES_IMPORTANT_TONE_REPEAT
+    _important_notify_tone_repeat_suppressed = true;
+#endif
+#if UI_BLE_READ_SUPPRESSES_IMPORTANT_VISUAL_REPEAT
+    _important_notify_visual_repeat_suppressed = true;
+    if (_important_notify_visual_until == 0) {
+      _important_notify_visual_until = smartui::optionalDeadlineAfter(
+          (uint32_t)millis(), (uint32_t)UI_IMPORTANT_NOTIFY_VISUAL_BURST_MS);
+    }
+#endif
+#if UI_SMART_NOTIFY_WATCHER_FINISH_ACTIVE_ON_BLE_READ
+    finishImportantNotify(false, false);
+#endif
+  }
+  _next_refresh = 0;
+}
+
+void UITask::storageRecoveryRequired(StorageRecoveryReason reason) {
+  if (reason != StorageRecoveryReason::factoryResetFailed) return;
+  _storage_recovery_active = true;
+  _night_prompt_active = false;
+  _night_prompt_expires = 0;
+  _popup_pending = false;
+  clearImportantNotify();
+  stopNotifyOutputs();
+  if (_display != NULL) {
+    _display->turnOn();
+    if (storage_recovery != NULL) setCurrScreen(storage_recovery);
+    _last_activity_ms = millis();
+    _next_refresh = 0;
+  }
 }
 
 char UITask::checkDisplayOn(char c) {
@@ -13342,6 +13694,10 @@ char UITask::checkDisplayOn(char c) {
 }
 
 char UITask::handleLongPress(char c) {
+  if (_storage_recovery_active) {
+    shutdown(true, false, true);
+    return 0;
+  }
   if (_night_prompt_active) {
     return KEY_ENTER;
   }
@@ -13397,6 +13753,7 @@ bool UITask::getGPSState() {
 }
 
 void UITask::toggleGPS() {
+  if (_node_prefs == NULL) return;
   bool has_hardware = false;
   bool hardware_on = false;
   if (_sensors != NULL) {
@@ -13410,6 +13767,7 @@ void UITask::toggleGPS() {
     }
   }
 
+  const NodePrefs before = *_node_prefs;
   const char* state = "ВЫКЛ";
 #if UI_PHONE_GPS == 1
   if (the_mesh.isPhoneGpsEnabled()) {
@@ -13433,7 +13791,7 @@ void UITask::toggleGPS() {
   the_mesh.setGpsSource(GPS_SOURCE_HW, false);
   if (!has_hardware) {
     _node_prefs->gps_enabled = 0;
-    the_mesh.savePrefs();
+    if (!commitUiPrefs(before)) return;
     showAlert("GPS-модуль не найден", 1100);
     _next_refresh = 0;
     return;
@@ -13444,7 +13802,7 @@ void UITask::toggleGPS() {
   state = hardware_on ? "ВКЛ" : "ВЫКЛ";
 #endif
 
-  the_mesh.savePrefs();
+  if (!commitUiPrefs(before)) return;
   notify(UIEventType::ack);
   char alert[20];
   snprintf(alert, sizeof(alert), "GPS: %s", state);
@@ -13456,12 +13814,20 @@ float UITask::getAdcMultiplier() const {
   return _board->getAdcMultiplier();
 }
 
+uint16_t UITask::getAdcPreviewMilliVolts(float draft_multiplier) const {
+  if (_board == NULL) return 0;
+  return smartui::adcPreviewMilliVolts(_board->getBattMilliVolts(),
+                                       _board->getAdcMultiplier(),
+                                       draft_multiplier);
+}
+
 bool UITask::setAdcMultiplier(float multiplier, bool save) {
   if (!isfinite(multiplier) || multiplier < 0.0f) {
     return false;
   }
   const float previous_multiplier = _board->getAdcMultiplier();
-  const float previous_pref = _node_prefs ? _node_prefs->adc_multiplier : 0.0f;
+  NodePrefs before;
+  if (_node_prefs != NULL) before = *_node_prefs;
   if (!_board->setAdcMultiplier(multiplier)) {
     return false;
   }
@@ -13473,17 +13839,15 @@ bool UITask::setAdcMultiplier(float multiplier, bool save) {
       return false;
     }
     _node_prefs->adc_multiplier = multiplier;
-    if (!the_mesh.savePrefs()) {
-      _node_prefs->adc_multiplier = previous_pref;
-      // During edit the board already carries the draft value, so the only
-      // durable rollback source is the last committed preference.
-      if (!_board->setAdcMultiplier(previous_pref)) {
-        _board->setAdcMultiplier(0.0f);
-      }
+#if UI_SMART_B11_EXTRAS == 1
+    _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
+#endif
+    if (!commitUiPrefs(before)) {
+      _board->setAdcMultiplier(previous_multiplier);
       invalidateBatteryCache();
-      _next_refresh = 0;
       return false;
     }
+    _low_batt_strikes = 0;  // Re-confirm safety against the newly committed scale.
     notify(UIEventType::ack);
   }
   _next_refresh = 0;
@@ -13493,14 +13857,13 @@ bool UITask::setAdcMultiplier(float multiplier, bool save) {
 void UITask::toggleBuzzer() {
     // Toggle buzzer quiet mode
   #ifdef PIN_BUZZER
-    if (buzzer.isQuiet()) {
-      buzzer.quiet(false);
-      notify(UIEventType::ack);
-    } else {
-      buzzer.quiet(true);
-    }
-    _node_prefs->buzzer_quiet = buzzer.isQuiet();
-    the_mesh.savePrefs();
+    if (_node_prefs == NULL) return;
+    const NodePrefs before = *_node_prefs;
+    const bool quiet = !buzzer.isQuiet();
+    _node_prefs->buzzer_quiet = quiet ? 1 : 0;
+    if (!commitUiPrefs(before)) return;
+    buzzer.quiet(quiet);
+    if (!quiet) notify(UIEventType::ack);
     showAlert(buzzer.isQuiet() ? "Зумер: ВЫКЛ" : "Зумер: ВКЛ", 800);
     _next_refresh = 0;  // trigger refresh
   #endif

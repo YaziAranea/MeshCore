@@ -161,6 +161,7 @@ class UITask : public AbstractUITask {
   UIScreen* home;
   UIScreen* idle_saver;
   UIScreen* msg_preview;
+  UIScreen* storage_recovery;
   UIScreen* curr;
   unsigned long _last_activity_ms;
   unsigned long _display_wake_lock_until;
@@ -177,6 +178,8 @@ class UITask : public AbstractUITask {
   bool _important_notify_active;
   uint8_t _important_msg_flags;
   uint8_t _ble_smart_notify_flags;
+  uint32_t _important_notify_generation;
+  uint32_t _ble_smart_notify_generation;
   bool _important_notify_tone_started;
   bool _important_notify_tone_repeat_suppressed;
   bool _important_notify_visual_repeat_suppressed;
@@ -192,6 +195,7 @@ class UITask : public AbstractUITask {
   unsigned long _night_prompt_expires;
   bool _night_prompt_active;
   bool _night_prompt_yes;
+  bool _storage_recovery_active;
 
   void userLedHandler();
   void updateHourlyMessageWindow();
@@ -211,13 +215,14 @@ class UITask : public AbstractUITask {
   void handlePendingPopupWake();
   void extendAutoOff(unsigned long now = 0);
   void stopNotifyOutputs();
-  void finishImportantNotify(bool stop_tone);
+  void finishImportantNotify(bool stop_tone, bool clear_pending = true);
   unsigned long nextImportantNotifyDelay(uint8_t& burst_step, unsigned long repeat_ms) const;
-  void beginImportantNotify(uint8_t flags, bool suppress_tone_repeats = false);
-  void scheduleBleSmartNotify(uint8_t flags);
+  void beginImportantNotify(uint8_t flags, uint32_t generation,
+                            bool suppress_tone_repeats = false);
+  void scheduleBleSmartNotify(uint8_t flags, uint32_t generation);
   void clearBleSmartNotify();
   void bleSmartNotifyHandler();
-  void startImportantNotify(uint8_t flags);
+  void startImportantNotify(uint8_t flags, uint32_t generation);
   void clearImportantNotify();
   void importantNotifyHandler();
   void nightModeHandler();
@@ -225,6 +230,7 @@ class UITask : public AbstractUITask {
   void renderNightPrompt(DisplayDriver& display);
   void closeNightPrompt(bool enable_quiet, bool timed_out = false);
   void debugHeartbeat();
+  bool commitUiPrefs(const NodePrefs& before);
 
   // Button action handlers
   char checkDisplayOn(char c);
@@ -289,6 +295,8 @@ public:
     _important_notify_active = false;
     _important_msg_flags = UI_MSG_FLAG_NONE;
     _ble_smart_notify_flags = UI_MSG_FLAG_NONE;
+    _important_notify_generation = 0;
+    _ble_smart_notify_generation = 0;
     _important_notify_tone_started = false;
     _important_notify_tone_repeat_suppressed = false;
     _important_notify_visual_repeat_suppressed = false;
@@ -304,10 +312,13 @@ public:
     _night_prompt_expires = 0;
     _night_prompt_active = false;
     _night_prompt_yes = true;
+    _storage_recovery_active = false;
     idle_saver = NULL;
+    storage_recovery = NULL;
     curr = NULL;
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
+  bool attachDisplay(DisplayDriver* display);
 
   void gotoHomeScreen() { setCurrScreen(home); }
   void gotoHomeFirstScreen();
@@ -429,6 +440,7 @@ public:
   void toggleGPS();
   float getMCUTemperature() const;
   float getAdcMultiplier() const;
+  uint16_t getAdcPreviewMilliVolts(float draft_multiplier) const;
   bool setAdcMultiplier(float multiplier, bool save);
   uint16_t getBattMilliVolts() const override;
   uint64_t getUptimeSeconds() const { return _uptime_accumulated_ms / 1000ULL; }
@@ -444,8 +456,16 @@ public:
   void msgRead(int msgcount, bool dismiss_notification) override;
   void directMsgRead(bool dismiss_notification) override;
   void newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, uint8_t flags = UI_MSG_FLAG_NONE) override;
+  void newMsg(uint8_t path_len, const char* from_name, const char* text,
+              int msgcount, uint8_t flags, uint32_t generation,
+              const uint8_t* sender_id, uint8_t sender_id_len) override;
+  void messageTransferState(uint32_t generation, uint8_t flags,
+                            UIMessageTransferState state,
+                            int pending_count) override;
+  void storageRecoveryRequired(StorageRecoveryReason reason) override;
   void notify(UIEventType t = UIEventType::none) override;
   void loop() override;
 
-  void shutdown(bool restart = false, bool preserve_eink_frame = false);
+  void shutdown(bool restart = false, bool preserve_eink_frame = false,
+                bool emergency = false);
 };

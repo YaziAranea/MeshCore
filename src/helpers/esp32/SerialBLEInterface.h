@@ -18,7 +18,8 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   uint16_t last_conn_id;
   uint32_t _pin_code;
   unsigned long _last_write;
-  unsigned long adv_restart_time;
+  uint32_t adv_restart_started;
+  bool adv_restart_pending;
 
   struct Frame {
     uint8_t len;
@@ -57,7 +58,8 @@ public:
     pService = NULL;
     deviceConnected = false;
     oldDeviceConnected = false;
-    adv_restart_time = 0;
+    adv_restart_started = 0;
+    adv_restart_pending = false;
     _isEnabled = false;
     _last_write = 0;
     last_conn_id = 0;

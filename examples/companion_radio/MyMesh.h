@@ -33,6 +33,9 @@
 #include <RTClib.h>
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/BaseSerialInterface.h>
+#include <helpers/DeferredSavePolicy.h>
+#include <helpers/OfflineQueueSync.h>
+#include <helpers/PrefsTransaction.h>
 #if __has_include(<helpers/BoardLedControl.h>)
   #include <helpers/BoardLedControl.h>
 #else
@@ -179,8 +182,12 @@ public:
   void handleCmdFrame(size_t len);
   bool advert();
   uint16_t getAutoAdvertIntervalMins() const;
-  void cycleAutoAdvertInterval();
+  bool cycleAutoAdvertInterval();
   void applyUiPrefsRuntime();
+  bool commitPrefsOrRollback(const NodePrefs& before);
+  // One bounded persistence attempt.  Callers decide whether a failed manual
+  // shutdown is cancelled or an emergency shutdown proceeds regardless.
+  bool flushPendingStorage();
   bool isPhoneGpsEnabled() const {
 #if UI_PHONE_GPS == 1
     return _prefs.gps_source == GPS_SOURCE_PHONE;
@@ -191,7 +198,7 @@ public:
   bool isPhoneGpsFresh() const;
   uint32_t getPhoneGpsAgeSeconds() const;
   const char* getGpsSourceName() const;
-  void setGpsSource(uint8_t source, bool save = true);
+  bool setGpsSource(uint8_t source, bool save = true);
   bool setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt = 0);
   bool getShareableLocation(double& lat, double& lon, double& alt) const;
   bool sendQuickReply(const char* text);
@@ -286,31 +293,35 @@ public:
   }
 
   bool areBoardLedsEnabled() const { return _prefs.board_leds_enabled != 0; }
-  void setBoardLedsEnabled(bool enabled) {
+  bool setBoardLedsEnabled(bool enabled) {
+    const NodePrefs before = _prefs;
     _prefs.board_leds_enabled = enabled ? 1 : 0;
     meshcoreSetBoardLedsEnabled(enabled);
-    savePrefs();
+    return commitPrefsOrRollback(before);
   }
   void toggleBoardLeds() { setBoardLedsEnabled(!areBoardLedsEnabled()); }
 
   bool isClientRepeatEnabled() const { return _prefs.isRepeatEn(); }
-  void setClientRepeatEnabled(bool enabled) {
+  bool setClientRepeatEnabled(bool enabled) {
+    const NodePrefs before = _prefs;
     _prefs.setRepeatEn(enabled);
-    savePrefs();
+    return commitPrefsOrRollback(before);
   }
-  void toggleClientRepeat() { setClientRepeatEnabled(!isClientRepeatEnabled()); }
+  bool toggleClientRepeat() { return setClientRepeatEnabled(!isClientRepeatEnabled()); }
 
   bool isUnreadLedEnabled() const { return _prefs.unread_led_enabled != 0; }
-  void setUnreadLedEnabled(bool enabled) {
+  bool setUnreadLedEnabled(bool enabled) {
+    const NodePrefs before = _prefs;
     _prefs.unread_led_enabled = enabled ? 1 : 0;
-    savePrefs();
+    return commitPrefsOrRollback(before);
   }
   void toggleUnreadLed() { setUnreadLedEnabled(!isUnreadLedEnabled()); }
 
   bool areMsgPopupsEnabled() const { return _prefs.msg_popup_enabled != 0; }
-  void setMsgPopupsEnabled(bool enabled) {
+  bool setMsgPopupsEnabled(bool enabled) {
+    const NodePrefs before = _prefs;
     _prefs.msg_popup_enabled = enabled ? 1 : 0;
-    savePrefs();
+    return commitPrefsOrRollback(before);
   }
   void toggleMsgPopups() { setMsgPopupsEnabled(!areMsgPopupsEnabled()); }
 
@@ -318,11 +329,9 @@ public:
   void applyGpsPrefs() {
     sensors.setSettingValue("gps",
       (_prefs.gps_source == GPS_SOURCE_HW && _prefs.gps_enabled) ? "1" : "0");
-    if (_prefs.gps_interval > 0) {
-      char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
-      sprintf(interval_str, "%u", _prefs.gps_interval);
-      sensors.setSettingValue("gps_interval", interval_str);
-    }
+    char interval_str[12];  // Max: 24 hours = 86400 seconds (5 digits + null)
+    sprintf(interval_str, "%u", _prefs.gps_interval);
+    sensors.setSettingValue("gps_interval", interval_str);
   }
 #endif
 
@@ -336,8 +345,14 @@ private:
   void writeDisabledFrame();
   void writeContactRespFrame(uint8_t code, const ContactInfo &contact);
   bool updateContactFromFrame(ContactInfo &contact, uint32_t& last_mod, const uint8_t *frame, size_t len);
-  void addToOfflineQueue(const uint8_t frame[], int len);
-  int getFromOfflineQueue(uint8_t frame[]);
+  bool addToOfflineQueue(const uint8_t frame[], int len,
+                         uint32_t ui_generation = 0,
+                         uint8_t ui_flags = UI_MSG_FLAG_NONE);
+  int peekOfflineQueue(uint8_t frame[], uint32_t& ui_generation,
+                       uint8_t& ui_flags) const;
+  void commitOfflineQueue();
+  uint32_t nextUiMessageGeneration();
+  void scheduleContactsSave();
   int getBlobByKey(const uint8_t key[], int key_len, uint8_t dest_buf[]) override { 
     return _store->getBlobByKey(key, key_len, dest_buf);
   }
@@ -380,7 +395,10 @@ private:
   uint8_t app_target_ver;
   uint8_t *sign_data;
   uint32_t sign_data_len;
-  unsigned long dirty_contacts_expiry;
+  mesh::storage::DeferredSavePolicy dirty_contacts;
+  bool storage_recovery_required;
+  bool storage_recovery_error_pending;
+  uint32_t next_ui_message_generation;
 
   TransportKey send_scope;
 
@@ -391,6 +409,8 @@ private:
   struct Frame {
     uint8_t len;
     uint8_t buf[MAX_FRAME_SIZE];
+    uint32_t ui_generation;
+    uint8_t ui_flags;
 
     bool isChannelMsg() const;
     bool isDisplayableDirectMsg() const;

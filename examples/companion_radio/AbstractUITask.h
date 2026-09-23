@@ -22,6 +22,17 @@ enum class UIEventType {
     ack
 };
 
+// This is an internal UI signal, not an end-to-end delivery receipt.  The
+// companion transport accepted the complete response frame, but a later BLE
+// disconnect can still happen before the phone receives it.
+enum class UIMessageTransferState : uint8_t {
+    queuedToCompanion
+};
+
+enum class StorageRecoveryReason : uint8_t {
+    factoryResetFailed
+};
+
 #define UI_MSG_FLAG_NONE       0x00
 #define UI_MSG_FLAG_DIRECT     0x01
 #define UI_MSG_FLAG_MENTION    0x02
@@ -65,6 +76,28 @@ public:
                       int msgcount, uint8_t flags) {
     (void)flags;
     newMsg(path_len, from_name, text, msgcount);
+  }
+  // SmartUI uses a nonzero generation to keep acknowledgement state attached
+  // to one message event.  sender_id is borrowed for this call only; an
+  // implementation which retains it must copy all sender_id_len bytes.
+  virtual void newMsg(uint8_t path_len, const char* from_name, const char* text,
+                      int msgcount, uint8_t flags, uint32_t generation,
+                      const uint8_t* sender_id, uint8_t sender_id_len) {
+    (void)generation;
+    (void)sender_id;
+    (void)sender_id_len;
+    newMsg(path_len, from_name, text, msgcount, flags);
+  }
+  virtual void messageTransferState(uint32_t generation, uint8_t flags,
+                                    UIMessageTransferState state,
+                                    int pending_count) {
+    (void)generation;
+    (void)flags;
+    (void)state;
+    (void)pending_count;
+  }
+  virtual void storageRecoveryRequired(StorageRecoveryReason reason) {
+    (void)reason;
   }
   virtual void notify(UIEventType t = UIEventType::none) = 0;
   virtual void applyImportedPrefs() {}
