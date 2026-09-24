@@ -83,14 +83,18 @@ void SerialWifiInterface::offerPendingClient(WiFiClient& candidate) {
 
 void SerialWifiInterface::ensureServerListening() {
   if (!_isEnabled || _port == 0 || _server_running) return;
+  // Selection can enable this transport before WiFi.mode() initializes lwIP.
+  // Opening a socket then can assert instead of returning a retryable error.
+  // Pinned core getMode() is safe before initialization; check it first.
+  if ((WiFi.getMode() & WIFI_MODE_STA) == 0 || WiFi.status() != WL_CONNECTED) return;
   const uint32_t now = millis();
   if (_listener_retry_at != 0 &&
       !deadlineReached(now, _listener_retry_at)) {
     return;
   }
 
-  // Pinned ESP32 core can fail bind/listen before the STA netif is ready and
-  // leaves its socket allocated on that path.  Close before each bounded retry.
+  // Pinned ESP32 core leaves its socket allocated when bind/listen fails.
+  // Close before each bounded retry.
   server.end();
   server.begin(_port);
   _server_running = static_cast<bool>(server);

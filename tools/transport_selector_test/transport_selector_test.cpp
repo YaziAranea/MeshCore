@@ -14,6 +14,11 @@
 
 std::unordered_map<int, std::weak_ptr<MockWiFiClientState>>
     g_mock_wifi_clients;
+bool g_mock_wifi_initialized = false;
+wifi_mode_t g_mock_wifi_mode = WIFI_MODE_NULL;
+int g_mock_wifi_status = WL_DISCONNECTED;
+unsigned g_mock_wifi_status_calls = 0;
+MockWiFiClass WiFi;
 bool g_mock_wifi_server_begin_succeeds = true;
 unsigned g_mock_wifi_server_begin_calls = 0;
 std::deque<WiFiClient> g_mock_wifi_accept_queue;
@@ -225,8 +230,107 @@ void testUsbHardDisconnectAndParserTimeout() {
   assert(usb.checkRecvFrame(out) == 2);  // stale partial discarded first
 }
 
+void testWifiListenerWaitsForNetstackAndAssociation() {
+  g_mock_millis = 0;
+  g_mock_wifi_initialized = false;
+  g_mock_wifi_mode = WIFI_MODE_NULL;
+  g_mock_wifi_status = WL_DISCONNECTED;
+  g_mock_wifi_status_calls = 0;
+  g_mock_wifi_server_begin_calls = 0;
+  g_mock_wifi_server_begin_succeeds = true;
+
+  // A saved WiFi selection can also be enabled directly during startup.
+  {
+    SerialWifiInterface boot_wifi;
+    boot_wifi.begin(5000);
+    MultiSerialInterface boot_manager;
+    assert(boot_manager.addInterface(InterfaceType::WiFi, &boot_wifi));
+    assert(boot_manager.selectExclusive(InterfaceType::WiFi));
+    boot_manager.enable();
+    boot_manager.loop();
+    assert(!boot_manager.isConnected());
+    assert(g_mock_wifi_server_begin_calls == 0);
+    assert(g_mock_wifi_status_calls == 0);
+    boot_manager.disable();
+  }
+
+  FakeTransport ble;
+  SerialWifiInterface wifi;
+  wifi.begin(5000);
+  MultiSerialInterface manager;
+  assert(manager.addInterface(InterfaceType::Bluetooth, &ble));
+  assert(manager.addInterface(InterfaceType::WiFi, &wifi));
+  manager.enable();
+  // Production selection enables the transport before the controller starts
+  // WiFi.  Neither that enable nor status polling may touch a TCP socket.
+  assert(manager.selectExclusive(InterfaceType::WiFi));
+  assert(wifi.isEnabled() && !ble.enabled);
+  for (int i = 0; i < 3; ++i) {
+    manager.loop();
+    assert(!manager.isConnected());
+    assert(!wifi.hasPendingClientApproval());
+    assert(wifi.getPendingClientRequestId() == 0);
+    (void)manager.sessionGeneration();
+  }
+  assert(g_mock_wifi_server_begin_calls == 0);
+  assert(g_mock_wifi_status_calls == 0);
+
+  // Empty saved credentials make the controller disable WiFi immediately
+  // after selection. That path must stay socket-free as well.
+  wifi.disable();
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 0);
+  assert(g_mock_wifi_status_calls == 0);
+  assert(manager.selectExclusive(InterfaceType::WiFi));
+
+  g_mock_wifi_initialized = true;
+  g_mock_wifi_mode = WIFI_MODE_AP;
+  g_mock_wifi_status = WL_CONNECTED;
+  manager.loop();
+  assert(g_mock_wifi_status_calls == 0);  // STA is required, not just any radio.
+  g_mock_wifi_mode = WIFI_MODE_STA;
+  g_mock_wifi_status = WL_DISCONNECTED;
+  // A slow/failed association must not eventually open a listener on timeout.
+  g_mock_millis += 30000;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 0);
+
+  g_mock_wifi_status = WL_CONNECTED;
+  g_mock_wifi_server_begin_succeeds = false;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 1);
+  g_mock_millis += SMARTUI_WIFI_LISTENER_RETRY_MS - 1;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 1);
+  g_mock_millis += 1;
+  g_mock_wifi_status = WL_DISCONNECTED;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 1);
+  g_mock_wifi_status = WL_CONNECTED;
+  g_mock_wifi_server_begin_succeeds = true;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 2);
+
+  // Turning the radio off and reselecting must again defer listener creation.
+  assert(manager.selectExclusive(InterfaceType::Bluetooth));
+  g_mock_wifi_initialized = false;
+  g_mock_wifi_mode = WIFI_MODE_NULL;
+  assert(manager.selectExclusive(InterfaceType::WiFi));
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 2);
+  g_mock_wifi_initialized = true;
+  g_mock_wifi_mode = WIFI_MODE_STA;
+  g_mock_wifi_status = WL_CONNECTED;
+  manager.loop();
+  assert(g_mock_wifi_server_begin_calls == 3);
+  manager.disable();
+}
+
 void testWifiApprovalIsolationAndNonblockingTx() {
   g_mock_millis = 0;
+  g_mock_wifi_initialized = true;
+  g_mock_wifi_mode = WIFI_MODE_STA;
+  g_mock_wifi_status = WL_CONNECTED;
   g_mock_wifi_server_begin_calls = 0;
   g_mock_wifi_server_begin_succeeds = false;
   SerialWifiInterface wifi;
@@ -308,7 +412,8 @@ int main() {
   testExclusiveManagerEpochs();
   testUsbLeaseAndBackpressure();
   testUsbHardDisconnectAndParserTimeout();
+  testWifiListenerWaitsForNetstackAndAssociation();
   testWifiApprovalIsolationAndNonblockingTx();
-  std::cout << "PASS transport selector: exclusive routing, USB epochs/lease/backpressure, WiFi approval/timeout/nonblocking TX\n";
+  std::cout << "PASS transport selector: exclusive routing, USB epochs/lease/backpressure, WiFi startup readiness/retry/approval/timeout/nonblocking TX\n";
   return 0;
 }

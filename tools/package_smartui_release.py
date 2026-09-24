@@ -23,6 +23,7 @@ import validate_release_esp32 as esp32
 import validate_release_fresh_spiffs as fresh_spiffs
 import validate_release_uf2 as uf2
 import validate_release_v3 as v3
+import package_usb_helper as usb_helper
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +213,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             shutil.copy2(source, stage / name)
         validate_stage(stage, mkspiffs=mkspiffs, sdkconfig=sdkconfig)
         shutil.copy2(notes, stage / NOTES_NAME)
+        usb_helper.package(stage)
         for suffix, name in ((".uf2", "SHA256SUMS.txt"), (".bin", "SHA256SUMS-ESP32.txt")):
             rows = [f"{digest(path)}  {path.name}" for path in sorted(stage.glob("*" + suffix))]
             (stage / name).write_text("\n".join(rows) + "\n", encoding="ascii", newline="\n")
@@ -236,7 +238,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
                 info.external_attr = 0o100644 << 16
                 zipped.writestr(info, path.read_bytes(), compresslevel=9)
         verify_archive(archive, archive_payloads)
-        require(len(list(stage.iterdir())) == 14, "release must contain exactly fourteen assets")
+        require(len(list(stage.iterdir())) == 16, "release must contain exactly sixteen assets")
         shutil.copytree(stage, output)
     return {"directory": str(output), "tag": TAG, "commit": commit,
             "assets": [record(path) for path in sorted(output.iterdir())]}

@@ -628,6 +628,10 @@ void ConnectionController::serviceWifi() {
     return;
   }
 
+  // A passed candidate remains provisional until Save or Cancel.  Do not
+  // reconnect the previously stored network if its test association drops.
+  if (_wifi_setup_stage != WifiSetupStage::IDLE) return;
+
   if (_config.mode != CompanionMode::WiFi || !_config.wifi_configured) return;
   if (associated) {
     _wifi_was_associated = true;
@@ -710,6 +714,10 @@ bool ConnectionController::saveTestedWifi() {
   _wifi_setup_activity = 0;
   if (_config.mode == CompanionMode::WiFi) {
     _interfaces->selectExclusive(InterfaceType::WiFi);
+    // The candidate association may have disappeared while awaiting Save.
+    // Explicitly activate the newly persisted network, never a stale link.
+    _wifi_retry_delay = WIFI_RETRY_INITIAL_MS;
+    startWifiAttempt(_config.ssid, _config.password, false);
   } else {
     stopWifiRadio(false);
   }

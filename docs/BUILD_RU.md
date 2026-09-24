@@ -142,7 +142,8 @@ python tools/package_smartui_release.py ../SmartUI_0.05_RELEASE
 
 Скрипт берёт файлы из `.pio/build`, проверяет UF2, три пары BIN и подготовленную
 SPIFFS V3, V4.3 и Paper, создаёт два списка SHA-256, общий `RELEASE-MANIFEST.json` и ZIP шести
-плат. Нужны PlatformIO tool-mkspiffs 2.230.0 и SDK-конфигурация V3. Для CI
+плат. Включает HTML/ZIP USB-помощника; всего 16 assets. Его сборка не требует npm или скачивания зависимостей: `python tools/package_usb_helper.py ../USB_Helper`.
+Проверки помощника: `node tools/usb-helper/test_core.js` и `python tools/test_usb_helper_package.py`. Нужны PlatformIO tool-mkspiffs 2.230.0 и SDK-конфигурация V3. Для CI
 поддерживается `--firmware-dir` с девятью release-named файлами.
 Он не прошивает платы и не публикует ничего на GitHub. Существующую папку
 не перезаписывает. Исторический addon-упаковщик experimental.1 в новом выпуске

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>SmartUI · USB помощник</title>
+  <style>
+    :root { color-scheme: dark; --bg:#101722; --panel:#182230; --edge:#344355; --text:#edf2f7; --muted:#b0bfd0; --accent:#82dec8; --blue:#a9d0ff; --warn:#ffcf87; --error:#ffa9a9; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:1040px; margin:auto; padding:38px 24px 24px; }
+    header { display:flex; gap:20px; align-items:center; justify-content:space-between; margin-bottom:26px; }
+    h1 { margin:0; font-size:clamp(25px,4vw,36px); letter-spacing:-.7px; }
+    h2 { margin:0 0 8px; font-size:20px; }
+    h3 { margin:0 0 8px; font-size:16px; }
+    p { margin:8px 0 16px; }
+    .eyebrow { color:var(--accent); letter-spacing:2px; font-size:12px; font-weight:700; margin:0 0 5px; }
+    .subtitle,.hint,footer { color:var(--muted); }
+    .subtitle { margin:5px 0 0; }
+    .tag { white-space:nowrap; border:1px solid var(--edge); padding:6px 12px; border-radius:30px; color:var(--muted); font-size:13px; }
+    .notice { background:#223242; border-left:3px solid var(--blue); padding:12px 16px; border-radius:5px; margin-bottom:18px; }
+    .notice.warning { border-color:var(--warn); background:#332c22; }
+    .notice.error { border-color:var(--error); background:#35282d; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
+    .card { padding:24px; background:var(--panel); border:1px solid var(--edge); border-radius:14px; }
+    .wide { grid-column:1/-1; }
+    .step { display:inline-grid; place-items:center; width:28px; height:28px; margin-right:8px; background:#253848; color:var(--accent); border-radius:8px; font-size:15px; }
+    button,input { font:inherit; }
+    button { min-height:44px; cursor:pointer; border:1px solid var(--edge); border-radius:8px; background:#263546; color:var(--text); padding:9px 16px; font-weight:600; }
+    button:hover:not(:disabled) { border-color:var(--blue); background:#31455c; }
+    button.primary { background:var(--accent); border-color:var(--accent); color:#102923; }
+    button.primary:hover:not(:disabled) { background:#a3ebdb; }
+    button.danger { color:var(--error); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); background:#203b3a; }
+    :focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
+    .buttons { display:flex; flex-wrap:wrap; gap:9px; margin:14px 0 0; }
+    label.field { display:block; font-weight:600; margin:16px 0 6px; }
+    input[type="text"],input[type="password"] { width:100%; min-height:46px; border:1px solid #60738a; border-radius:8px; padding:9px 12px; color:var(--text); background:#101a27; }
+    input:disabled { opacity:.55; }
+    input[type="checkbox"] { width:18px; height:18px; margin:0; accent-color:var(--accent); }
+    .check { display:flex; gap:9px; align-items:center; margin:11px 0; font-size:14px; }
+    .hint { font-size:14px; margin:7px 0 0; }
+    .state { min-height:26px; color:var(--accent); margin:12px 0 0; font-weight:600; }
+    dl { display:grid; grid-template-columns:1fr 1fr; gap:13px; margin:18px 0 0; }
+    dt { color:var(--muted); font-size:13px; }
+    dd { margin:2px 0 0; font-weight:650; overflow-wrap:anywhere; }
+    #feedback { margin-top:16px; padding:12px 14px; border-radius:8px; background:#213544; min-height:49px; overflow-wrap:anywhere; }
+    #feedback[data-kind="error"] { background:#422a30; color:#ffc3c3; }
+    #feedback[data-kind="warning"] { background:#3b3325; color:var(--warn); }
+    #feedback[data-kind="success"] { background:#203c36; color:var(--accent); }
+    ol { padding-left:23px; }
+    li { margin:6px 0; }
+    details { margin-top:18px; }
+    summary { cursor:pointer; font-weight:600; min-height:32px; }
+    #events { max-height:220px; overflow:auto; list-style:none; padding:0; margin:12px 0 0; font-size:14px; }
+    #events li { padding:7px 0; border-top:1px solid var(--edge); overflow-wrap:anywhere; }
+    .event-time { font-variant-numeric:tabular-nums; color:var(--muted); margin-right:10px; }
+    footer { display:flex; flex-wrap:wrap; gap:8px 24px; font-size:13px; padding:20px 0; }
+    code { font:14px ui-monospace,Consolas,monospace; color:var(--blue); }
+    dialog { max-width:470px; width:calc(100% - 36px); background:var(--panel); color:var(--text); border:1px solid var(--edge); border-radius:14px; padding:25px; }
+    dialog::backdrop { background:#000a; }
+    [hidden] { display:none!important; }
+    @media(max-width:730px) { main { padding:22px 16px 12px; } header { align-items:flex-start; flex-direction:column; gap:10px; } .grid { grid-template-columns:1fr; } .card { padding:20px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>USB помощник</h1><p class="subtitle">Настройка подключения ноды без команд консоли.</p></div>
+    <span class="tag">Помощник 1.0 · прошивка 0.05</span>
+  </header>
+  <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
+  <div class="notice"><strong>Перед подключением:</strong> на ноде выберите <strong>Bluetooth или Wi-Fi</strong> в «Настройки → Подключение». Закройте веб-флешер, PuTTY и другие программы, использующие её USB-порт.</div>
+  <div class="grid">
+    <section class="card" aria-labelledby="usb-title">
+      <h2 id="usb-title"><span class="step">1</span>Подключите ноду</h2>
+      <p class="hint">Нужен USB-кабель с передачей данных. В окне браузера выберите порт именно вашей ноды.</p>
+      <div class="buttons"><button id="connect" class="primary">Выбрать USB-порт</button><button id="disconnect" disabled>Отключиться</button></div>
+      <p id="connection" class="state" role="status">Нода не подключена</p>
+      <dl aria-label="Состояние ноды">
+        <div><dt>Режим ноды</dt><dd id="mode">—</dd></div>
+        <div><dt>Приложение-компаньон</dt><dd id="companion">—</dd></div>
+        <div><dt>Сохранённая сеть</dt><dd id="configured">—</dd></div>
+        <div><dt>Подключение к роутеру</dt><dd id="network">—</dd></div>
+        <div><dt>Адрес ноды</dt><dd id="ip">—</dd></div>
+        <div><dt>Порт TCP</dt><dd>5000</dd></div>
+      </dl>
+      <div class="buttons"><button id="refresh" disabled>Обновить состояние</button></div>
+    </section>
+    <section class="card" aria-labelledby="wifi-title">
+      <h2 id="wifi-title"><span class="step">2</span>Настройте Wi-Fi</h2>
+      <p class="hint">Для Heltec V3, V4.3 и Wireless Paper. T096, T114 и ProMicro не имеют встроенного Wi-Fi.</p>
+      <form id="wifi-form" autocomplete="off">
+        <label class="field" for="ssid">Имя сети (SSID)</label>
+        <input id="ssid" type="text" spellcheck="false" autocapitalize="none" autocomplete="off" placeholder="Например, Home Wi-Fi" disabled>
+        <label class="field" for="password">Пароль сети</label>
+        <input id="password" type="password" spellcheck="false" autocomplete="new-password" disabled>
+        <label class="check"><input id="show-password" type="checkbox" disabled>Показать пароль на этом экране</label>
+        <label class="check"><input id="open-network" type="checkbox" disabled>Сеть без пароля — понимаю риск</label>
+        <p id="open-warning" class="hint" hidden>TCP не защищён TLS. Для повседневного использования выбирайте доверенную сеть с паролем.</p>
+        <div class="buttons"><button id="test" type="submit" class="primary" disabled>Проверить сеть</button><button id="save" type="button" disabled>Сохранить сеть</button><button id="cancel" type="button" disabled>Отменить проверку</button></div>
+      </form>
+      <p id="wifi-hint" class="hint">Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.</p>
+    </section>
+    <section class="card wide" aria-labelledby="mode-title">
+      <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
+      <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
+      <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
+      <p class="hint">При выборе USB-компаньона помощник перестанет работать: порт займёт приложение. Для возврата выберите Bluetooth или Wi-Fi кнопками ноды.</p>
+      <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
+      <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Разрешите подключение на экране ноды. Без ответа оно отклоняется через 30 секунд.</li></ol><p class="hint">Помощник только настраивает соединение. Это не чат, не веб-флешер и не приложение-компаньон.</p></details>
+      <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>
+      <details><summary>Служебные события и удаление сети</summary><p class="hint">Только понятные сообщения помощника. Пароли, имя сети и сырой вывод порта сюда не записываются.</p><ul id="events" aria-label="Журнал событий"></ul><div class="buttons"><button id="clear-events">Очистить журнал</button><button id="forget" class="danger" disabled>Удалить сеть с ноды</button></div></details>
+    </section>
+  </div>
+  <footer><span>Один локальный файл. Без внешних библиотек и аналитики.</span><span>Пароль очищается из поля после начала проверки.</span><span>Не открывайте TCP-порт ноды в интернет.</span></footer>
+</main>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title">Подтвердите действие</h2><p id="confirm-text"></p><div class="buttons"><button id="confirm-no" autofocus>Отмена</button><button id="confirm-yes" class="primary">Продолжить</button></div></dialog>
+<script>
+/* SMARTUI_HELPER_CORE */
+</script>
+<script>
+/* SMARTUI_HELPER_APP */
+</script>
+</body>
+</html>

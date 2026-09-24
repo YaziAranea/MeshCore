@@ -340,7 +340,7 @@ jobs:
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \
             --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
-      - name: Upload the complete fourteen-asset release
+      - name: Upload the complete sixteen-asset release
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: smartui-experimental-release
@@ -478,6 +478,11 @@ jobs:
 
       - name: Check connection persistence and USB Wi-Fi provisioning
         run: python tools/test_connection_controller.py
+
+      - name: Check offline USB helper protocol and deterministic package
+        run: |
+          node tools/usb-helper/test_core.js
+          python tools/test_usb_helper_package.py
 
       - name: Check connection UI navigation and real-font layouts
         run: python tools/test_connection_ui_v005.py
@@ -678,7 +683,7 @@ jobs:
             exit 1
           fi
 
-          # New releases remain drafts until all 14 expected assets have arrived.
+          # New releases remain drafts until all 16 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
           # Latest marks the current release, not hardware stability.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
@@ -691,7 +696,7 @@ jobs:
           local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
           remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assets = {a["name"]: a for a in remote["assets"]}
-          assert len(local) == 14, f"Expected 14 local assets, got {len(local)}"
+          assert len(local) == 16, f"Expected 16 local assets, got {len(local)}"
           assert len(remote["assets"]) == len(assets), "Duplicate asset names"
           assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
           for name, path in local.items():

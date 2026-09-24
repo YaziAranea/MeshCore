@@ -401,6 +401,56 @@ int main() {
   assert(std::string(status.wifiLocalIp) == "192.0.2.7");
   assert(wifi.enabled && sleep_inhibited);
 
+  // A passed candidate can lose its association while waiting for Save.
+  // Do not reconnect the old network, and Save must start the stored candidate.
+  send(controller, console, "wifi setup\n");
+  send(controller, console, "Candidate New\n");
+  send(controller, console, "candidate pass\n");
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  const int candidate_attempts = WiFi.begin_count;
+  WiFi.status_code = WL_DISCONNECTED;
+  controller.loop();
+  fake_now += 5001;
+  pump(controller);
+  assert(WiFi.begin_count == candidate_attempts);
+  assert(WiFi.last_ssid == "Candidate New");
+  assert(!controller.status().wifiAssociated);
+  assert(containsBytes(fs.files["/connection.cfg"], " My SSID "));
+  send(controller, console, "wifi save\n");
+  assert(WiFi.begin_count == candidate_attempts + 1);
+  assert(WiFi.last_ssid == "Candidate New" &&
+         WiFi.last_password == "candidate pass");
+  assert(containsBytes(fs.files["/connection.cfg"], "Candidate New"));
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  assert(controller.status().wifiAssociated && wifi.enabled);
+
+  // Cancel after a different passed candidate drops still restores saved data.
+  send(controller, console, "wifi setup\n");
+  send(controller, console, "Cancel Candidate\n");
+  send(controller, console, "cancelled pass\n");
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  WiFi.status_code = WL_DISCONNECTED;
+  const int before_cancel_restore = WiFi.begin_count;
+  fake_now += 5001;
+  pump(controller);
+  assert(WiFi.begin_count == before_cancel_restore);
+  send(controller, console, "wifi cancel\n");
+  assert(WiFi.begin_count == before_cancel_restore + 1);
+  assert(WiFi.last_ssid == "Candidate New" &&
+         WiFi.last_password == "candidate pass");
+  assert(containsBytes(fs.files["/connection.cfg"], "Candidate New"));
+
+  // Restore the original fixture for the existing timeout/retry coverage.
+  send(controller, console, "wifi setup\n");
+  send(controller, console, " My SSID \n");
+  send(controller, console, " pass word \n");
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  send(controller, console, "wifi save\n");
+
   // A deliberate empty password Enter still starts an open-network test.
   send(controller, console, "wifi setup\r\n");
   send(controller, console, "Open Network\r\n");

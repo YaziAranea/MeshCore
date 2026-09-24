@@ -2,11 +2,39 @@
 
 #include <Arduino.h>
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <unordered_map>
 #include <vector>
+
+enum wifi_mode_t {
+  WIFI_MODE_NULL = 0,
+  WIFI_MODE_STA = 1,
+  WIFI_MODE_AP = 2,
+  WIFI_MODE_APSTA = 3,
+};
+static const int WL_CONNECTED = 3;
+static const int WL_DISCONNECTED = 6;
+extern bool g_mock_wifi_initialized;
+extern wifi_mode_t g_mock_wifi_mode;
+extern int g_mock_wifi_status;
+extern unsigned g_mock_wifi_status_calls;
+
+class MockWiFiClass {
+public:
+  // Pinned core getMode() is safe before WiFi initialization.
+  wifi_mode_t getMode() const {
+    return g_mock_wifi_initialized ? g_mock_wifi_mode : WIFI_MODE_NULL;
+  }
+  int status() const {
+    assert(g_mock_wifi_initialized && "WiFi status queried before initialization");
+    ++g_mock_wifi_status_calls;
+    return g_mock_wifi_status;
+  }
+};
+extern MockWiFiClass WiFi;
 
 class IPAddress {
   uint8_t _bytes[4];
@@ -88,6 +116,9 @@ class WiFiServer {
 public:
   WiFiServer(uint16_t = 80, uint8_t = 4) {}
   void begin(uint16_t = 0) {
+    // Real lwIP may assert in tcpip_send_msg_wait_sem instead of returning
+    // a recoverable bind/listen error when its mailbox does not exist yet.
+    assert(g_mock_wifi_initialized && "TCP socket opened before netstack initialization");
     ++g_mock_wifi_server_begin_calls;
     _listening = g_mock_wifi_server_begin_succeeds;
   }
