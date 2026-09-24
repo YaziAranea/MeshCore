@@ -31,6 +31,13 @@ def compile_policy() -> int:
 int main() {{
   unsigned checks=0;
   #define CHECK(x) do {{ ++checks; assert(x); }} while(0)
+  for (int e=1; e<=static_cast<int>(ConnectionChangeError::Apply); ++e) {{
+    const auto error=static_cast<ConnectionChangeError>(e);
+    CHECK(smartui::connectionChangeErrorTitle(error)[0]);
+    CHECK(smartui::connectionChangeErrorHint(error)[0]);
+    CHECK(smartui::connectionChangeErrorCode(error)[0]);
+  }}
+  CHECK(!smartui::connectionChangeErrorTitle(ConnectionChangeError::None)[0]);
   CompanionStatus nrf;
   nrf.capabilities=COMPANION_CAP_BLE|COMPANION_CAP_USB;
   nrf.selected=CompanionMode::BLE;
@@ -118,9 +125,9 @@ def source_contract() -> int:
         '"Настройте Wi-Fi через USB"',
         '"Разрешить доступ?"',
         'status.wifiClientIp',
-        'status.wifiApprovalRemainingMs == 0',
-        'resolveWifiClient(status.wifiRequestId, false)',
-        '!home_screen->isSafeForWifiApproval()',
+        '"TCP: 5000 авто"',
+        'smartui::connectionChangeErrorTitle(error)',
+        'showAlert("Сервис: перезапуск", 5000)',
         'smartui::wifiApprovalSurfaceSafe(',
         '_settings_open, _page == HomePage::BLUETOOTH, _connection_flow.view()',
         '_popup_pending',
@@ -147,7 +154,10 @@ def source_contract() -> int:
     approval = source.split("void UITask::connectionApprovalHandler()", 1)[1].split(
         "void UITask::handlePendingPopupWake()", 1
     )[0]
-    assert approval.index("const bool unsafe") < approval.index("syncWifiApproval(status)")
+    assert "clearWifiApproval()" in approval
+    assert "syncWifiApproval(status)" not in approval
+    assert "resolveWifiClient(" not in approval
+    assert "turnOn()" not in approval
     print(f"PASS {len(checks) + 4 + 5} production UITask source contracts")
     return len(checks) + 9
 
@@ -272,7 +282,9 @@ void uiPopFont(DisplayDriver&,uint8_t) {{}}
 
 struct TaskStub {{
   CompanionStatus value;
+  ConnectionChangeError error=ConnectionChangeError::None;
   CompanionStatus getCompanionStatus() const {{ return value; }}
+  ConnectionChangeError getCompanionChangeError() const {{ return error; }}
 }};
 struct RenderHost {{
   TaskStub* _task=nullptr;
@@ -320,6 +332,9 @@ int main() {{
             setup += ["task.value=status;", "host._connection_flow.openPicker(status);"]
             setup += ["host._connection_flow.movePicker(status,1);" for _ in range(2 if wifi else 1)]
             setup += ["host._connection_flow.selectPicker(status);", "host.renderConnectionConfirm(d,status);"]
+        elif view.startswith("error_"):
+            setup += [f"task.error=ConnectionChangeError::{view[6:]};",
+                      "host.renderConnectionStatus(d,status);"]
         elif view == "approval":
             setup += [
                 "status.wifiApprovalPending=true; status.wifiRequestId=41; status.wifiApprovalRemainingMs=30000;",
@@ -337,6 +352,10 @@ int main() {{
             scenarios += [(f"{name}_nrf", False, name) for name in ("status", "picker", "confirm")]
         if profile.board in ("OLED", "Wireless Paper"):
             scenarios += [(f"{name}_wifi", True, name) for name in ("status", "picker", "confirm", "approval")]
+        for error in ("NotStarted", "CliRescue", "StorageReadOnly", "Unavailable",
+                      "StorageUnavailable", "TempCleanup", "Write", "VerifyTemp",
+                      "Rotate", "Publish", "VerifyFinal", "Apply"):
+            scenarios.append(("error_" + error, False, "error_" + error))
         expected_scenes[index] = [name for name, _, _ in scenarios]
         for scene, wifi, view in scenarios:
             code += emit_scene(index, profile, scene, wifi, view)
@@ -439,7 +458,7 @@ def geometry_and_previews() -> int:
     scenes.extend([
         ("T114: выбор", frames[(t114_index, "picker_nrf")]),
         ("T096: подтверждение", frames[(t096_index, "confirm_nrf")]),
-        ("V4: запрос Wi-Fi", frames[(v4_index, "approval_wifi")]),
+        ("V4: причина отказа", frames[(v4_index, "error_CliRescue")]),
     ])
     preview = OUT / "CONNECTION_UI_ALL_SIX.png"
     settings.make_matrix(scenes, preview, columns=3)

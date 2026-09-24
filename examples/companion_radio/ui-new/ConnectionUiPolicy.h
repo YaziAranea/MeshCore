@@ -4,6 +4,58 @@
 
 namespace smartui {
 
+inline const char* connectionChangeErrorTitle(ConnectionChangeError error) {
+  switch (error) {
+    case ConnectionChangeError::None: return "";
+    case ConnectionChangeError::NotStarted: return "Связь не готова";
+    case ConnectionChangeError::CliRescue: return "Сервисный режим";
+    case ConnectionChangeError::StorageReadOnly: return "Запись запрещена";
+    case ConnectionChangeError::Unavailable: return "Режим недоступен";
+    case ConnectionChangeError::StorageUnavailable: return "Нет хранилища";
+    case ConnectionChangeError::VerifyFinal: return "Не подтверждено";
+    case ConnectionChangeError::Apply: return "Режим записан";
+    default: return "Не сохранено";
+  }
+}
+
+inline const char* connectionChangeErrorHint(ConnectionChangeError error) {
+  switch (error) {
+    case ConnectionChangeError::None: return "";
+    case ConnectionChangeError::NotStarted:
+    case ConnectionChangeError::CliRescue: return "Перезапуск ноды";
+    case ConnectionChangeError::StorageReadOnly:
+    case ConnectionChangeError::StorageUnavailable: return "Без очистки!";
+    case ConnectionChangeError::Unavailable: return "Выберите другой";
+    case ConnectionChangeError::TempCleanup: return "Очистка файла";
+    case ConnectionChangeError::Write: return "Запись файла";
+    case ConnectionChangeError::VerifyTemp: return "Проверка записи";
+    case ConnectionChangeError::Rotate: return "Смена копии";
+    case ConnectionChangeError::Publish: return "Публикация файла";
+    case ConnectionChangeError::VerifyFinal: return "Проверка файла";
+    case ConnectionChangeError::Apply: return "Не включён";
+    default: return "Ошибка режима";
+  }
+}
+
+inline const char* connectionChangeErrorCode(ConnectionChangeError error) {
+  switch (error) {
+    case ConnectionChangeError::None: return "";
+    case ConnectionChangeError::NotStarted: return "Код: C01";
+    case ConnectionChangeError::CliRescue: return "Код: C02";
+    case ConnectionChangeError::StorageReadOnly: return "Код: C03";
+    case ConnectionChangeError::Unavailable: return "Код: C04";
+    case ConnectionChangeError::StorageUnavailable: return "Код: C05";
+    case ConnectionChangeError::TempCleanup: return "Код: C06";
+    case ConnectionChangeError::Write: return "Код: C07";
+    case ConnectionChangeError::VerifyTemp: return "Код: C08";
+    case ConnectionChangeError::Rotate: return "Код: C09";
+    case ConnectionChangeError::Publish: return "Код: C10";
+    case ConnectionChangeError::VerifyFinal: return "Код: C11";
+    case ConnectionChangeError::Apply: return "Код: C12";
+    default: return "Код: C??";
+  }
+}
+
 inline uint8_t companionModeCapability(CompanionMode mode) {
   switch (mode) {
     case CompanionMode::BLE: return COMPANION_CAP_BLE;

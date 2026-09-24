@@ -8,6 +8,22 @@ enum class CompanionMode : uint8_t {
   WiFi = 2,
 };
 
+enum class ConnectionChangeError : uint8_t {
+  None = 0,
+  NotStarted,
+  CliRescue,
+  StorageReadOnly,
+  Unavailable,
+  StorageUnavailable,
+  TempCleanup,
+  Write,
+  VerifyTemp,
+  Rotate,
+  Publish,
+  VerifyFinal,
+  Apply,
+};
+
 enum CompanionCapability : uint8_t {
   COMPANION_CAP_BLE = 1u << 0,
   COMPANION_CAP_USB = 1u << 1,

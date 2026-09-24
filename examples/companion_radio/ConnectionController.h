@@ -29,6 +29,8 @@ public:
 
   CompanionStatus status() const;
   bool setMode(CompanionMode mode);
+  // Result of the latest setMode request, unaffected by background config saves.
+  ConnectionChangeError lastChangeError() const { return _last_change_error; }
   bool resolveWifiClient(uint32_t request_id, bool approve);
 
 private:
@@ -61,6 +63,7 @@ private:
   SerialWifiInterface* _wifi_interface = nullptr;
   ConnectionControllerHooks _hooks = {};
   Config _config = {};
+  ConnectionChangeError _last_change_error = ConnectionChangeError::None;
   bool _started = false;
   bool _config_reset_notice = false;
   bool _console_announced = false;
@@ -86,6 +89,7 @@ private:
   uint16_t _console_tx_len = 0;
 
   bool mutationAllowed() const;
+  ConnectionChangeError mutationError() const;
   bool consoleEnabled() const;
   uint8_t capabilities() const;
   bool modeAvailable(CompanionMode mode) const;
@@ -94,7 +98,7 @@ private:
   bool writeConfigFile(const char* path, const Config& config) const;
   bool configsEqual(const Config& first, const Config& second) const;
   bool loadConfig();
-  bool saveConfig(const Config& config);
+  bool saveConfig(const Config& config, ConnectionChangeError* error = nullptr);
   bool forgetWifi();
   void scrubConfigArtifacts();
   bool removeOrNeutralizeConfigFile(const char* path, const Config& clean);

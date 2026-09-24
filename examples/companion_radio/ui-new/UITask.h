@@ -334,6 +334,7 @@ public:
 #if SMARTUI_CONNECTION_SELECTOR
   CompanionStatus getCompanionStatus() const;
   bool setCompanionMode(CompanionMode mode);
+  ConnectionChangeError getCompanionChangeError() const;
   bool resolveWifiClient(uint32_t request_id, bool approve);
 #endif
 

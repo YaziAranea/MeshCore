@@ -49,6 +49,11 @@ public:
   std::map<std::string, std::vector<uint8_t>> files;
   bool fail_next_rename = false;
   std::string fail_remove_path;
+  std::string fail_write_open_path;
+  std::string short_write_path;
+  std::string corrupt_flush_path;
+  std::string fail_rename_from;
+  std::string corrupt_rename_to;
 
   bool exists(const char* path) const { return files.count(path) != 0; }
   bool remove(const char* path) {
@@ -59,14 +64,19 @@ public:
     return files.erase(path) != 0;
   }
   bool rename(const char* from, const char* to) {
-    if (fail_next_rename) {
+    if (fail_next_rename || fail_rename_from == from) {
       fail_next_rename = false;
+      fail_rename_from.clear();
       return false;
     }
     auto found = files.find(from);
     if (found == files.end()) return false;
     files[to] = found->second;
     files.erase(found);
+    if (corrupt_rename_to == to) {
+      corrupt_rename_to.clear();
+      if (!files[to].empty()) files[to][0] ^= 0xff;
+    }
     return true;
   }
   File open(const char* path, const char* mode, bool create = false);
@@ -98,18 +108,32 @@ public:
   }
   size_t write(const uint8_t* data, size_t len) {
     if (!open_) return 0;
+    if (fs_->short_write_path == path_) {
+      fs_->short_write_path.clear();
+      if (len) --len;
+    }
     auto& bytes = fs_->files[path_];
     if (bytes.size() < offset_ + len) bytes.resize(offset_ + len);
     std::memcpy(bytes.data() + offset_, data, len);
     offset_ += len;
     return len;
   }
-  void flush() {}
+  void flush() {
+    if (open_ && fs_->corrupt_flush_path == path_) {
+      fs_->corrupt_flush_path.clear();
+      auto& bytes = fs_->files[path_];
+      if (!bytes.empty()) bytes.back() ^= 0xff;
+    }
+  }
   void close() { open_ = false; }
 };
 
 inline File FakeFS::open(const char* path, const char* mode, bool) {
   const bool write = mode && mode[0] == 'w';
+  if (write && fail_write_open_path == path) {
+    fail_write_open_path.clear();
+    return File();
+  }
   if (!write && !exists(path)) return File();
   return File(this, path, write);
 }
@@ -144,12 +168,17 @@ class MultiSerialInterface {
     return nullptr;
   }
 public:
+  bool fail_next_select = false;
   bool addInterface(InterfaceType type, BaseSerialInterface* interface) {
     for (auto& item : items_) if (!item.interface) { item = {type, interface}; return true; }
     return false;
   }
   bool hasInterface(InterfaceType type) const { return find(type) != nullptr; }
   bool selectExclusive(InterfaceType type) {
+    if (fail_next_select) {
+      fail_next_select = false;
+      return false;
+    }
     BaseSerialInterface* next = find(type);
     if (!next) return false;
     for (auto& item : items_) if (item.interface) item.interface->disable();
@@ -251,8 +280,9 @@ DATA_STORE = r'''#pragma once
 class DataStore {
   FILESYSTEM* fs_;
 public:
+  bool available = true;
   explicit DataStore(FILESYSTEM& fs) : fs_(&fs) {}
-  FILESYSTEM* getPrimaryFS() const { return fs_; }
+  FILESYSTEM* getPrimaryFS() const { return available ? fs_ : nullptr; }
 };
 '''
 
@@ -334,6 +364,138 @@ static void send(ConnectionController& controller, FakeStream& stream, const cha
   assert(stream.unread() == 0);
 }
 
+struct ModeChangeFixture {
+  FakeFS fs;
+  DataStore store;
+  FakeTransport ble, usb;
+  MultiSerialInterface manager;
+  FakeStream console;
+  ConnectionController controller;
+
+  ModeChangeFixture() : store(fs) {
+    manager.addInterface(InterfaceType::Bluetooth, &ble);
+    manager.addInterface(InterfaceType::USB, &usb);
+    manager.enable();
+    controller.begin(store, manager, console, nullptr, hooks());
+    assert(controller.status().selected == CompanionMode::BLE);
+    assert(controller.lastChangeError() == ConnectionChangeError::None);
+    assert(fs.exists("/connection.cfg"));
+  }
+
+  void expectFailure(ConnectionChangeError error) {
+    const int before_reset = reset_count;
+    assert(!controller.setMode(CompanionMode::USB));
+    assert(controller.lastChangeError() == error);
+    assert(controller.status().selected == CompanionMode::BLE);
+    assert(manager.getSelectedInterface() == InterfaceType::Bluetooth);
+    if (error != ConnectionChangeError::Apply) assert(reset_count == before_reset);
+    controller.loop();
+    assert(controller.lastChangeError() == error);
+  }
+};
+
+static void testModeChangeErrors() {
+  {
+    ConnectionController not_started;
+    assert(not_started.lastChangeError() == ConnectionChangeError::None);
+    assert(!not_started.setMode(CompanionMode::USB));
+    assert(not_started.lastChangeError() == ConnectionChangeError::NotStarted);
+  }
+  {
+    ModeChangeFixture fixture;
+    const auto before = fixture.fs.files;
+    cli_rescue = true;
+    fixture.expectFailure(ConnectionChangeError::CliRescue);
+    assert(fixture.fs.files == before);
+    // Rescue must also reject an otherwise no-op request, without bypassing it.
+    assert(!fixture.controller.setMode(CompanionMode::BLE));
+    assert(fixture.controller.lastChangeError() == ConnectionChangeError::CliRescue);
+    cli_rescue = false;
+    assert(fixture.controller.setMode(CompanionMode::USB));
+    assert(fixture.controller.lastChangeError() == ConnectionChangeError::None);
+  }
+  {
+    ModeChangeFixture fixture;
+    const auto before = fixture.fs.files;
+    quarantined = true;
+    fixture.expectFailure(ConnectionChangeError::StorageReadOnly);
+    assert(fixture.fs.files == before);
+    quarantined = false;
+  }
+  {
+    ModeChangeFixture fixture;
+    assert(!fixture.controller.setMode(CompanionMode::WiFi));
+    assert(fixture.controller.lastChangeError() == ConnectionChangeError::Unavailable);
+    // A valid no-op clears an earlier error just like a successful change.
+    assert(fixture.controller.setMode(CompanionMode::BLE));
+    assert(fixture.controller.lastChangeError() == ConnectionChangeError::None);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.store.available = false;
+    fixture.expectFailure(ConnectionChangeError::StorageUnavailable);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.files["/connection.cfg.tmp"] = {1};
+    fixture.fs.fail_remove_path = "/connection.cfg.tmp";
+    fixture.expectFailure(ConnectionChangeError::TempCleanup);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.fail_write_open_path = "/connection.cfg.tmp";
+    fixture.expectFailure(ConnectionChangeError::Write);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.short_write_path = "/connection.cfg.tmp";
+    fixture.expectFailure(ConnectionChangeError::Write);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.corrupt_flush_path = "/connection.cfg.tmp";
+    fixture.expectFailure(ConnectionChangeError::VerifyTemp);
+    assert(!fixture.fs.exists("/connection.cfg.tmp"));
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.files["/connection.cfg.bak"] = fixture.fs.files["/connection.cfg"];
+    fixture.fs.fail_remove_path = "/connection.cfg.bak";
+    fixture.expectFailure(ConnectionChangeError::Rotate);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.fail_next_rename = true;
+    fixture.expectFailure(ConnectionChangeError::Rotate);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.files["/connection.cfg"] = {1};
+    fixture.fs.fail_remove_path = "/connection.cfg";
+    fixture.expectFailure(ConnectionChangeError::Rotate);
+  }
+  {
+    ModeChangeFixture fixture;
+    const auto primary = fixture.fs.files["/connection.cfg"];
+    fixture.fs.fail_rename_from = "/connection.cfg.tmp";
+    fixture.expectFailure(ConnectionChangeError::Publish);
+    // Rollback restores the old primary but must preserve the publish error.
+    assert(fixture.fs.files["/connection.cfg"] == primary);
+    assert(fixture.controller.setMode(CompanionMode::USB));
+    assert(fixture.controller.lastChangeError() == ConnectionChangeError::None);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.fs.corrupt_rename_to = "/connection.cfg";
+    fixture.expectFailure(ConnectionChangeError::VerifyFinal);
+  }
+  {
+    ModeChangeFixture fixture;
+    fixture.manager.fail_next_select = true;
+    fixture.expectFailure(ConnectionChangeError::Apply);
+  }
+}
+
 #if defined(ESP32)
 static bool containsBytes(const std::vector<uint8_t>& bytes, const char* text) {
   const std::string haystack(bytes.begin(), bytes.end());
@@ -372,6 +534,7 @@ int main() {
   // Selection precedes provisioning: transport remains exclusive but inactive,
   // WiFi radio/server stay off, and USB remains service console.
   assert(controller.setMode(CompanionMode::WiFi));
+  assert(controller.lastChangeError() == ConnectionChangeError::None);
   assert(reset_count == 1);
   status = controller.status();
   assert(status.selected == CompanionMode::WiFi && !status.wifiConfigured);
@@ -496,8 +659,26 @@ int main() {
   assert(status.wifiApprovalRemainingMs == 30000);
   assert(!controller.resolveWifiClient(70, true));
   const int before_approval_reset = reset_count;
-  assert(controller.resolveWifiClient(71, true));
+  controller.loop();
+  assert(!wifi.pending && wifi.approved && wifi.connected);
   assert(reset_count == before_approval_reset);  // MyMesh alone observes epochs.
+
+  // New automatic sessions are blocked in rescue, quarantine and setup. A
+  // currently approved connection is left to the transport/session lifecycle.
+  cli_rescue = true;
+  wifi.pending = true; wifi.request_id = 72; wifi.deadline = fake_now + 30000;
+  controller.loop();
+  assert(!wifi.pending && !wifi.approved);
+  cli_rescue = false;
+  send(controller, console, "wifi setup\n");
+  wifi.pending = true; wifi.request_id = 73; wifi.deadline = fake_now + 30000;
+  assert(!controller.resolveWifiClient(73, true));
+  controller.loop();
+  assert(!wifi.pending && !wifi.approved);
+  send(controller, console, "cancel\n");
+  WiFi.status_code = WL_CONNECTED;
+
+  controller.loop();  // Record the restored link before testing a new loss.
 
   const int attempts = WiFi.begin_count;
   WiFi.status_code = WL_DISCONNECTED;
@@ -642,6 +823,7 @@ int main() {
   assert(blocked_console.output.find("identity was not changed") != std::string::npos);
   assert(blocked_console.max_write <= 7 && blocked_console.max_write <= 64);
 
+  testModeChangeErrors();
   return 0;
 }
 '''
@@ -729,7 +911,7 @@ def main() -> None:
         (root / "controller_test.cpp").write_text(HARNESS, encoding="utf-8")
         run_build(root, esp32=True)
         run_build(root, esp32=False)
-    print("[PASS] ConnectionController persistence, recovery, hidden setup, bounded console, retry, approval, quarantine")
+    print("[PASS] ConnectionController persistence, failure reasons, recovery, hidden setup, bounded console, retry, approval, quarantine")
 
 
 if __name__ == "__main__":

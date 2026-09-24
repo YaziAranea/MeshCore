@@ -142,9 +142,15 @@ ConnectionController connection_controller;
 ConnectionController::ConnectionController() = default;
 
 bool ConnectionController::mutationAllowed() const {
-  if (_hooks.isCliRescue && _hooks.isCliRescue()) return false;
-  if (_hooks.isStorageQuarantined && _hooks.isStorageQuarantined()) return false;
-  return true;
+  return mutationError() == ConnectionChangeError::None;
+}
+
+ConnectionChangeError ConnectionController::mutationError() const {
+  if (_hooks.isCliRescue && _hooks.isCliRescue()) return ConnectionChangeError::CliRescue;
+  if (_hooks.isStorageQuarantined && _hooks.isStorageQuarantined()) {
+    return ConnectionChangeError::StorageReadOnly;
+  }
+  return ConnectionChangeError::None;
 }
 
 bool ConnectionController::consoleEnabled() const {
@@ -271,12 +277,21 @@ bool ConnectionController::writeConfigFile(const char* path,
   return success;
 }
 
-bool ConnectionController::saveConfig(const Config& config) {
-  if (!mutationAllowed() || !_store) return false;
+bool ConnectionController::saveConfig(const Config& config, ConnectionChangeError* error) {
+  if (error) *error = ConnectionChangeError::None;
+  const auto fail = [error](ConnectionChangeError reason) {
+    if (error) *error = reason;
+    return false;
+  };
+  const ConnectionChangeError blocked = mutationError();
+  if (blocked != ConnectionChangeError::None) return fail(blocked);
+  if (!_store) return fail(ConnectionChangeError::StorageUnavailable);
   FILESYSTEM* fs = _store->getPrimaryFS();
-  if (!fs) return false;
-  if (fs->exists(CONFIG_TEMP_PATH) && !fs->remove(CONFIG_TEMP_PATH)) return false;
-  if (!writeConfigFile(CONFIG_TEMP_PATH, config)) return false;
+  if (!fs) return fail(ConnectionChangeError::StorageUnavailable);
+  if (fs->exists(CONFIG_TEMP_PATH) && !fs->remove(CONFIG_TEMP_PATH)) {
+    return fail(ConnectionChangeError::TempCleanup);
+  }
+  if (!writeConfigFile(CONFIG_TEMP_PATH, config)) return fail(ConnectionChangeError::Write);
 
   Config verified;
   const bool scratch_valid = readConfigFile(CONFIG_TEMP_PATH, verified) &&
@@ -284,7 +299,7 @@ bool ConnectionController::saveConfig(const Config& config) {
   secureZero(&verified, sizeof(verified));
   if (!scratch_valid) {
     fs->remove(CONFIG_TEMP_PATH);
-    return false;
+    return fail(ConnectionChangeError::VerifyTemp);
   }
 
   Config current;
@@ -293,25 +308,27 @@ bool ConnectionController::saveConfig(const Config& config) {
   const bool had_primary = fs->exists(CONFIG_PATH);
   bool rotated = false;
   if (had_primary && current_valid) {
-    if (fs->exists(CONFIG_BACKUP_PATH) && !fs->remove(CONFIG_BACKUP_PATH)) return false;
-    if (!fs->rename(CONFIG_PATH, CONFIG_BACKUP_PATH)) return false;
+    if (fs->exists(CONFIG_BACKUP_PATH) && !fs->remove(CONFIG_BACKUP_PATH)) {
+      return fail(ConnectionChangeError::Rotate);
+    }
+    if (!fs->rename(CONFIG_PATH, CONFIG_BACKUP_PATH)) return fail(ConnectionChangeError::Rotate);
     rotated = true;
   } else if (had_primary && !fs->remove(CONFIG_PATH)) {
-    return false;
+    return fail(ConnectionChangeError::Rotate);
   }
 
   if (!fs->rename(CONFIG_TEMP_PATH, CONFIG_PATH)) {
     if (rotated && !fs->exists(CONFIG_PATH) && fs->exists(CONFIG_BACKUP_PATH)) {
       fs->rename(CONFIG_BACKUP_PATH, CONFIG_PATH);
     }
-    return false;
+    return fail(ConnectionChangeError::Publish);
   }
 
   Config published;
   const bool success = readConfigFile(CONFIG_PATH, published) &&
       configsEqual(config, published);
   secureZero(&published, sizeof(published));
-  return success;
+  return success ? true : fail(ConnectionChangeError::VerifyFinal);
 }
 
 void ConnectionController::scrubConfigArtifacts() {
@@ -482,6 +499,7 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   _console = &usb_console;
   _wifi_interface = wifi_interface;
   _hooks = hooks;
+  _last_change_error = ConnectionChangeError::None;
   _started = false;
   _quarantine_latched = false;
   _config_reset_notice = false;
@@ -524,16 +542,27 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
 }
 
 bool ConnectionController::setMode(CompanionMode mode) {
-  if (!_started || !mutationAllowed() || !modeAvailable(mode)) return false;
+  _last_change_error = ConnectionChangeError::None;
+  if (!_started) {
+    _last_change_error = ConnectionChangeError::NotStarted;
+    return false;
+  }
+  _last_change_error = mutationError();
+  if (_last_change_error != ConnectionChangeError::None) return false;
+  if (!modeAvailable(mode)) {
+    _last_change_error = ConnectionChangeError::Unavailable;
+    return false;
+  }
   if (_config.mode == mode) return true;
   Config next = _config;
   next.mode = mode;
-  if (!saveConfig(next)) {
+  if (!saveConfig(next, &_last_change_error)) {
     secureZero(&next, sizeof(next));
     return false;
   }
   const bool applied = applyMode(mode, true);
   if (applied) _config = next;
+  else _last_change_error = ConnectionChangeError::Apply;
   secureZero(&next, sizeof(next));
   return applied;
 }
@@ -541,7 +570,9 @@ bool ConnectionController::setMode(CompanionMode mode) {
 bool ConnectionController::resolveWifiClient(uint32_t request_id, bool approve) {
 #if defined(ESP32)
   if (!_started || !_wifi_interface || request_id == 0) return false;
-  if (approve && !mutationAllowed()) return false;
+  if (approve && (!mutationAllowed() || _config.mode != CompanionMode::WiFi ||
+      _wifi_setup_stage != WifiSetupStage::IDLE || !_config.wifi_configured ||
+      !_wifi_radio_on || WiFi.status() != WL_CONNECTED)) return false;
   return _wifi_interface->resolvePendingClient(request_id, approve);
 #else
   (void)request_id;
@@ -607,10 +638,16 @@ void ConnectionController::serviceWifi() {
     cancelWifiSetup(true);
     return;
   }
-  if (_wifi_interface->hasPendingClientApproval() &&
-      deadlineReached(now, _wifi_interface->getPendingClientDeadline())) {
+  if (_wifi_interface->hasPendingClientApproval()) {
+    // Wi-Fi companion access is automatic on the selected, saved network.
+    // No UI interaction is required; provisional setup networks and expired
+    // requests are not admitted. The transport still permits only one client.
+    const bool accept = _config.mode == CompanionMode::WiFi &&
+        _wifi_setup_stage == WifiSetupStage::IDLE && _config.wifi_configured &&
+        _wifi_radio_on && WiFi.status() == WL_CONNECTED &&
+        !deadlineReached(now, _wifi_interface->getPendingClientDeadline());
     _wifi_interface->resolvePendingClient(
-        _wifi_interface->getPendingClientRequestId(), false);
+        _wifi_interface->getPendingClientRequestId(), accept);
   }
   const bool associated = _wifi_radio_on && WiFi.status() == WL_CONNECTED;
   if (_wifi_setup_stage == WifiSetupStage::TESTING) {

@@ -7425,6 +7425,20 @@ class HomeScreen : public UIScreen {
 
     const int line_h = display.getTextLineHeight() < 8 ? 8 : display.getTextLineHeight();
     int y = 14 + line_h + 2;
+    const ConnectionChangeError error = _task->getCompanionChangeError();
+    if (error != ConnectionChangeError::None) {
+      display.setBold(false);
+      display.setColor(DisplayDriver::YELLOW);
+      const char* lines[] = {smartui::connectionChangeErrorTitle(error),
+                             smartui::connectionChangeErrorHint(error),
+                             smartui::connectionChangeErrorCode(error)};
+      for (const char* text : lines) {
+        drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, text);
+        y += line_h;
+      }
+      uiPopFont(display, saved_font);
+      return UI_IDLE_REFRESH_MILLIS;
+    }
     char line[48];
     display.setBold(false);
     display.setColor(DisplayDriver::LIGHT);
@@ -7437,9 +7451,13 @@ class HomeScreen : public UIScreen {
       drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
       y += line_h;
 
-      snprintf(line, sizeof(line), "USB: %s",
-               status.selected == CompanionMode::USB ? "companion" :
-               (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+      if (status.selected == CompanionMode::WiFi) {
+        snprintf(line, sizeof(line), "TCP: 5000 авто");
+      } else {
+        snprintf(line, sizeof(line), "USB: %s",
+                 status.selected == CompanionMode::USB ? "companion" :
+                 (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+      }
       drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
       y += line_h;
 
@@ -7465,9 +7483,13 @@ class HomeScreen : public UIScreen {
     drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
     y += line_h;
 
-    snprintf(line, sizeof(line), "USB: %s",
-             status.selected == CompanionMode::USB ? "companion" :
-             (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+    if (status.selected == CompanionMode::WiFi) {
+      snprintf(line, sizeof(line), "TCP: 5000 авто");
+    } else {
+      snprintf(line, sizeof(line), "USB: %s",
+               status.selected == CompanionMode::USB ? "companion" :
+               (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+    }
     drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
     y += line_h;
 
@@ -7657,7 +7679,9 @@ class HomeScreen : public UIScreen {
       snprintf(alert, sizeof(alert), "Режим: %s", smartui::companionModeName(requested));
       _task->showAlert(alert, 1000);
     } else {
-      _task->showAlert("Режим не сохранён", 1300);
+      // The status page keeps the exact reason visible after the toast expires.
+      _task->showAlert(smartui::connectionChangeErrorTitle(
+          _task->getCompanionChangeError()), 1800);
     }
     return true;
   }
@@ -13645,52 +13669,18 @@ bool UITask::setCompanionMode(CompanionMode mode) {
   return connection_controller.setMode(mode);
 }
 
+ConnectionChangeError UITask::getCompanionChangeError() const {
+  return connection_controller.lastChangeError();
+}
+
 bool UITask::resolveWifiClient(uint32_t request_id, bool approve) {
   return connection_controller.resolveWifiClient(request_id, approve);
 }
 
 void UITask::connectionApprovalHandler() {
-  if (home == NULL) return;
-  HomeScreen* home_screen = (HomeScreen*)home;
-  CompanionStatus status = getCompanionStatus();
-
-  if (!status.wifiApprovalPending || status.wifiRequestId == 0) {
-    home_screen->clearWifiApproval();
-    return;
-  }
-
-  // Controller owns the authoritative timeout. A zero remainder is denied
-  // here too, so no stale prompt can approve after its visible countdown.
-  if (status.wifiApprovalRemainingMs == 0) {
-    resolveWifiClient(status.wifiRequestId, false);
-    home_screen->clearWifiApproval();
-    return;
-  }
-
-  // Never replace or reset a keyboard, settings edit, notification popup,
-  // night confirmation, recovery screen, or headless UI. Security default is
-  // an immediate reject; the remote client can make a fresh request later.
-  const bool unsafe = _storage_recovery_active || _night_prompt_active || _popup_pending ||
-                      _display == NULL || curr != home ||
-                      !home_screen->isSafeForWifiApproval();
-  if (unsafe) {
-    resolveWifiClient(status.wifiRequestId, false);
-    home_screen->clearWifiApproval();
-    return;
-  }
-
-  const bool opened = home_screen->syncWifiApproval(status);
-  if (!opened) return;
-
-  if (!_display->isOn()) _display->turnOn();
-  if (!_display->isOn()) {
-    resolveWifiClient(status.wifiRequestId, false);
-    home_screen->clearWifiApproval();
-    return;
-  }
-
-  markDisplayWake(false);
-  _next_refresh = 0;
+  // Controller accepts allowed Wi-Fi clients automatically. Never flash a
+  // confirmation, reject while editing, or wake the display for a TCP request.
+  if (home != NULL) ((HomeScreen*)home)->clearWifiApproval();
 }
 #endif
 
@@ -14255,6 +14245,7 @@ char UITask::handleLongPress(char c) {
   #endif
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
+    showAlert("Сервис: перезапуск", 5000);
     c = 0;   // consume event
   }
   if (c != 0 && curr == home && home != NULL && ((HomeScreen*)home)->isClockPage()) {

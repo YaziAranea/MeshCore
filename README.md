@@ -20,7 +20,7 @@
 
 [⬇ Скачать SmartUI 0.05](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05) · [Как выбрать файл](RELEASE_NOTES_SmartUI_0.05_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
-**0.05 — единая прошивка с выбором подключения.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль командой `wifi setup`, без перепрошивки. Новое подключение по Wi-Fi требует разрешения на экране ноды. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.05_RU.md). Исправления 0.04, [внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.05`; архив — `SmartUI_0.05_all-boards.zip`.
+**0.05 — единая прошивка с выбором подключения.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль или USB-помощник. Обновление 25 сентября автоматически принимает первое Wi-Fi/TCP-приложение, порт **5000**. Отдельного TCP-пароля/TLS нет: только доверенная локальная сеть, без проброса порта в Интернет. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.05_RU.md). Исправления 0.04, [внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.05`; архив — `SmartUI_0.05_all-boards.zip`.
 
 > [!WARNING]
 > **Все ESP32 merged в 0.05 содержат пустое подготовленное хранилище.**
