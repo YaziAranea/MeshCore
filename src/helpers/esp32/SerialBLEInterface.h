@@ -7,6 +7,9 @@
 #include <BLE2902.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+#include <atomic>
+#endif
 
 class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLEServerCallbacks, BLECharacteristicCallbacks {
   BLEServer *pServer;
@@ -18,11 +21,17 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   uint16_t last_conn_id;
   uint32_t _pin_code;
   unsigned long _last_write;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  mutable std::atomic<uint32_t> _session_generation;
+#endif
   uint32_t adv_restart_started;
   bool adv_restart_pending;
 
   struct Frame {
     uint8_t len;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    uint32_t session_generation;
+#endif
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
@@ -34,6 +43,9 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   Frame send_queue[FRAME_QUEUE_SIZE];
 
   void clearBuffers();
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  void advanceSessionGeneration() const;
+#endif
 
 protected:
   // BLESecurityCallbacks methods
@@ -62,6 +74,9 @@ public:
     adv_restart_pending = false;
     _isEnabled = false;
     _last_write = 0;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    _session_generation = 0;
+#endif
     last_conn_id = 0;
     recv_queue = xQueueCreateStatic(
       FRAME_QUEUE_SIZE, sizeof(Frame), recv_queue_storage, &recv_queue_state
@@ -83,6 +98,11 @@ public:
   bool isEnabled() const override { return _isEnabled; }
 
   bool isConnected() const override;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  uint32_t sessionGeneration() const override {
+    return _session_generation.load(std::memory_order_acquire);
+  }
+#endif
 
   bool isReadBusy() const override;
   bool isWriteBusy() const override;

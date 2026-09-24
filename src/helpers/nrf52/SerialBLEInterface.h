@@ -15,6 +15,9 @@ class SerialBLEInterface : public BaseSerialInterface {
   uint16_t _conn_handle;
   unsigned long _last_health_check;
   unsigned long _last_retry_attempt;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  mutable uint32_t _session_generation;
+#endif
 
   struct Frame {
     uint8_t len;
@@ -30,6 +33,9 @@ class SerialBLEInterface : public BaseSerialInterface {
   Frame recv_queue[FRAME_QUEUE_SIZE];
 
   void clearBuffers();
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  void advanceSessionGeneration() const;
+#endif
   void shiftSendQueueLeft();
   void shiftRecvQueueLeft();
   bool isValidConnection(uint16_t handle, bool requireWaitingForSecurity = false) const;
@@ -49,6 +55,9 @@ public:
     _conn_handle = BLE_CONN_HANDLE_INVALID;
     _last_health_check = 0;
     _last_retry_attempt = 0;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    _session_generation = 0;
+#endif
     send_queue_len = 0;
     recv_queue_len = 0;
   }
@@ -66,6 +75,9 @@ public:
   void disable() override;
   bool isEnabled() const override { return _isEnabled; }
   bool isConnected() const override;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  uint32_t sessionGeneration() const override { return _session_generation; }
+#endif
   bool isReadBusy() const override;
   bool isWriteBusy() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;

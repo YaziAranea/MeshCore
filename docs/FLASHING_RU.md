@@ -1,6 +1,6 @@
 # Прошивка готового UF2 или BIN
 
-Эта ветка описывает единый `SmartUI 0.04` для шести плат. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
+Эта ветка описывает единый `SmartUI 0.05` для шести плат. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех трёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает девять прошивок с общим исходным commit.
 
 > [!WARNING]
 > **Любой ESP32 `merged.bin` — только чистая установка со сбросом данных.**
@@ -26,17 +26,17 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_UI_0.04.uf2` |
-| Heltec T114 с TFT | `T114_UI_0.04.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_0.04.uf2` |
+| Heltec T096 FEM ON | `T096_UI_0.05.uf2` |
+| Heltec T114 с TFT | `T114_UI_0.05.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_0.05.uf2` |
 
-Для ближайшего отката скачивайте файл своей платы и манифест из [SmartUI V4](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-v4); V3 также сохранён.
+Для ближайшего отката скачивайте файл своей платы и манифест из [SmartUI 0.04](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.04). Старые V5/V4/V3 также сохранены.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V3 OLED | `Heltec_V3_UI_0.04-merged.bin` | `Heltec_V3_UI_0.04-update.bin` |
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_0.04-merged.bin` | `Heltec_V4.3_UI_0.04-update.bin` |
-| Wireless Paper FULL | `Paper_UI_0.04-merged.bin` | `Paper_UI_0.04-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_UI_0.05-merged.bin` | `Heltec_V3_UI_0.05-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_0.05-merged.bin` | `Heltec_V4.3_UI_0.05-update.bin` |
+| Wireless Paper FULL | `Paper_UI_0.05-merged.bin` | `Paper_UI_0.05-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -60,7 +60,7 @@ SHA-256 и запишите приложение по `0x10000` **без Erase F
 
 **V3 уже очищена, после Erase появился `STORAGE ERROR`:**
 
-1. Заново скачайте `Heltec_V3_UI_0.04-merged.bin`
+1. Заново скачайте `Heltec_V3_UI_0.05-merged.bin`
    и актуальный `SHA256SUMS-ESP32.txt` из того же выпуска.
 2. Проверьте контрольную сумму. В общем `RELEASE-MANIFEST.json` запись V3
    должна содержать `storage.v3_fs2_recovery: true`; внутри прошивки сохранён маркер `FS2`.
@@ -145,7 +145,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- Заставка показывает `MeshCore` и короткое `0.04`; уникальный маркер нужной платы с `SmartUI 0.04` остаётся внутри прошивки и проверяется валидатором, отдельной страницы версии нет.
+- Заставка показывает `MeshCore` и короткое `0.05`; уникальный маркер нужной платы с `SmartUI 0.05` остаётся внутри прошивки и проверяется валидатором, отдельной страницы версии нет.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

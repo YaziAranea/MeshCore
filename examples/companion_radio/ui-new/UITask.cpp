@@ -6,6 +6,10 @@
 #include "ConfirmedChoice.h"
 #include "QuickTargetUi.h"
 #include "SettingUndo.h"
+#if SMARTUI_CONNECTION_SELECTOR
+  #include "ConnectionUiPolicy.h"
+  #include "../ConnectionController.h"
+#endif
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RTCClockQuality.h>
@@ -192,7 +196,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef SMARTUI_RELEASE_LABEL
-  #define SMARTUI_RELEASE_LABEL "0.04"
+  #define SMARTUI_RELEASE_LABEL "0.05"
 #endif
 
 #ifndef UI_RECENT_PAGE
@@ -1357,6 +1361,16 @@ static const char* uiSemanticColorName(uint8_t idx) {
   #define PRESS_LABEL "ввод"
 #else
   #define PRESS_LABEL "удерж."
+#endif
+
+#if SMARTUI_CONNECTION_SELECTOR
+  #define UI_OFFLINE_DM_LED_TITLE "LED ЛС автономно"
+  #define UI_CONNECTED_DM_LED_TITLE "LED ЛС с прилож."
+  #define UI_CONNECTED_DM_LED_DETAIL "приложение связано"
+#else
+  #define UI_OFFLINE_DM_LED_TITLE "LED ЛС без BLE"
+  #define UI_CONNECTED_DM_LED_TITLE "LED ЛС при BLE"
+  #define UI_CONNECTED_DM_LED_DETAIL "телефон подключен"
 #endif
 
 #include "icons.h"
@@ -3694,6 +3708,8 @@ public:
 #endif
 
 class HomeScreen : public UIScreen {
+  friend class UITask;
+
   enum HomePage {
     CLOCK,
 #if UI_BLE_PIN_PAGE
@@ -3888,6 +3904,10 @@ class HomeScreen : public UIScreen {
   NetworkStatusEntry network_status[UI_RECENT_LIST_SIZE];
   RecentChatEntry chat[UI_CHAT_LIST_SIZE];
   int _chat_item_h[UI_CHAT_LIST_SIZE];
+#if SMARTUI_CONNECTION_SELECTOR
+  smartui::ConnectionUiFlow _connection_flow;
+  smartui::WifiApprovalUiFlow _wifi_approval;
+#endif
 
   int roundSnrQ4(int8_t snr_q4) const {
     return snr_q4 >= 0 ? (snr_q4 + 2) / 4 : (snr_q4 - 2) / 4;
@@ -4721,7 +4741,12 @@ class HomeScreen : public UIScreen {
 #if UI_TIMEZONE_PAGE == 1
       case HomePage::TIMEZONE: return "Часовой пояс";
 #endif
-      case HomePage::BLUETOOTH: return "Bluetooth";
+      case HomePage::BLUETOOTH:
+#if SMARTUI_CONNECTION_SELECTOR
+        return "Подключение";
+#else
+        return "Bluetooth";
+#endif
 #if UI_BOARD_LEDS_PAGE == 1
       case HomePage::BOARD_LEDS: return "LED платы";
 #endif
@@ -4914,7 +4939,11 @@ class HomeScreen : public UIScreen {
       }
 #endif
       case HomePage::BLUETOOTH:
+#if SMARTUI_CONNECTION_SELECTOR
+        snprintf(out, out_len, "%s", smartui::companionModeName(_task->getCompanionStatus().selected));
+#else
         snprintf(out, out_len, "%s", _task->isBluetoothEnabled() ? "ВКЛ" : "ВЫКЛ");
+#endif
         break;
 #if UI_BOARD_LEDS_PAGE == 1
       case HomePage::BOARD_LEDS:
@@ -4956,7 +4985,11 @@ class HomeScreen : public UIScreen {
         break;
 #if UI_SMART_B12_TONE_LIST != 1
       case HomePage::SETTINGS_TRANSFER:
+#if SMARTUI_CONNECTION_SELECTOR
+        snprintf(out, out_len, "%s", smartui::companionModeName(_task->getCompanionStatus().selected));
+#else
         snprintf(out, out_len, "BLE");
+#endif
         break;
 #endif
 #endif
@@ -4999,8 +5032,17 @@ class HomeScreen : public UIScreen {
 #endif
         break;
       case 4:
+#if SMARTUI_CONNECTION_SELECTOR
+      {
+        CompanionStatus status = _task->getCompanionStatus();
+        snprintf(out, out_len, "%s %s", smartui::companionModeName(status.selected),
+                 status.clientConnected ? "СВЯЗЬ" : "ЖДЁТ");
+        break;
+      }
+#else
         snprintf(out, out_len, "BLE %s", _task->isBluetoothEnabled() ? "ВКЛ" : "ВЫКЛ");
         break;
+#endif
       case 5:
         snprintf(out, out_len, "СЕРВИС");
         break;
@@ -5047,8 +5089,13 @@ class HomeScreen : public UIScreen {
       case HomePage::HARDWARE_TEST:
       case HomePage::CONTROLS_HELP:
 #endif
-        return SettingOpen;
+#if SMARTUI_CONNECTION_SELECTOR
       case HomePage::BLUETOOTH:
+#endif
+        return SettingOpen;
+#if !SMARTUI_CONNECTION_SELECTOR
+      case HomePage::BLUETOOTH:
+#endif
       case HomePage::MSG_POPUP:
 #if UI_BOARD_LEDS_PAGE == 1
       case HomePage::BOARD_LEDS:
@@ -5821,8 +5868,13 @@ class HomeScreen : public UIScreen {
       }
 #endif
       case HomePage::BLUETOOTH:
+#if SMARTUI_CONNECTION_SELECTOR
+        _connection_flow.reset();
+        _page = HomePage::BLUETOOTH;
+#else
         if (_task->isBluetoothEnabled()) _task->disableBluetooth();
         else _task->enableBluetooth();
+#endif
         break;
 #if UI_BOARD_LEDS_PAGE == 1
       case HomePage::BOARD_LEDS:
@@ -6365,7 +6417,11 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_BLE_PIN_PAGE
     if (page == HomePage::BLE_PIN) {
-      return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0;
+      return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0
+#if SMARTUI_CONNECTION_SELECTOR
+          && _task->getCompanionStatus().selected == CompanionMode::BLE
+#endif
+          ;
     }
 #endif
     if (!UI_RECENT_PAGE && page == HomePage::RECENT) return false;
@@ -6498,7 +6554,11 @@ class HomeScreen : public UIScreen {
     } else if (page == HomePage::LINK_TEST) {
       _task->showAlert("Опрос путей", 800);
     } else if (page == HomePage::BLUETOOTH) {
+#if SMARTUI_CONNECTION_SELECTOR
+      _task->showAlert("Подключение", 800);
+#else
       _task->showAlert("Bluetooth", 800);
+#endif
 #if UI_BLE_PIN_PAGE
     } else if (page == HomePage::BLE_PIN) {
       _task->showAlert("BLE PIN", 800);
@@ -6509,9 +6569,9 @@ class HomeScreen : public UIScreen {
       _task->showAlert("ЛС/упомин.", 800);
 #if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
     } else if (page == HomePage::OFFLINE_DM_LED) {
-      _task->showAlert("LED ЛС без BLE", 800);
+      _task->showAlert(UI_OFFLINE_DM_LED_TITLE, 800);
     } else if (page == HomePage::BLE_DM_LED) {
-      _task->showAlert("LED ЛС при BLE", 800);
+      _task->showAlert(UI_CONNECTED_DM_LED_TITLE, 800);
 #endif
 #if UI_BOARD_LEDS_PAGE == 1
     } else if (page == HomePage::BOARD_LEDS) {
@@ -7338,6 +7398,306 @@ class HomeScreen : public UIScreen {
   }
 #endif
 
+#if SMARTUI_CONNECTION_SELECTOR
+  void renderConnectionHeader(DisplayDriver& display, const char* title, const char* action) const {
+#if UI_COMPACT_SETTINGS_MENU == 1
+    renderSettingsHeader(display, title, action);
+#else
+    (void)action;
+    display.setBold(false);
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, 14, display.width() - 2, title);
+#endif
+  }
+
+  int connectionTextYInRow(DisplayDriver& display, int row_y, int row_h) const {
+    int ink_h = display.getTextInkHeight();
+    if (ink_h <= 0 || ink_h > row_h) ink_h = row_h;
+    // Put the odd spare pixel above the glyph. Otherwise a dark capital's
+    // top stroke touches the dark area outside a selected bottom row and
+    // visually looks split across the highlight boundary.
+    return row_y + (row_h - ink_h + 1) / 2 - display.getTextInkTop();
+  }
+
+  int renderConnectionStatus(DisplayDriver& display, const CompanionStatus& status) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    renderConnectionHeader(display, "Подключение", "Выбрать");
+
+    const int line_h = display.getTextLineHeight() < 8 ? 8 : display.getTextLineHeight();
+    int y = 14 + line_h + 2;
+    char line[48];
+    display.setBold(false);
+    display.setColor(DisplayDriver::LIGHT);
+
+    const uint8_t available_rows = display.height() > y ? (display.height() - y) / line_h : 0;
+    if (available_rows < 5) {
+      snprintf(line, sizeof(line), "%s | клиент: %s",
+               smartui::companionModeName(status.selected),
+               status.clientConnected ? smartui::companionModeName(status.connectedVia) : "нет");
+      drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+      y += line_h;
+
+      snprintf(line, sizeof(line), "USB: %s",
+               status.selected == CompanionMode::USB ? "companion" :
+               (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+      drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+      y += line_h;
+
+      if (smartui::companionModeSupported(status, CompanionMode::WiFi)) {
+        if (status.wifiAssociated && status.wifiLocalIp[0]) {
+          snprintf(line, sizeof(line), "%s", status.wifiLocalIp);
+        } else {
+          snprintf(line, sizeof(line), "Wi-Fi: %s", status.wifiConfigured ? "нет сети" : "не задан");
+        }
+        drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+      }
+
+      uiPopFont(display, saved_font);
+      return UI_IDLE_REFRESH_MILLIS;
+    }
+
+    snprintf(line, sizeof(line), "Режим: %s", smartui::companionModeName(status.selected));
+    drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+    y += line_h;
+
+    snprintf(line, sizeof(line), "Клиент: %s",
+             status.clientConnected ? smartui::companionModeName(status.connectedVia) : "нет");
+    drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+    y += line_h;
+
+    snprintf(line, sizeof(line), "USB: %s",
+             status.selected == CompanionMode::USB ? "companion" :
+             (status.usbConsoleEnabled ? "сервис" : "недоступен"));
+    drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+    y += line_h;
+
+    if (smartui::companionModeSupported(status, CompanionMode::WiFi)) {
+      const char* wifi_state = !status.wifiConfigured ? "не задан" :
+                               (status.wifiAssociated ? "сеть" : "нет сети");
+      snprintf(line, sizeof(line), "Wi-Fi: %s", wifi_state);
+      drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+      y += line_h;
+
+      snprintf(line, sizeof(line), "IP: %s",
+               status.wifiAssociated && status.wifiLocalIp[0] ? status.wifiLocalIp : "--");
+      if (display.getTextWidth(line) > display.width() - 4) {
+        snprintf(line, sizeof(line), "%s",
+                 status.wifiAssociated && status.wifiLocalIp[0] ? status.wifiLocalIp : "--");
+      }
+      drawRichTextStaticEllipsized(display, 2, y, display.width() - 4, line);
+    }
+
+    uiPopFont(display, saved_font);
+    return UI_IDLE_REFRESH_MILLIS;
+  }
+
+  int renderConnectionPicker(DisplayDriver& display, const CompanionStatus& status) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    renderConnectionHeader(display, "Режим", "Выбрать");
+    int line_h = display.getTextLineHeight();
+    if (line_h < 8) line_h = 8;
+    int row_y = 14 + line_h + 2;
+    if (display.height() <= 64 && row_y < 28) row_y = 28;
+    int row_h = line_h > 12 ? line_h : 12;
+    const uint8_t mode_count = smartui::companionModeCount(status);
+    const uint8_t item_count = mode_count + 1;
+    uint8_t visible = (display.height() - row_y) / row_h;
+    if (visible < 1) visible = 1;
+    uint8_t start = _connection_flow.cursor() >= visible
+        ? _connection_flow.cursor() - visible + 1 : 0;
+    if (item_count > visible && start + visible > item_count) start = item_count - visible;
+    const bool scroll = item_count > visible;
+
+    for (uint8_t row = 0; row < visible && start + row < item_count; ++row) {
+      const uint8_t index = start + row;
+      const bool selected = index == _connection_flow.cursor();
+      const bool is_back = index >= mode_count;
+      const CompanionMode mode = is_back ? status.selected : smartui::companionModeAt(status, index);
+      const char* label = is_back ? "Назад" : smartui::companionModeName(mode);
+      const bool active = !is_back && mode == status.selected;
+      const int y = row_y + row * row_h;
+      const int text_y = connectionTextYInRow(display, y, row_h);
+      if (selected) {
+        display.setColor(DisplayDriver::YELLOW);
+        display.fillRect(0, y, display.width() - (scroll ? 3 : 0), row_h);
+      }
+      display.setColor(selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+      display.setBold(false);
+      drawRichTextStaticEllipsized(display, 3, text_y, display.width() - 10, label);
+      if (active) display.drawTextRightAlign(display.width() - (scroll ? 5 : 3), text_y, "OK");
+    }
+
+    if (scroll) {
+      const int track_h = visible * row_h - 2;
+      int thumb_h = track_h * visible / item_count;
+      if (thumb_h < 4) thumb_h = 4;
+      const int thumb_y = row_y + (track_h - thumb_h) * start / (item_count - visible);
+      display.setColor(DisplayDriver::LIGHT);
+      display.drawRect(display.width() - 2, row_y, 2, track_h);
+      display.fillRect(display.width() - 2, thumb_y, 2, thumb_h);
+    }
+
+    uiPopFont(display, saved_font);
+    return UI_IDLE_REFRESH_MILLIS;
+  }
+
+  void renderTwoChoices(DisplayDriver& display, int y, int h, bool right_selected,
+                        const char* left, const char* right) const {
+    const int half = display.width() / 2;
+    const int text_y = connectionTextYInRow(display, y, h);
+    display.setColor(right_selected ? DisplayDriver::LIGHT : DisplayDriver::YELLOW);
+    if (!right_selected) display.fillRect(1, y, half - 2, h);
+    display.setColor(right_selected ? DisplayDriver::LIGHT : DisplayDriver::DARK);
+    drawRichTextCenteredEllipsized(display, half / 2, text_y, half - 4, left);
+
+    display.setColor(right_selected ? DisplayDriver::GREEN : DisplayDriver::LIGHT);
+    if (right_selected) display.fillRect(half + 1, y, display.width() - half - 2, h);
+    display.setColor(right_selected ? DisplayDriver::DARK : DisplayDriver::LIGHT);
+    drawRichTextCenteredEllipsized(display, half + (display.width() - half) / 2, text_y,
+                                   display.width() - half - 4, right);
+  }
+
+  int renderConnectionConfirm(DisplayDriver& display, const CompanionStatus& status) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    renderConnectionHeader(display, "Смена режима", "Подтв.");
+    const int line_h = display.getTextLineHeight() < 8 ? 8 : display.getTextLineHeight();
+    int y = 14 + line_h + 1;
+    char line[48];
+    snprintf(line, sizeof(line), "%s -> %s", smartui::companionModeName(status.selected),
+             smartui::companionModeName(_connection_flow.candidate()));
+    display.setColor(DisplayDriver::YELLOW);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y, display.width() - 4, line);
+    y += line_h;
+    display.setColor(DisplayDriver::LIGHT);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y, display.width() - 4,
+                                   "Связь разорвётся");
+    y += line_h;
+    int choice_y = display.height() - line_h;
+    if (choice_y < y) choice_y = y;
+    renderTwoChoices(display, choice_y, line_h, _connection_flow.confirmChange(), "НЕТ", "СМЕНИТЬ");
+    uiPopFont(display, saved_font);
+    return UI_IDLE_REFRESH_MILLIS;
+  }
+
+  int renderWifiApproval(DisplayDriver& display) const {
+    CompanionStatus status = _task->getCompanionStatus();
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    renderConnectionHeader(display, "Wi-Fi клиент", "Подтв.");
+    const int line_h = display.getTextLineHeight() < 8 ? 8 : display.getTextLineHeight();
+    int y = 14 + line_h + 1;
+    char line[48];
+    snprintf(line, sizeof(line), "IP: %s", status.wifiClientIp[0] ? status.wifiClientIp : "?");
+    if (display.getTextWidth(line) > display.width() - 4) {
+      snprintf(line, sizeof(line), "%s", status.wifiClientIp[0] ? status.wifiClientIp : "?");
+    }
+    display.setColor(DisplayDriver::YELLOW);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y, display.width() - 4, line);
+    y += line_h;
+    display.setColor(DisplayDriver::LIGHT);
+    drawRichTextCenteredEllipsized(display, display.width() / 2, y, display.width() - 4,
+                                   "Разрешить доступ?");
+    y += line_h;
+    const unsigned long seconds = (status.wifiApprovalRemainingMs + 999UL) / 1000UL;
+    int choice_y = display.height() - line_h;
+    if (y + line_h <= choice_y) {
+      snprintf(line, sizeof(line), "Осталось: %lu с", seconds);
+      drawRichTextCenteredEllipsized(display, display.width() / 2, y, display.width() - 4, line);
+    }
+    if (choice_y < y) choice_y = y;
+    renderTwoChoices(display, choice_y, line_h, _wifi_approval.allow(), "НЕТ", "ДА");
+    uiPopFont(display, saved_font);
+    return 250;
+  }
+
+  bool handleConnectionInput(char c) {
+    if (!_settings_open || _page != HomePage::BLUETOOTH) return false;
+    CompanionStatus status = _task->getCompanionStatus();
+    if (_connection_flow.view() == smartui::ConnectionUiView::Status) {
+      if (c == KEY_ENTER) {
+        _connection_flow.openPicker(status);
+      } else if (c == KEY_LEFT || c == KEY_PREV || c == KEY_NEXT || c == KEY_RIGHT) {
+        _connection_flow.reset();
+        _page = HomePage::SETTINGS;
+      } else {
+        return false;
+      }
+      return true;
+    }
+
+    if (_connection_flow.view() == smartui::ConnectionUiView::Picker) {
+      if (c == KEY_LEFT || c == KEY_PREV) {
+        _connection_flow.movePicker(status, -1);
+      } else if (c == KEY_NEXT || c == KEY_RIGHT) {
+        _connection_flow.movePicker(status, 1);
+      } else if (c == KEY_ENTER) {
+        _connection_flow.selectPicker(status);
+      } else {
+        return false;
+      }
+      return true;
+    }
+
+    if (c == KEY_LEFT || c == KEY_PREV || c == KEY_NEXT || c == KEY_RIGHT) {
+      _connection_flow.moveConfirm();
+      return true;
+    }
+    if (c != KEY_ENTER) return false;
+    if (!_connection_flow.confirmChange()) {
+      _connection_flow.cancelConfirm();
+      return true;
+    }
+
+    const CompanionMode requested = _connection_flow.candidate();
+    const bool changed = _task->setCompanionMode(requested);
+    _connection_flow.reset();
+    if (changed && requested == CompanionMode::WiFi && !status.wifiConfigured) {
+      _task->showAlert("Настройте Wi-Fi через USB", 1800);
+    } else if (changed) {
+      char alert[48];
+      snprintf(alert, sizeof(alert), "Режим: %s", smartui::companionModeName(requested));
+      _task->showAlert(alert, 1000);
+    } else {
+      _task->showAlert("Режим не сохранён", 1300);
+    }
+    return true;
+  }
+
+  bool handleWifiApprovalInput(char c) {
+    if (!_wifi_approval.open()) return false;
+    if (c == KEY_LEFT || c == KEY_PREV || c == KEY_NEXT || c == KEY_RIGHT) {
+      _wifi_approval.toggle();
+      return true;
+    }
+    if (c != KEY_ENTER) return true;
+    const bool allow = _wifi_approval.allow();
+    const uint32_t request_id = _wifi_approval.requestId();
+    const bool resolved = _task->resolveWifiClient(request_id, allow);
+    _wifi_approval.reset();
+    _task->showAlert(resolved ? (allow ? "Wi-Fi клиент принят" : "Wi-Fi клиент отклонён")
+                              : "Запрос Wi-Fi истёк", 1100);
+    return true;
+  }
+
+  bool isSafeForWifiApproval() const {
+    if (_quick_reply_open || _shutdown_init) return false;
+#if UI_QUICK_REPLY_KEYBOARD
+    if (_quick_keyboard_open || _quick_confirm_open) return false;
+#endif
+#if UI_ADC_MULTIPLIER_PAGE == 1
+    if (_adc_edit || _adc_reset_confirm) return false;
+#endif
+    return smartui::wifiApprovalSurfaceSafe(
+        _settings_open, _page == HomePage::BLUETOOTH, _connection_flow.view(),
+        _page == defaultHomePage() || isClockPage());
+  }
+
+  bool syncWifiApproval(const CompanionStatus& status) {
+    return _wifi_approval.sync(status);
+  }
+
+  void clearWifiApproval() { _wifi_approval.reset(); }
+#endif
+
   void refresh_sensors() {
     if (smartui::deadlineDueOrImmediate((uint32_t)millis(),
                                         (uint32_t)next_sensors_refresh)) {
@@ -7397,6 +7757,9 @@ public:
        }
 
   void resetToFirstPage() {
+#if SMARTUI_CONNECTION_SELECTOR
+    _connection_flow.reset();
+#endif
 #if UI_ADC_MULTIPLIER_PAGE == 1
     cancelAdcEdit();
 #endif
@@ -7511,6 +7874,9 @@ public:
   }
 
   bool isIdleForNightPrompt() const {
+#if SMARTUI_CONNECTION_SELECTOR
+    if (_wifi_approval.open()) return false;
+#endif
     if (_settings_open || _quick_reply_open || _shutdown_init) return false;
 #if UI_QUICK_REPLY_KEYBOARD
     if (_quick_keyboard_open || _quick_confirm_open) return false;
@@ -7547,19 +7913,32 @@ public:
 
   bool isBlePinPage() const {
 #if UI_BLE_PIN_PAGE
-    return !_settings_open && _page == HomePage::BLE_PIN;
+    return !_settings_open && _page == HomePage::BLE_PIN
+#if SMARTUI_CONNECTION_SELECTOR
+        && _task->getCompanionStatus().selected == CompanionMode::BLE
+#endif
+        ;
 #else
     return false;
 #endif
   }
 
   void poll() override {
+#if SMARTUI_CONNECTION_SELECTOR && UI_BLE_PIN_PAGE
+    if (!_settings_open && _page == HomePage::BLE_PIN &&
+        _task->getCompanionStatus().selected != CompanionMode::BLE) {
+      _page = defaultHomePage();
+    }
+#endif
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
       _task->shutdown();
     }
   }
 
   bool keepDisplayOn() const override {
+#if SMARTUI_CONNECTION_SELECTOR
+    if (_wifi_approval.open()) return true;
+#endif
 #if UI_CHAT_KEEP_DISPLAY_ON
     return _page == HomePage::CHAT;
 #else
@@ -7569,6 +7948,9 @@ public:
 
   int render(DisplayDriver& display) override {
     char tmp[80];
+#if SMARTUI_CONNECTION_SELECTOR
+    if (_wifi_approval.open()) return renderWifiApproval(display);
+#endif
     bool skip_chrome = false;
 #if UI_WIRELESS_PAPER_BIG_CLOCK
     skip_chrome = _page == HomePage::CLOCK;
@@ -7661,6 +8043,9 @@ public:
     }
 
     if (_page == HomePage::FIRST) {
+#if SMARTUI_CONNECTION_SELECTOR
+      CompanionStatus first_connection = _task->getCompanionStatus();
+#endif
 #if UI_FIRST_PAGE_SAFE_CLOCK
       uint32_t rtc_now = _rtc->getCurrentTime();
       bool time_valid = _task->hasTrustedTime() && rtc_now >= UI_RTC_VALID_MIN;
@@ -7708,16 +8093,32 @@ public:
       snprintf(tmp, sizeof(tmp), "Msg %d", _task->getMsgCount());
       display.setCursor(0, footer_y);
       display.print(tmp);
-      if (_task->hasConnection()) {
+      if (
+#if SMARTUI_CONNECTION_SELECTOR
+          first_connection.clientConnected
+#else
+          _task->hasConnection()
+#endif
+      ) {
         display.setColor(DisplayDriver::GREEN);
-        display.drawTextCentered(display.width() / 2, footer_y, "BLE");
+        display.drawTextCentered(display.width() / 2, footer_y,
+#if SMARTUI_CONNECTION_SELECTOR
+                                 smartui::companionModeName(first_connection.connectedVia)
+#else
+                                 "BLE"
+#endif
+        );
       }
 #else
 #if UI_V4_3_OLED_PROFILE
 #if UI_T096_PREMIUM_TFT
       if (false) {
 #else
-      if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
+      if (!_task->hasConnection() && the_mesh.getBLEPin() != 0
+#if SMARTUI_CONNECTION_SELECTOR
+          && first_connection.selected == CompanionMode::BLE
+#endif
+      ) {
 #endif
         display.setColor(DisplayDriver::YELLOW);
         uint8_t small_font = uiPushCompactChromeFont(display);
@@ -7735,7 +8136,15 @@ public:
         drawRichTextCentered(display, display.width() / 2, 28, tmp);
         uiPopFont(display, hero_font);
 
-        #ifdef WIFI_SSID
+        #if SMARTUI_CONNECTION_SELECTOR
+          if (first_connection.wifiAssociated && first_connection.wifiLocalIp[0]) {
+            snprintf(tmp, sizeof(tmp), "IP: %s", first_connection.wifiLocalIp);
+            uint8_t small_font = uiPushCompactChromeFont(display);
+            display.setColor(DisplayDriver::LIGHT);
+            drawRichTextCentered(display, display.width() / 2, 52, tmp);
+            uiPopFont(display, small_font);
+          }
+        #elif defined(WIFI_SSID)
           IPAddress ip = WiFi.localIP();
           snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
           uint8_t small_font = uiPushCompactChromeFont(display);
@@ -7744,14 +8153,24 @@ public:
           uiPopFont(display, small_font);
         #endif
       }
-      if (_task->hasConnection()) {
+      if (
+#if SMARTUI_CONNECTION_SELECTOR
+          first_connection.clientConnected
+#else
+          _task->hasConnection()
+#endif
+      ) {
         uint8_t small_font = uiPushCompactChromeFont(display);
         display.setColor(DisplayDriver::GREEN);
         drawRichTextCentered(display, display.width() / 2, 52, "< Связь есть >");
         uiPopFont(display, small_font);
       }
 #else
-      if (!_task->hasConnection() && the_mesh.getBLEPin() != 0) {
+      if (!_task->hasConnection() && the_mesh.getBLEPin() != 0
+#if SMARTUI_CONNECTION_SELECTOR
+          && first_connection.selected == CompanionMode::BLE
+#endif
+      ) {
         display.setColor(DisplayDriver::YELLOW);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 22, "ПИНКОД ОТ БЛЮТУС");
@@ -7764,14 +8183,26 @@ public:
         sprintf(tmp, "Сообщ: %d", _task->getMsgCount());
         display.drawTextCentered(display.width() / 2, 20, tmp);
 
-        #ifdef WIFI_SSID
+        #if SMARTUI_CONNECTION_SELECTOR
+          if (first_connection.wifiAssociated && first_connection.wifiLocalIp[0]) {
+            snprintf(tmp, sizeof(tmp), "IP: %s", first_connection.wifiLocalIp);
+            display.setTextSize(1);
+            display.drawTextCentered(display.width() / 2, 54, tmp);
+          }
+        #elif defined(WIFI_SSID)
           IPAddress ip = WiFi.localIP();
           snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
           display.setTextSize(1);
           display.drawTextCentered(display.width() / 2, 54, tmp);
         #endif
       }
-      if (_task->hasConnection()) {
+      if (
+#if SMARTUI_CONNECTION_SELECTOR
+          first_connection.clientConnected
+#else
+          _task->hasConnection()
+#endif
+      ) {
         display.setColor(DisplayDriver::GREEN);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Связь есть >");
@@ -8767,6 +9198,16 @@ public:
       uiPopFont(display, link_font);
 #endif
     } else if (_page == HomePage::BLUETOOTH) {
+#if SMARTUI_CONNECTION_SELECTOR
+      CompanionStatus status = _task->getCompanionStatus();
+      if (_connection_flow.view() == smartui::ConnectionUiView::Picker) {
+        return renderConnectionPicker(display, status);
+      }
+      if (_connection_flow.view() == smartui::ConnectionUiView::Confirm) {
+        return renderConnectionConfirm(display, status);
+      }
+      return renderConnectionStatus(display, status);
+#else
       display.setColor(DisplayDriver::GREEN);
       display.drawXbm((display.width() - 32) / 2, 18,
           _task->isBluetoothEnabled() ? bluetooth_on : bluetooth_off,
@@ -8778,6 +9219,7 @@ public:
 #else
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "перекл: " PRESS_LABEL);
+#endif
 #endif
 #if UI_BLE_PIN_PAGE
     } else if (_page == HomePage::BLE_PIN) {
@@ -8822,11 +9264,11 @@ public:
 #if UI_V4_3_OLED_PROFILE
       char status_line[32];
       snprintf(status_line, sizeof(status_line), "LED: %s", _task->isOfflineDmLedEnabled() ? "ВКЛ" : "ВЫКЛ");
-      drawOledCompactMenuPage(display, "LED ЛС без BLE", status_line, "только личные", PRESS_LABEL);
+      drawOledCompactMenuPage(display, UI_OFFLINE_DM_LED_TITLE, status_line, "только личные", PRESS_LABEL);
 #else
       display.setColor(DisplayDriver::GREEN);
       display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 14, "LED ЛС без BLE");
+      display.drawTextCentered(display.width() / 2, 14, UI_OFFLINE_DM_LED_TITLE);
       display.setCursor(0, 29);
       snprintf(tmp, sizeof(tmp), "LED: %s", _task->isOfflineDmLedEnabled() ? "ВКЛ" : "ВЫКЛ");
       display.print(tmp);
@@ -8839,16 +9281,16 @@ public:
 #if UI_V4_3_OLED_PROFILE
       char status_line[32];
       snprintf(status_line, sizeof(status_line), "LED: %s", _task->isBleDmLedEnabled() ? "ВКЛ" : "ВЫКЛ");
-      drawOledCompactMenuPage(display, "LED ЛС при BLE", status_line, "телефон подключен", PRESS_LABEL);
+      drawOledCompactMenuPage(display, UI_CONNECTED_DM_LED_TITLE, status_line, UI_CONNECTED_DM_LED_DETAIL, PRESS_LABEL);
 #else
       display.setColor(DisplayDriver::GREEN);
       display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 14, "LED ЛС при BLE");
+      display.drawTextCentered(display.width() / 2, 14, UI_CONNECTED_DM_LED_TITLE);
       display.setCursor(0, 29);
       snprintf(tmp, sizeof(tmp), "LED: %s", _task->isBleDmLedEnabled() ? "ВКЛ" : "ВЫКЛ");
       display.print(tmp);
       display.setCursor(0, 42);
-      display.print("телефон подключен");
+      display.print(UI_CONNECTED_DM_LED_DETAIL);
       display.setCursor(0, 53);
       display.print(PRESS_LABEL);
 #endif
@@ -9253,8 +9695,15 @@ public:
       const uint16_t mv = _task->getBattMilliVolts();
       if (mv > 0) snprintf(voltage, sizeof(voltage), "%.3fV", mv / 1000.0f);
       else strcpy(voltage, "--V");
+#if SMARTUI_CONNECTION_SELECTOR
+      CompanionStatus connection_status = _task->getCompanionStatus();
+      snprintf(tmp, sizeof(tmp), "%s %s:%s", voltage,
+               smartui::companionModeName(connection_status.selected),
+               connection_status.clientConnected ? "СВЯЗЬ" : "ЖДЁТ");
+#else
       snprintf(tmp, sizeof(tmp), "%s BLE:%s", voltage,
                _task->hasConnection() ? "СВЯЗЬ" : (_task->isBluetoothEnabled() ? "ЖДЁТ" : "ВЫКЛ"));
+#endif
       display.setColor(DisplayDriver::LIGHT);
       drawRichTextStaticEllipsized(display, 1, y, display.width() - 2, tmp);
       snprintf(tmp, sizeof(tmp), "RSSI %d  SNR %.1f",
@@ -9299,7 +9748,13 @@ public:
       display.setColor(DisplayDriver::GREEN);
       drawRichTextCenteredEllipsized(display, display.width() / 2, 14, display.width(), "Экспорт / импорт");
       display.setColor(DisplayDriver::LIGHT);
+#if SMARTUI_CONNECTION_SELECTOR
+      CompanionStatus transfer_status = _task->getCompanionStatus();
+      snprintf(tmp, sizeof(tmp), "%s: custom vars", smartui::companionModeName(transfer_status.selected));
+      drawRichTextCenteredEllipsized(display, display.width() / 2, 30, display.width() - 2, tmp);
+#else
       drawRichTextCenteredEllipsized(display, display.width() / 2, 30, display.width() - 2, "BLE: custom vars");
+#endif
       display.setColor(DisplayDriver::YELLOW);
       drawRichTextCenteredEllipsized(display, display.width() / 2, 43, display.width() - 2, "ключ smartui");
       display.setColor(DisplayDriver::LIGHT);
@@ -9323,7 +9778,11 @@ public:
       if (_settings_open) {
         drawOledCompactMenuPage(display, "Настройки", "Назад", "в главное меню", PRESS_LABEL);
       } else {
+#if SMARTUI_CONNECTION_SELECTOR
+        drawOledCompactMenuPage(display, "Настройки", "радио / связь / экран", "сигналы / CH2 / АЦП", "вход: " PRESS_LABEL);
+#else
         drawOledCompactMenuPage(display, "Настройки", "радио / BLE / экран", "сигналы / CH2 / АЦП", "вход: " PRESS_LABEL);
+#endif
       }
 #else
       display.setColor(DisplayDriver::GREEN);
@@ -9334,7 +9793,11 @@ public:
         display.drawTextCentered(display.width() / 2, 44, "в главное меню");
         display.drawTextCentered(display.width() / 2, 64 - 11, PRESS_LABEL);
       } else {
+#if SMARTUI_CONNECTION_SELECTOR
+        display.drawTextCentered(display.width() / 2, 32, "радио / связь / экран");
+#else
         display.drawTextCentered(display.width() / 2, 32, "радио / BLE / экран");
+#endif
         display.drawTextCentered(display.width() / 2, 44, "сигналы / CH2 / АЦП");
         display.drawTextCentered(display.width() / 2, 64 - 11, "вход: " PRESS_LABEL);
       }
@@ -9363,6 +9826,10 @@ public:
   }
 
   bool handleInput(char c) override {
+#if SMARTUI_CONNECTION_SELECTOR
+    if (_wifi_approval.open()) return handleWifiApprovalInput(c);
+    if (handleConnectionInput(c)) return true;
+#endif
     if (_quick_reply_open) {
 #if UI_QUICK_REPLY_KEYBOARD
       if (_quick_keyboard_open) {
@@ -9519,11 +9986,15 @@ public:
       return true;
     }
     if (c == KEY_ENTER && _settings_open && _page == HomePage::BLUETOOTH) {
+#if SMARTUI_CONNECTION_SELECTOR
+      _connection_flow.openPicker(_task->getCompanionStatus());
+#else
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
       } else {
         _task->enableBluetooth();
       }
+#endif
       return true;
     }
     if (c == KEY_ENTER && _settings_open && _page == HomePage::MSG_POPUP) {
@@ -10502,7 +10973,7 @@ void UITask::toggleOfflineDmLed() {
     _important_notify_led_next = 0;
   }
 #endif
-  showAlert(isOfflineDmLedEnabled() ? "LED ЛС без BLE: ВКЛ" : "LED ЛС без BLE: ВЫКЛ", 900);
+  showAlert(isOfflineDmLedEnabled() ? UI_OFFLINE_DM_LED_TITLE ": ВКЛ" : UI_OFFLINE_DM_LED_TITLE ": ВЫКЛ", 900);
   _next_refresh = 0;
 }
 
@@ -10524,7 +10995,7 @@ void UITask::toggleBleDmLed() {
     _important_notify_led_next = 0;
   }
 #endif
-  showAlert(isBleDmLedEnabled() ? "LED ЛС при BLE: ВКЛ" : "LED ЛС при BLE: ВЫКЛ", 900);
+  showAlert(isBleDmLedEnabled() ? UI_CONNECTED_DM_LED_TITLE ": ВКЛ" : UI_CONNECTED_DM_LED_TITLE ": ВЫКЛ", 900);
   _next_refresh = 0;
 }
 
@@ -13165,6 +13636,64 @@ void UITask::updateConnectionState() {
   }
 }
 
+#if SMARTUI_CONNECTION_SELECTOR
+CompanionStatus UITask::getCompanionStatus() const {
+  return connection_controller.status();
+}
+
+bool UITask::setCompanionMode(CompanionMode mode) {
+  return connection_controller.setMode(mode);
+}
+
+bool UITask::resolveWifiClient(uint32_t request_id, bool approve) {
+  return connection_controller.resolveWifiClient(request_id, approve);
+}
+
+void UITask::connectionApprovalHandler() {
+  if (home == NULL) return;
+  HomeScreen* home_screen = (HomeScreen*)home;
+  CompanionStatus status = getCompanionStatus();
+
+  if (!status.wifiApprovalPending || status.wifiRequestId == 0) {
+    home_screen->clearWifiApproval();
+    return;
+  }
+
+  // Controller owns the authoritative timeout. A zero remainder is denied
+  // here too, so no stale prompt can approve after its visible countdown.
+  if (status.wifiApprovalRemainingMs == 0) {
+    resolveWifiClient(status.wifiRequestId, false);
+    home_screen->clearWifiApproval();
+    return;
+  }
+
+  // Never replace or reset a keyboard, settings edit, notification popup,
+  // night confirmation, recovery screen, or headless UI. Security default is
+  // an immediate reject; the remote client can make a fresh request later.
+  const bool unsafe = _storage_recovery_active || _night_prompt_active || _popup_pending ||
+                      _display == NULL || curr != home ||
+                      !home_screen->isSafeForWifiApproval();
+  if (unsafe) {
+    resolveWifiClient(status.wifiRequestId, false);
+    home_screen->clearWifiApproval();
+    return;
+  }
+
+  const bool opened = home_screen->syncWifiApproval(status);
+  if (!opened) return;
+
+  if (!_display->isOn()) _display->turnOn();
+  if (!_display->isOn()) {
+    resolveWifiClient(status.wifiRequestId, false);
+    home_screen->clearWifiApproval();
+    return;
+  }
+
+  markDisplayWake(false);
+  _next_refresh = 0;
+}
+#endif
+
 void UITask::handlePendingPopupWake() {
   if (!_popup_pending || _storage_recovery_active) return;
   if (!areMsgPopupsEnabled()) {
@@ -13230,6 +13759,12 @@ void UITask::shutdown(bool restart, bool preserve_eink_frame, bool emergency) {
     _next_refresh = 0;
     return;
   }
+
+#if SMARTUI_CONNECTION_SELECTOR
+  // Stop every companion transport during the final shutdown window. Never
+  // special-case BLE here: USB/Wi-Fi can be the selected client transport.
+  if (_interfaceManager != NULL) _interfaceManager->disable();
+#endif
 
   #ifdef PIN_BUZZER
   /* note: we have a choice here -
@@ -13330,6 +13865,9 @@ void UITask::loop() {
   debugHeartbeat();
   updateConnectionState();
   nightModeHandler();
+#if SMARTUI_CONNECTION_SELECTOR
+  connectionApprovalHandler();
+#endif
 #if UI_BUTTON_WAKE_IRQ && defined(PIN_USER_BTN)
   noInterrupts();
   bool button_wake_irq = ui_button_wake_irq_pending;
@@ -13342,6 +13880,7 @@ void UITask::loop() {
   handleButtonWakeLatch();
   bool raw_wake_consumed = handleRawButtonWakeWhenDark();
 
+#if !SMARTUI_CONNECTION_SELECTOR
   if (_ble_reenable_at != 0 &&
       smartui::deadlineReached((uint32_t)millis(), (uint32_t)_ble_reenable_at)) {
     enableBluetooth();
@@ -13349,6 +13888,7 @@ void UITask::loop() {
     showAlert("BLE connect app", 1000);
     _next_refresh = 0;
   }
+#endif
 
   char c = 0;
 #if UI_HAS_JOYSTICK

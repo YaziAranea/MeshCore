@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish SmartUI 0.04 after all six-board checks pass
+        description: Publish SmartUI 0.05 after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -42,15 +42,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.04.uf2
+            uf2_name: T096_UI_0.05.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.04.uf2
+            uf2_name: T114_UI_0.05.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.04.uf2
+            uf2_name: ProMicro_RA62_UI_0.05.uf2
 
     steps:
       - name: Check out source
@@ -156,15 +156,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.04
+            stem: Heltec_V3_UI_0.05
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.04
+            stem: Heltec_V4.3_UI_0.05
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.04
+            stem: Paper_UI_0.05
 
     steps:
       - name: Check out source
@@ -470,6 +470,18 @@ jobs:
       - name: Check ADC drafts, night prompts and transactional UI settings
         run: python tools/test_ui_runtime_v004.py
 
+      - name: Check local application session boundaries without losing inbox
+        run: python tools/test_connection_session.py
+
+      - name: Check exclusive transports, USB sessions and Wi-Fi client approval
+        run: python tools/test_transport_selector.py
+
+      - name: Check connection persistence and USB Wi-Fi provisioning
+        run: python tools/test_connection_controller.py
+
+      - name: Check connection UI navigation and real-font layouts
+        run: python tools/test_connection_ui_v005.py
+
       - name: Check SSD1306 font profile guards
         run: python tools/test_ssd1306_font_profiles.py
 
@@ -539,12 +551,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-experimental-release:
-    name: Publish SmartUI 0.04
+    name: Publish SmartUI 0.05
     if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-2.1-experimental.3'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-experimental-release-smartui-0.04
+      group: publish-experimental-release-smartui-0.05
       cancel-in-progress: false
     permissions:
       contents: write
@@ -563,13 +575,13 @@ jobs:
           name: smartui-experimental-release
           path: release
 
-      - name: Create or resume the SmartUI 0.04 release page
+      - name: Create or resume the SmartUI 0.05 release page
         shell: bash
         run: |
           set -euo pipefail
-          tag="smartui-0.04"
-          title="SmartUI 0.04"
-          notes="release/RELEASE_NOTES_SmartUI_0.04_RU.md"
+          tag="smartui-0.05"
+          title="SmartUI 0.05"
+          notes="release/RELEASE_NOTES_SmartUI_0.05_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.

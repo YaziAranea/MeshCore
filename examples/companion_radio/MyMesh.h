@@ -188,6 +188,13 @@ public:
   // One bounded persistence attempt.  Callers decide whether a failed manual
   // shutdown is cancelled or an emergency shutdown proceeds regardless.
   bool flushPendingStorage();
+#if SMARTUI_CONNECTION_SELECTOR
+  // A new local client must not inherit a previous client's iterator, signing
+  // buffer or pending management requests. The radio/offline inbox is retained.
+  void resetLocalAppSession();
+  bool isCLIRescue() const { return _cli_rescue; }
+  bool isStorageRecoveryRequired() const { return storage_recovery_required; }
+#endif
   bool isPhoneGpsEnabled() const {
 #if UI_PHONE_GPS == 1
     return _prefs.gps_source == GPS_SOURCE_PHONE;
@@ -393,6 +400,9 @@ private:
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
   uint8_t app_target_ver;
+#if SMARTUI_CONNECTION_SELECTOR
+  uint32_t last_local_session_generation = 0;
+#endif
   uint8_t *sign_data;
   uint32_t sign_data_len;
   mesh::storage::DeferredSavePolicy dirty_contacts;

@@ -19,8 +19,8 @@ from validate_release_esp32 import ImagePair, validate_pair, validate_exact_appl
 
 
 PAIR = ImagePair(
-    "Heltec_V3_UI_0.04",
-    b"V3 SmartUI 0.04 FS2",
+    "Heltec_V3_UI_0.05",
+    b"V3 SmartUI 0.05 FS2",
 )
 
 PARTITION_OFFSET = 0x8000

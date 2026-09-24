@@ -21,6 +21,10 @@ static uint32_t _atoi(const char* sp) {
 #include <helpers/MultiSerialInterface.h>
 MultiSerialInterface interface_manager;
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  #include "ConnectionController.h"
+#endif
+
 // include bluetooth interface
 #if defined(BLE_PIN_CODE)
   #ifdef ESP32
@@ -37,7 +41,9 @@ MultiSerialInterface interface_manager;
 #endif
 
 // include wifi interface
-#ifdef WIFI_SSID
+#if defined(WIFI_SSID) || \
+    (defined(ESP32) && defined(SMARTUI_CONNECTION_SELECTOR) && \
+     SMARTUI_CONNECTION_SELECTOR)
   #ifndef TCP_PORT
     #define TCP_PORT 5000
   #endif
@@ -109,6 +115,41 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
    #endif
 );
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+static void resetCompanionSession() {
+  the_mesh.resetLocalAppSession();
+}
+
+static void setWifiSleepInhibit(bool inhibit) {
+#if defined(ESP32)
+  board.setInhibitSleep(inhibit);
+#else
+  (void)inhibit;
+#endif
+}
+
+static bool isCompanionCliRescue() {
+  return the_mesh.isCLIRescue();
+}
+
+static bool isCompanionStorageQuarantined() {
+  return the_mesh.isStorageRecoveryRequired();
+}
+
+#if defined(ENABLE_USB_INTERFACE) && \
+    (defined(NRF52_PLATFORM) || \
+     (defined(ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && \
+      ARDUINO_USB_CDC_ON_BOOT))
+static bool isUsbCompanionLinkPresent(void*) {
+#if defined(NRF52_PLATFORM)
+  return Serial.dtr();
+#else
+  return static_cast<bool>(Serial);
+#endif
+}
+#endif
+#endif
+
 /* END GLOBAL OBJECTS */
 
 static bool radio_initialized = false;
@@ -166,7 +207,8 @@ static void showFatalStorageError(DisplayDriver* disp, const char* title,
 #endif
 
 /* WIFI RECONNECT TRACKERS */
-#if defined(ESP32) && defined(WIFI_SSID)
+#if defined(ESP32) && defined(WIFI_SSID) && \
+    !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR)
   bool wifi_needs_reconnect = false;
   unsigned long last_wifi_reconnect_attempt = 0;
 #endif
@@ -295,7 +337,14 @@ void setup() {
 #endif
 
 // add wifi interface
-#ifdef WIFI_SSID
+#if defined(ESP32) && defined(SMARTUI_CONNECTION_SELECTOR) && \
+    SMARTUI_CONNECTION_SELECTOR
+  // Credentials and association are owned by ConnectionController.  Starting
+  // the transport here only records its TCP port; exclusive selection decides
+  // when the listener becomes available.
+  wifi_interface.begin(TCP_PORT);
+  interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+#elif defined(WIFI_SSID)
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.setAutoReconnect(true);
 
@@ -316,7 +365,14 @@ void setup() {
 
 // add usb interface
 #if defined(ENABLE_USB_INTERFACE)
+  #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR && \
+      (defined(NRF52_PLATFORM) || \
+       (defined(ESP32) && defined(ARDUINO_USB_CDC_ON_BOOT) && \
+        ARDUINO_USB_CDC_ON_BOOT))
+  usb_serial_interface.begin(Serial, isUsbCompanionLinkPresent);
+  #else
   usb_serial_interface.begin(Serial);
+  #endif
   interface_manager.addInterface(InterfaceType::USB, &usb_serial_interface);
 #endif
 
@@ -335,6 +391,21 @@ void setup() {
 #endif
 
   the_mesh.startInterface(interface_manager);
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  ConnectionControllerHooks connection_hooks;
+  connection_hooks.resetLocalSession = resetCompanionSession;
+  connection_hooks.setWifiSleepInhibit = setWifiSleepInhibit;
+  connection_hooks.isCliRescue = isCompanionCliRescue;
+  connection_hooks.isStorageQuarantined = isCompanionStorageQuarantined;
+  connection_controller.begin(
+      store, interface_manager, Serial,
+    #if defined(ESP32)
+      &wifi_interface,
+    #else
+      nullptr,
+    #endif
+      connection_hooks);
+#endif
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1
@@ -375,11 +446,19 @@ void setup() {
 #endif
 
   esp_err_t errPM = esp_pm_configure(&pm_config);
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  // Selected USB carries framed companion traffic only.  Never inject text
+  // diagnostics into that byte stream.
+  if (connection_controller.status().usbConsoleEnabled) {
+#endif
   if (errPM == ESP_OK) {
     Serial.println("Power Management configured successfully");
   } else {
     Serial.printf("Power Management failed to configure: %d\r\n", errPM);
   }
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  }
+#endif
 #endif
 }
 
@@ -390,6 +469,9 @@ void loop() {
   if (!paper_display_attached && display.retryAfterMillis() == 0 && display.begin()) {
     paper_display_attached = ui_task.attachDisplay(&display);
   }
+#endif
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  connection_controller.loop();
 #endif
   the_mesh.loop();
   interface_manager.loop();
@@ -416,7 +498,8 @@ void loop() {
 #endif
   }
 
-#if defined(ESP32) && defined(WIFI_SSID)
+#if defined(ESP32) && defined(WIFI_SSID) && \
+    !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR)
   // Safely attempt to reconnect every 10 seconds if flagged
   if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
     WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");

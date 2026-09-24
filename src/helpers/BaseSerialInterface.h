@@ -14,6 +14,10 @@ public:
   virtual bool isEnabled() const = 0;
 
   virtual bool isConnected() const = 0;
+  // Monotonic local-session epoch.  Transports which can distinguish clients
+  // increment this on each accepted session and disconnect.  Zero preserves
+  // compatibility for legacy transports without session tracking.
+  virtual uint32_t sessionGeneration() const { return 0; }
   virtual void loop() {};
 
   virtual bool isReadBusy() const = 0;

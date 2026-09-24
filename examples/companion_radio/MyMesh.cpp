@@ -1790,7 +1790,35 @@ bool MyMesh::isValidClientRepeatFreq(uint32_t f) const {
 void MyMesh::startInterface(BaseSerialInterface &serial) {
   _serial = &serial;
   serial.enable();
+#if SMARTUI_CONNECTION_SELECTOR
+  last_local_session_generation = serial.sessionGeneration();
+#endif
 }
+
+#if SMARTUI_CONNECTION_SELECTOR
+void MyMesh::resetLocalAppSession() {
+  last_local_session_generation = _serial ? _serial->sessionGeneration() : 0;
+  _iter_started = false;
+  _iter_filter_since = 0;
+  _most_recent_lastmod = 0;
+  app_target_ver = 0;
+  clearPendingReqs();
+  if (sign_data) {
+    // Do not leave the previous client's unfinished signing payload in RAM.
+    volatile uint8_t* p = sign_data;
+    for (uint32_t i = 0; i < sign_data_len; ++i) p[i] = 0;
+    free(sign_data);
+    sign_data = nullptr;
+  }
+  sign_data_len = 0;
+  memset(out_frame, 0, sizeof(out_frame));
+  memset(send_scope.key, 0, sizeof(send_scope.key));
+  send_unscoped = false;
+  if (_ui) _ui->setHasConnection(false);
+  // cmd_frame may already contain the FIRST frame of the new session. Never
+  // erase it here, and never clear unread messages or the offline queue.
+}
+#endif
 
 void MyMesh::handleCmdFrame(size_t len) {
   const companion::FrameValidationResult frame_status = companion::validateCommandFrame(
@@ -3147,11 +3175,28 @@ void MyMesh::checkCLIRescueCmd() {
 }
 
 void MyMesh::checkSerialInterface() {
+#if SMARTUI_CONNECTION_SELECTOR
+  uint32_t generation = _serial->sessionGeneration();
+  if (generation != last_local_session_generation) {
+    resetLocalAppSession();
+    last_local_session_generation = generation;
+  }
+#endif
   // The receive buffer is persistent storage. Clear it before every transport
   // read so an incomplete frame can never inherit authentication tokens or
   // fields from the preceding command.
   memset(cmd_frame, 0, sizeof(cmd_frame));
   size_t len = _serial->checkRecvFrame(cmd_frame);
+#if SMARTUI_CONNECTION_SELECTOR
+  // USB can establish its application session while parsing this first frame;
+  // Wi-Fi can close an old session while servicing the socket. Reset metadata
+  // before dispatch so no pending result is attributed to a different client.
+  generation = _serial->sessionGeneration();
+  if (generation != last_local_session_generation) {
+    resetLocalAppSession();
+    last_local_session_generation = generation;
+  }
+#endif
   if (len > 0) {
     handleCmdFrame(len);
   } else if (_iter_started              // check if our ContactsIterator is 'running'
@@ -3178,6 +3223,15 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+#if SMARTUI_CONNECTION_SELECTOR
+  if (_serial) {
+    const uint32_t generation = _serial->sessionGeneration();
+    if (generation != last_local_session_generation) {
+      resetLocalAppSession();
+      last_local_session_generation = generation;
+    }
+  }
+#endif
   if (storage_recovery_required) {
     // Do not resume mesh/storage activity after a potentially partial erase.
     // Keep pumping the transport so the initiating client can receive the

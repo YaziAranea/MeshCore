@@ -16,12 +16,12 @@ from validate_release_v3 import inspect_prepared_spiffs, parse_partitions
 
 
 LAYOUTS = {
-    "Heltec_V4.3_UI_0.04": (0xC90000, 0x360000),
-    "Paper_UI_0.04": (0x670000, 0x180000),
+    "Heltec_V4.3_UI_0.05": (0xC90000, 0x360000),
+    "Paper_UI_0.05": (0x670000, 0x180000),
 }
 FACTORY_SPIFFS_SHA256 = {
-    "Heltec_V4.3_UI_0.04": "ec202a958aea323b1e5f8388ab92814695b85d5ac9c77227fdf47ed850fff7fe",
-    "Paper_UI_0.04": "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b",
+    "Heltec_V4.3_UI_0.05": "ec202a958aea323b1e5f8388ab92814695b85d5ac9c77227fdf47ed850fff7fe",
+    "Paper_UI_0.05": "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b",
 }
 
 

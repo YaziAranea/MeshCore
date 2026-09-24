@@ -35,6 +35,14 @@
   #define UI_PHONE_GPS 0
 #endif
 
+#ifndef SMARTUI_CONNECTION_SELECTOR
+  #define SMARTUI_CONNECTION_SELECTOR 0
+#endif
+
+#if SMARTUI_CONNECTION_SELECTOR
+  #include "../ConnectionTypes.h"
+#endif
+
 struct UIHourlyStatsSnapshot {
   uint32_t elapsed_ms;
   uint32_t busy_ms;
@@ -212,6 +220,9 @@ class UITask : public AbstractUITask {
   bool handleRawButtonWakeWhenDark();
   void handleButtonWakeLatch();
   void updateConnectionState();
+#if SMARTUI_CONNECTION_SELECTOR
+  void connectionApprovalHandler();
+#endif
   void handlePendingPopupWake();
   void extendAutoOff(unsigned long now = 0);
   void stopNotifyOutputs();
@@ -319,6 +330,12 @@ public:
   }
   void begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* node_prefs);
   bool attachDisplay(DisplayDriver* display);
+
+#if SMARTUI_CONNECTION_SELECTOR
+  CompanionStatus getCompanionStatus() const;
+  bool setCompanionMode(CompanionMode mode);
+  bool resolveWifiClient(uint32_t request_id, bool approve);
+#endif
 
   void gotoHomeScreen() { setCurrScreen(home); }
   void gotoHomeFirstScreen();

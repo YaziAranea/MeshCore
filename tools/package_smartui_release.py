@@ -26,10 +26,10 @@ import validate_release_v3 as v3
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.04"
-TAG = "smartui-0.04"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.04_RU.md"
-ARCHIVE_NAME = "SmartUI_0.04_all-boards.zip"
+VERSION = "0.05"
+TAG = "smartui-0.05"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.05_RU.md"
+ARCHIVE_NAME = "SmartUI_0.05_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -202,7 +202,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI 0.04" in text, "release notes must identify this exact release version")
+    require("SmartUI 0.05" in text, "release notes must identify this exact release version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:

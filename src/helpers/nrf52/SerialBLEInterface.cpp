@@ -37,9 +37,15 @@ void SerialBLEInterface::onDisconnect(uint16_t connection_handle, uint8_t reason
   BLE_DEBUG_PRINTLN("SerialBLEInterface: disconnected handle=0x%04X reason=%u", connection_handle, reason);
   if (instance) {
     if (instance->_conn_handle == connection_handle) {
+      const bool had_session = instance->_isDeviceConnected;
       instance->_conn_handle = BLE_CONN_HANDLE_INVALID;
       instance->_isDeviceConnected = false;
       instance->clearBuffers();
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+      if (had_session) instance->advanceSessionGeneration();
+#else
+      (void)had_session;
+#endif
     }
   }
 }
@@ -47,8 +53,18 @@ void SerialBLEInterface::onDisconnect(uint16_t connection_handle, uint8_t reason
 void SerialBLEInterface::onSecured(uint16_t connection_handle) {
   BLE_DEBUG_PRINTLN("SerialBLEInterface: onSecured handle=0x%04X", connection_handle);
   if (instance) {
-    if (instance->isValidConnection(connection_handle, true)) {
+    if (
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+        instance->_isEnabled && !instance->_isDeviceConnected &&
+        instance->isValidConnection(connection_handle)
+#else
+        instance->isValidConnection(connection_handle, true)
+#endif
+    ) {
       instance->_isDeviceConnected = true;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+      instance->advanceSessionGeneration();
+#endif
       
       // Connection interval units: 1.25ms, supervision timeout units: 10ms
       // Apple: "The product will not read or use the parameters in the Peripheral Preferred Connection Parameters characteristic."
@@ -212,6 +228,13 @@ void SerialBLEInterface::clearBuffers() {
   bleuart.flush();
 }
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+void SerialBLEInterface::advanceSessionGeneration() const {
+  ++_session_generation;
+  if (_session_generation == 0) ++_session_generation;
+}
+#endif
+
 void SerialBLEInterface::shiftSendQueueLeft() {
   if (send_queue_len > 0) {
     send_queue_len--;
@@ -271,6 +294,12 @@ void SerialBLEInterface::disable() {
   _isEnabled = false;
   BLE_DEBUG_PRINTLN("SerialBLEInterface: disable");
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  const bool had_session = _isDeviceConnected;
+  _isDeviceConnected = false;
+  clearBuffers();
+  if (had_session) advanceSessionGeneration();
+#endif
   Bluefruit.Advertising.restartOnDisconnect(false);
   Bluefruit.Advertising.stop();
   disconnect();
@@ -283,7 +312,11 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
     return 0;
   }
 
-  bool connected = isConnected();
+  bool connected =
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+      _isEnabled &&
+#endif
+      isConnected();
   if (connected && len > 0) {
     if (send_queue_len >= FRAME_QUEUE_SIZE) {
       BLE_DEBUG_PRINTLN("writeFrame(), send_queue is full!");
@@ -300,6 +333,9 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
 }
 
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  if (!_isEnabled) return 0;
+#endif
   if (send_queue_len > 0) {
     if (!isConnected()) {
       BLE_DEBUG_PRINTLN("writeBytes: connection invalid, clearing send queue");

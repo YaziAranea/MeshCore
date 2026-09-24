@@ -77,8 +77,21 @@ bool SerialBLEInterface::onSecurityRequest() {
 
 void SerialBLEInterface::onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) {
   if (cmpl.success) {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    if (!_isEnabled) {
+      pServer->disconnect(pServer->getConnId());
+      return;
+    }
+#endif
     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Success");
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    if (!deviceConnected) {
+      advanceSessionGeneration();
+      deviceConnected = true;
+    }
+#else
     deviceConnected = true;
+#endif
   } else {
     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Failure*");
 
@@ -105,7 +118,13 @@ void SerialBLEInterface::onMtuChanged(BLEServer* pServer, esp_ble_gatts_cb_param
 
 void SerialBLEInterface::onDisconnect(BLEServer* pServer) {
   BLE_DEBUG_PRINTLN("onDisconnect()");
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  const bool had_session = deviceConnected;
+  if (had_session) advanceSessionGeneration();
   deviceConnected = false;
+#else
+  deviceConnected = false;
+#endif
   if (_isEnabled) {
     adv_restart_started = millis();
     adv_restart_pending = true;
@@ -115,6 +134,9 @@ void SerialBLEInterface::onDisconnect(BLEServer* pServer) {
 // -------- BLECharacteristicCallbacks methods
 
 void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gatts_cb_param_t* param) {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  if (!_isEnabled || !deviceConnected) return;
+#endif
   uint8_t* rxValue = pCharacteristic->getData();
   int len = pCharacteristic->getLength();
 
@@ -123,6 +145,9 @@ void SerialBLEInterface::onWrite(BLECharacteristic* pCharacteristic, esp_ble_gat
   } else {
     Frame frame = {};
     frame.len = len;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    frame.session_generation = sessionGeneration();
+#endif
     memcpy(frame.buf, rxValue, len);
 
     if (xQueueSend(recv_queue, &frame, 0) != pdTRUE) {
@@ -137,6 +162,18 @@ void SerialBLEInterface::clearBuffers() {
   xQueueReset(recv_queue);
   send_queue_len = 0;
 }
+
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+void SerialBLEInterface::advanceSessionGeneration() const {
+  uint32_t current = _session_generation.load(std::memory_order_relaxed);
+  uint32_t next;
+  do {
+    next = current + 1;
+    if (next == 0) next = 1;
+  } while (!_session_generation.compare_exchange_weak(
+      current, next, std::memory_order_release, std::memory_order_relaxed));
+}
+#endif
 
 void SerialBLEInterface::enable() { 
   if (_isEnabled) return;
@@ -161,10 +198,20 @@ void SerialBLEInterface::disable() {
 
   BLE_DEBUG_PRINTLN("SerialBLEInterface::disable");
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  const bool had_session = deviceConnected;
+  if (had_session) advanceSessionGeneration();
+  deviceConnected = false;
+  clearBuffers();
+#endif
   pServer->getAdvertising()->stop();
   pServer->disconnect(last_conn_id);
   pService->stop();
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  oldDeviceConnected = false;
+#else
   oldDeviceConnected = deviceConnected = false;
+#endif
   adv_restart_pending = false;
 }
 
@@ -174,13 +221,20 @@ size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
     return 0;
   }
 
-  if (deviceConnected && len > 0) {
+  if (
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+      _isEnabled &&
+#endif
+      deviceConnected && len > 0) {
     if (send_queue_len >= FRAME_QUEUE_SIZE) {
       BLE_DEBUG_PRINTLN("writeFrame(), send_queue is full!");
       return 0;
     }
 
     send_queue[send_queue_len].len = len;  // add to send queue
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    send_queue[send_queue_len].session_generation = sessionGeneration();
+#endif
     memcpy(send_queue[send_queue_len].buf, src, len);
     send_queue_len++;
 
@@ -202,6 +256,18 @@ bool SerialBLEInterface::isWriteBusy() const {
 }
 
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  if (!_isEnabled) return 0;
+  // BLE callbacks may change the epoch while main is between loops.  They do
+  // not mutate this plain-array TX queue; main drops stale frames by tag.
+  while (send_queue_len > 0 &&
+         send_queue[0].session_generation != sessionGeneration()) {
+    --send_queue_len;
+    for (int i = 0; i < send_queue_len; ++i) {
+      send_queue[i] = send_queue[i + 1];
+    }
+  }
+#endif
   if (send_queue_len > 0   // first, check send queue
     && mesh::timing::elapsedAtLeast((uint32_t)millis(),
                                     (uint32_t)_last_write,
@@ -220,7 +286,10 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
   }
 
   Frame frame;
-  if (xQueueReceive(recv_queue, &frame, 0) == pdTRUE) {
+  while (xQueueReceive(recv_queue, &frame, 0) == pdTRUE) {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    if (frame.session_generation != sessionGeneration()) continue;
+#endif
     memcpy(dest, frame.buf, frame.len);
     BLE_DEBUG_PRINTLN("readBytes: sz=%d, hdr=%d", (uint32_t) frame.len, (uint32_t) dest[0]);
     return frame.len;
@@ -228,7 +297,9 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
 
   if (deviceConnected != oldDeviceConnected) {
     if (!deviceConnected) {    // disconnecting
+#if !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR)
       clearBuffers();
+#endif
 
       BLE_DEBUG_PRINTLN("SerialBLEInterface -> disconnecting...");
 
