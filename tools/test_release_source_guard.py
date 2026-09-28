@@ -73,6 +73,11 @@ class SourceGuardTests(unittest.TestCase):
         self.git("add", "new.cpp")
         self.rejected()
 
+    def test_untracked_source_is_rejected(self):
+        (self.root / "new.cpp").write_bytes(b"int another = 3;\n")
+        with self.assertRaisesRegex(ValueError, "untracked files"):
+            require_clean_checkout(self.root)
+
     def test_staged_mode_change_is_rejected(self):
         self.git("update-index", "--chmod=+x", "source.cpp")
         self.rejected()

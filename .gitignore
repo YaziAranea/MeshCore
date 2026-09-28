@@ -25,3 +25,5 @@ qa_outputs/
 
 # Release files are published as GitHub Release assets, not tracked in source.
 /firmware/
+/validation-support/
+/release/
