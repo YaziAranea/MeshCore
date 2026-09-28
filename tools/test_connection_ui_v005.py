@@ -1,4 +1,4 @@
-"""Host QA for SmartUI 0.05 companion connection UI.
+"""Host QA for SmartUI 0.06 companion connection UI.
 
 Compiles the production policy helper, checks UITask source wiring, then
 extracts and runs the production render methods with checked-in firmware bitmap
@@ -134,7 +134,7 @@ def source_contract() -> int:
         '#if !SMARTUI_CONNECTION_SELECTOR\n  if (_ble_reenable_at != 0',
         'first_connection.selected == CompanionMode::BLE',
         'if (_interfaceManager != NULL) _interfaceManager->disable();',
-        'SMARTUI_RELEASE_LABEL "0.05"',
+        'SMARTUI_RELEASE_LABEL SMARTUI_VERSION',
     )
     for token in checks:
         assert token in source, f"missing production UI contract: {token}"
@@ -468,7 +468,7 @@ def geometry_and_previews() -> int:
 
 def main():
     total = compile_policy() + source_contract() + geometry_and_previews()
-    print(f"PASS {total} SmartUI 0.05 connection UI checks")
+    print(f"PASS {total} SmartUI 0.06 connection UI checks")
 
 
 if __name__ == "__main__":

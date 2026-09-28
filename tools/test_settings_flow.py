@@ -29,6 +29,7 @@ def main():
 #define KEY_NEXT 'n'
 #define KEY_RIGHT 'r'
 #define KEY_ENTER 'e'
+#define KEY_SELECT 's'
 struct NodePrefs { uint8_t favorite_setting_1=1, favorite_setting_2=2, favorite_setting_3=3; };
 struct Mesh {
   bool ok=true; int saves=0; NodePrefs* prefs=nullptr;
@@ -42,7 +43,7 @@ struct Mesh {
 struct Task { void showAlert(const char*,int) {} void runHardwareTestStep(int) {} } task;
 struct HomeScreen {
  enum HomePage { SETTINGS, ADC, ADC_RESET, FAVORITE_PICKER, FAVORITE_SLOT_1,
-  FAVORITE_SLOT_2,FAVORITE_SLOT_3,CONTROLS_HELP,NOTIFY_PICKER,HARDWARE_TEST };
+  FAVORITE_SLOT_2,FAVORITE_SLOT_3,CONTROLS_HELP,NOTIFY_PICKER,HARDWARE_TEST,ABOUT };
  static constexpr uint8_t COMPACT_SETTINGS_GROUP_COUNT=7;
  bool _settings_open=true, _adc_edit=false, _adc_reset_confirm=false;
  uint8_t _page=SETTINGS, _compact_settings_depth=0,_compact_settings_cursor=0;
@@ -102,6 +103,18 @@ int main() {
  h._page=HomeScreen::CONTROLS_HELP; h.handleCompactSettingsInput(KEY_PREV); CHECK(h._controls_help_page==HomeScreen::CONTROLS_HELP_LINE_COUNT-1);
  h.handleCompactSettingsInput(KEY_NEXT); CHECK(h._controls_help_page==0);
  h.handleCompactSettingsInput(KEY_ENTER); CHECK(h._page==HomeScreen::SETTINGS);
+ // About consumes navigation; either confirmation key returns to the same menu.
+ const uint8_t menu_depth=h._compact_settings_depth, menu_group=h._compact_settings_group;
+ const uint8_t menu_cursor=h._compact_settings_cursor;
+ const int saves_before_about=the_mesh.saves, activations_before_about=h.activations;
+ const char about_back_keys[]={KEY_ENTER,KEY_SELECT};
+ for(char key : about_back_keys) {
+   h._page=HomeScreen::ABOUT;
+   CHECK(h.handleCompactSettingsInput(KEY_NEXT)); CHECK(h._page==HomeScreen::ABOUT);
+   CHECK(h.handleCompactSettingsInput(key)); CHECK(h._page==HomeScreen::SETTINGS && h._settings_open);
+   CHECK(h._compact_settings_depth==menu_depth && h._compact_settings_group==menu_group && h._compact_settings_cursor==menu_cursor);
+ }
+ CHECK(the_mesh.saves==saves_before_about && h.activations==activations_before_about);
  h._compact_settings_depth=0; h._compact_settings_cursor=7;
  h.handleCompactSettingsInput(KEY_ENTER); CHECK(!h._settings_open && h._compact_settings_cursor==2);
  CHECK(!h.handleCompactSettingsInput(KEY_NEXT));

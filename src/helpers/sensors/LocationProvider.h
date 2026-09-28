@@ -7,11 +7,12 @@ class LocationProvider {
 protected:
     bool _time_sync_needed = true;
 
-    bool powersaving_enabled = false;
+    uint8_t* powersaving_enabled = nullptr;
+    bool _powersaving_enabled_prev = false; // Track previous PowerSaving state
     unsigned long _wake_duration_secs = 86400; // Full day
     unsigned long _sleep_duration_secs = 0; // No off
-    unsigned long _next_wake = 0;
-    unsigned long _next_sleep = 0;
+    uint32_t _next_wake = 0;
+    uint32_t _next_sleep = 0;
     unsigned long _last_valid_time_sync = 0;
 
 public:
@@ -19,20 +20,40 @@ public:
     virtual bool supportsInputStatus() const { return false; }
     virtual bool hasRecentInput() const { return false; }
     virtual uint32_t getBaudRate() const { return 0; }
-    virtual void syncTime() { _time_sync_needed = true; }
+    virtual void syncTime() { reset(); _time_sync_needed = true; }
     virtual bool waitingTimeSync() { return _time_sync_needed; }
     virtual void stopTimeSync() { _time_sync_needed = false; }
 
-    virtual void setPowerSavingProfile(unsigned long wake_duration_secs, unsigned long sleep_duration_secs) {
+    virtual void setPowerSavingProfile(uint8_t &enabled, unsigned long wake_duration_secs,
+                                       unsigned long sleep_duration_secs) {
+      powersaving_enabled = &enabled;
       _wake_duration_secs = wake_duration_secs;
       _sleep_duration_secs = sleep_duration_secs;
     }
 
-    virtual void enablePowerSaving(bool enabled) { powersaving_enabled = enabled; _next_wake = 0; _next_sleep = 0; }
-    virtual bool isPowerSavingEnabled() { return powersaving_enabled; }
-    virtual void setNextWake() { _next_wake = millis() + _sleep_duration_secs * 1000UL; }
+    virtual bool isPowerSavingEnabled() const {
+      return powersaving_enabled != nullptr && *powersaving_enabled != 0;
+    }
+
+    virtual void updatePowerSavingSettings(bool gps_wake) {
+      bool powersaving_enabled = isPowerSavingEnabled();
+
+      // PowerSaving changed from OFF to ON
+      if (!_powersaving_enabled_prev && powersaving_enabled) {
+        if (gps_wake) {
+          syncTime(); // Wake when powersaving on
+          setNextSleep(); // On, set next sleep
+        } else {
+          setNextWake(); // Off, set next wake
+        }
+      }
+
+      _powersaving_enabled_prev = powersaving_enabled;
+    }
+
+    virtual void setNextWake() { _next_wake = static_cast<uint32_t>(millis() + _sleep_duration_secs * 1000UL); }
     virtual unsigned long getNextWake() { return _next_wake; }
-    virtual void setNextSleep() { _next_sleep = millis() + _wake_duration_secs * 1000UL; }
+    virtual void setNextSleep() { _next_sleep = static_cast<uint32_t>(millis() + _wake_duration_secs * 1000UL); }
     virtual unsigned long getNextSleep() { return _next_sleep; }
     virtual unsigned long getLastValidTimeSync() { return _last_valid_time_sync; }
     

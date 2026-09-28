@@ -23,6 +23,7 @@ protected:
   bool     gps_active = false;
   bool     gps_wake = false;  // In PowerSaving, gps_active can have gps_wake true or false
   uint32_t gps_update_interval_sec = 1;
+  uint32_t _next_gps_update = 0;
 
   #if ENV_INCLUDE_GPS
   LocationProvider* _location;

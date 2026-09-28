@@ -27,10 +27,10 @@ import package_usb_helper as usb_helper
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.05"
-TAG = "smartui-0.05"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.05_RU.md"
-ARCHIVE_NAME = "SmartUI_0.05_all-boards.zip"
+VERSION = "0.06"
+TAG = "smartui-0.06"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.06_RU.md"
+ARCHIVE_NAME = "SmartUI_0.06_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -61,6 +61,9 @@ def require(condition: bool, message: str) -> None:
 
 
 def require_clean_checkout(root: Path = ROOT) -> None:
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=root)
+    require(not untracked.strip(), "refusing exact-source packaging with untracked files")
     # Some inherited blobs still contain CRLF despite the newer eol=lf
     # attributes. A pristine Linux checkout consequently reports them dirty:
     # the clean filter normalizes the worktree before comparing it to HEAD.
@@ -182,6 +185,18 @@ def validate_stage(stage: Path, *, mkspiffs: Path | None = None,
     v3.validate_v3_pair(stage, mkspiffs=mkspiffs, sdkconfig=sdkconfig)
 
 
+def validate_source_identity(path: Path, commit: str) -> None:
+    raw = path.read_bytes()
+    if path.suffix == ".uf2":
+        # Structure and contiguous ordering were checked by validate_stage.
+        raw = b"".join(raw[index + 32:index + 288]
+                       for index in range(0, len(raw), 512))
+    expected = b"SmartUI-source:" + commit[:8].encode("ascii") + b"\0"
+    markers = re.findall(rb"SmartUI-source:[^\x00]{1,64}\x00", raw)
+    require(markers and set(markers) == {expected},
+            f"embedded build identity is stale, dirty or missing: {path.name}")
+
+
 def verify_archive(archive: Path, paths: list[Path]) -> None:
     expected = {p.name: p for p in paths}
     with zipfile.ZipFile(archive) as zipped:
@@ -203,7 +218,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI 0.05" in text, "release notes must identify this exact release version")
+    require("SmartUI 0.06" in text, "release notes must identify this exact release version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:
@@ -212,6 +227,8 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             require(source.is_file() and not source.is_symlink(), f"regular artifact missing: {source}")
             shutil.copy2(source, stage / name)
         validate_stage(stage, mkspiffs=mkspiffs, sdkconfig=sdkconfig)
+        for name in FIRMWARE_NAMES:
+            validate_source_identity(stage / name, commit)
         shutil.copy2(notes, stage / NOTES_NAME)
         usb_helper.package(stage)
         for suffix, name in ((".uf2", "SHA256SUMS.txt"), (".bin", "SHA256SUMS-ESP32.txt")):
@@ -220,6 +237,9 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
         payloads = sorted(stage.iterdir())
         manifest = {
             "schema_version": 2, "version": VERSION, "tag": TAG, "commit": commit,
+            "meshcore_core_version": "1.17.1",
+            "powersaving_upstream_commit": "a27e78e4da1389055b6dd16ce473112d25c8a5cd",
+            "embedded_source_identity_verified": True,
             "experimental": True, "board_count": 6, "firmware_count": 9,
             "publication": {"draft": False, "prerelease": False, "make_latest": True},
             "firmware": [record(stage / name, **firmware_metadata(name, commit))

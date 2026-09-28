@@ -69,10 +69,11 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>USB помощник</h1><p class="subtitle">Настройка подключения ноды без команд консоли.</p></div>
-    <span class="tag">Помощник 1.0 · прошивка 0.05</span>
+    <span class="tag">Помощник 1.1 · SmartUI 0.06 / 0.05</span>
   </header>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
   <div class="notice"><strong>Перед подключением:</strong> на ноде выберите <strong>Bluetooth или Wi-Fi</strong> в «Настройки → Подключение». Закройте веб-флешер, PuTTY и другие программы, использующие её USB-порт.</div>
+  <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   <div class="grid">
     <section class="card" aria-labelledby="usb-title">
       <h2 id="usb-title"><span class="step">1</span>Подключите ноду</h2>
@@ -87,6 +88,13 @@
         <div><dt>Адрес ноды</dt><dd id="ip">—</dd></div>
         <div><dt>Порт TCP</dt><dd>5000</dd></div>
       </dl>
+      <dl aria-label="Сведения о прошивке">
+        <div><dt>SmartUI</dt><dd id="info-firmware">—</dd></div>
+        <div><dt>Core</dt><dd id="info-core">—</dd></div>
+        <div><dt>Build</dt><dd id="info-build">—</dd></div>
+        <div><dt>Плата</dt><dd id="info-board">—</dd></div>
+      </dl>
+      <p id="info-hint" class="hint">Версия и плата появятся после проверки консоли SmartUI 0.06.</p>
       <div class="buttons"><button id="refresh" disabled>Обновить состояние</button></div>
     </section>
     <section class="card" aria-labelledby="wifi-title">

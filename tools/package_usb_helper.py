@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_1.0.html"
-ZIP_NAME = "SmartUI_USB_Helper_1.0.zip"
+HTML_NAME = "SmartUI_USB_Helper_1.1.html"
+ZIP_NAME = "SmartUI_USB_Helper_1.1.zip"
 
 
 def digest(data):

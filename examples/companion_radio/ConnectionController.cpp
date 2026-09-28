@@ -1,9 +1,11 @@
 #include "ConnectionController.h"
+#include <helpers/SmartUiSleepPolicy.h>
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 
 #include <Arduino.h>
 #include <helpers/MultiSerialInterface.h>
+#include <helpers/SmartUiBuildInfo.h>
 #include <helpers/StorageTransaction.h>
 
 #include "DataStore.h"
@@ -22,6 +24,8 @@ namespace {
 static const char* CONFIG_PATH = "/connection.cfg";
 static const char* CONFIG_TEMP_PATH = "/connection.cfg.tmp";
 static const char* CONFIG_BACKUP_PATH = "/connection.cfg.bak";
+// Existence, including an interrupted/empty write, forbids credential recovery.
+static const char* CONFIG_FORGET_PATH = "/connection.forgot";
 static const uint8_t CONFIG_MAGIC[] = {'M', 'C', 'C', '1'};
 static const uint8_t CONFIG_VERSION = 1;
 static const size_t CONFIG_HEADER_SIZE = 9;
@@ -150,6 +154,7 @@ ConnectionChangeError ConnectionController::mutationError() const {
   if (_hooks.isStorageQuarantined && _hooks.isStorageQuarantined()) {
     return ConnectionChangeError::StorageReadOnly;
   }
+  if (_config_storage_error) return ConnectionChangeError::StorageReadOnly;
   return ConnectionChangeError::None;
 }
 
@@ -331,16 +336,6 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
   return success ? true : fail(ConnectionChangeError::VerifyFinal);
 }
 
-void ConnectionController::scrubConfigArtifacts() {
-  if (!_store) return;
-  FILESYSTEM* fs = _store->getPrimaryFS();
-  if (!fs) return;
-  const char* paths[] = {CONFIG_PATH, CONFIG_TEMP_PATH, CONFIG_BACKUP_PATH};
-  for (const char* path : paths) {
-    if (fs->exists(path)) fs->remove(path);
-  }
-}
-
 bool ConnectionController::removeOrNeutralizeConfigFile(
     const char* path, const Config& clean) {
   if (!_store || !path) return false;
@@ -360,14 +355,61 @@ bool ConnectionController::removeOrNeutralizeConfigFile(
   return safe;
 }
 
+bool ConnectionController::persistCleanConfig(const Config& clean) {
+  if (!mutationAllowed() || clean.wifi_configured || !_store) return false;
+  FILESYSTEM* fs = _store->getPrimaryFS();
+  if (!fs) return false;
+
+  // Keep a durable fail-closed barrier until every old generation is harmless.
+  // A partial marker is intentional: its existence alone suppresses secrets.
+  if (!fs->exists(CONFIG_FORGET_PATH)) {
+    File marker = openConfigWrite(fs, CONFIG_FORGET_PATH);
+    if (!marker) return false;
+    const uint8_t value = 1;
+    marker.write(&value, sizeof(value));
+    marker.flush();
+    marker.close();
+    if (!fs->exists(CONFIG_FORGET_PATH)) return false;
+  }
+
+  Config verified;
+  bool primary_clean = readConfigFile(CONFIG_PATH, verified) &&
+      configsEqual(clean, verified);
+  secureZero(&verified, sizeof(verified));
+  if (!primary_clean) {
+    // Do not use saveConfig here: it truncates .tmp, which may be the sole
+    // verified recovery generation. Preserve .tmp/.bak until primary verifies.
+    if (!writeConfigFile(CONFIG_PATH, clean)) return false;
+    primary_clean = readConfigFile(CONFIG_PATH, verified) &&
+        configsEqual(clean, verified);
+    secureZero(&verified, sizeof(verified));
+    if (!primary_clean) return false;
+  }
+
+  const bool temporary_safe = removeOrNeutralizeConfigFile(CONFIG_TEMP_PATH, clean);
+  const bool backup_safe = removeOrNeutralizeConfigFile(CONFIG_BACKUP_PATH, clean);
+  if (!temporary_safe || !backup_safe) return false;
+  // Recheck the anchor before dropping the credential-recovery barrier.
+  primary_clean = readConfigFile(CONFIG_PATH, verified) &&
+      configsEqual(clean, verified);
+  secureZero(&verified, sizeof(verified));
+  if (!primary_clean) return false;
+  if (fs->exists(CONFIG_FORGET_PATH)) fs->remove(CONFIG_FORGET_PATH);
+  return !fs->exists(CONFIG_FORGET_PATH);
+}
+
 bool ConnectionController::loadConfig() {
   Config primary;
   Config temporary;
   Config backup;
-  const bool primary_valid = readConfigFile(CONFIG_PATH, primary);
-  const bool temporary_valid = readConfigFile(CONFIG_TEMP_PATH, temporary);
-  const bool backup_valid = readConfigFile(CONFIG_BACKUP_PATH, backup);
   FILESYSTEM* fs = _store ? _store->getPrimaryFS() : nullptr;
+  const bool forget_pending = fs && fs->exists(CONFIG_FORGET_PATH);
+  const bool primary_valid = readConfigFile(CONFIG_PATH, primary) &&
+      (!forget_pending || !primary.wifi_configured);
+  const bool temporary_valid = readConfigFile(CONFIG_TEMP_PATH, temporary) &&
+      (!forget_pending || !temporary.wifi_configured);
+  const bool backup_valid = readConfigFile(CONFIG_BACKUP_PATH, backup) &&
+      (!forget_pending || !backup.wifi_configured);
   const bool any_file = fs && (fs->exists(CONFIG_PATH) || fs->exists(CONFIG_TEMP_PATH) ||
                                fs->exists(CONFIG_BACKUP_PATH));
   const mesh::storage::RecoveryCandidate choice = mesh::storage::chooseRecoveryCandidate(
@@ -388,16 +430,11 @@ bool ConnectionController::loadConfig() {
   secureZero(&backup, sizeof(backup));
   secureZero(&selected, sizeof(selected));
 
-  if (!mutationAllowed()) return choice != mesh::storage::RecoveryCandidate::NONE;
-  if (choice == mesh::storage::RecoveryCandidate::NONE) {
-    scrubConfigArtifacts();
-    return saveConfig(_config);
+  if (!mutationAllowed()) {
+    return !forget_pending && choice != mesh::storage::RecoveryCandidate::NONE;
   }
   if (!_config.wifi_configured) {
-    // A completed Forget operation must never resurrect credentials from a
-    // stale transaction generation after a later unrelated read failure.
-    if (fs->exists(CONFIG_TEMP_PATH)) fs->remove(CONFIG_TEMP_PATH);
-    if (fs->exists(CONFIG_BACKUP_PATH)) fs->remove(CONFIG_BACKUP_PATH);
+    return persistCleanConfig(_config);
   } else if (choice != mesh::storage::RecoveryCandidate::PRIMARY) {
     return saveConfig(_config);
   } else if (fs->exists(CONFIG_TEMP_PATH)) {
@@ -503,6 +540,7 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   _started = false;
   _quarantine_latched = false;
   _config_reset_notice = false;
+  _config_storage_error = false;
   _console_announced = false;
   secureZero(_console_line, sizeof(_console_line));
   _console_line_len = 0;
@@ -517,7 +555,7 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   _wifi_retry_at = 0;
   _wifi_retry_delay = WIFI_RETRY_INITIAL_MS;
   scrubCandidate();
-  loadConfig();
+  _config_storage_error = !loadConfig();
 
   if (!modeAvailable(_config.mode)) {
     Config fallback = _config;
@@ -532,7 +570,7 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   const bool boot_quarantined = _hooks.isStorageQuarantined &&
       _hooks.isStorageQuarantined();
   const bool cli_rescue = _hooks.isCliRescue && _hooks.isCliRescue();
-  if (boot_quarantined || cli_rescue) {
+  if (boot_quarantined || cli_rescue || _config_storage_error) {
     _interfaces->disable();
     stopWifiRadio(false);
     _quarantine_latched = boot_quarantined;
@@ -588,6 +626,7 @@ CompanionStatus ConnectionController::status() const {
   result.connectedVia = _config.mode;
   result.usbConsoleEnabled = consoleEnabled();
   result.wifiConfigured = _config.wifi_configured;
+  result.storageRecoveryRequired = _config_storage_error;
   if (!_started || !_interfaces) {
     return result;
   }
@@ -762,7 +801,12 @@ bool ConnectionController::saveTestedWifi() {
 }
 
 bool ConnectionController::forgetWifi() {
-  if (!mutationAllowed()) return false;
+  // A failed local cleanup may be retried without reboot. External quarantine
+  // and CLI ownership still forbid every persistent mutation.
+  if ((_hooks.isCliRescue && _hooks.isCliRescue()) ||
+      (_hooks.isStorageQuarantined && _hooks.isStorageQuarantined())) return false;
+  const bool retry_recovery = _config_storage_error;
+  _config_storage_error = false;
   Config clean;
   clean.mode = (capabilities() & COMPANION_CAP_BLE) ? CompanionMode::BLE
       : CompanionMode::USB;
@@ -773,29 +817,14 @@ bool ConnectionController::forgetWifi() {
   stopWifiRadio(true);
   scrubCandidate();
 
-  FILESYSTEM* fs = _store ? _store->getPrimaryFS() : nullptr;
-  bool neutralized = fs != nullptr;
-  if (fs) {
-    // Neutralize recovery generations first.  Once primary is removed or
-    // overwritten, no later recovery candidate can resurrect credentials.
-    neutralized = removeOrNeutralizeConfigFile(CONFIG_TEMP_PATH, clean) && neutralized;
-    neutralized = removeOrNeutralizeConfigFile(CONFIG_BACKUP_PATH, clean) && neutralized;
-    neutralized = removeOrNeutralizeConfigFile(CONFIG_PATH, clean) && neutralized;
-  }
-  const bool saved = neutralized && saveConfig(clean);
+  const bool saved = persistCleanConfig(clean);
   _config = clean;
   _wifi_setup_stage = WifiSetupStage::IDLE;
   _interfaces->selectExclusive(interfaceType(clean.mode));
-  if (fs) {
-    if (fs->exists(CONFIG_TEMP_PATH)) fs->remove(CONFIG_TEMP_PATH);
-    if (fs->exists(CONFIG_BACKUP_PATH)) fs->remove(CONFIG_BACKUP_PATH);
-  }
-  Config verified;
-  const bool primary_clean = fs && readConfigFile(CONFIG_PATH, verified) &&
-      configsEqual(clean, verified);
-  secureZero(&verified, sizeof(verified));
-  return saved && primary_clean && !fs->exists(CONFIG_TEMP_PATH) &&
-      !fs->exists(CONFIG_BACKUP_PATH);
+  _config_storage_error = !saved;
+  if (!saved) _interfaces->disable();
+  else if (retry_recovery) _interfaces->enable();
+  return saved;
 }
 
 void ConnectionController::printConsole(const char* text) {
@@ -840,7 +869,7 @@ void ConnectionController::serviceConsoleTx() {
 
 void ConnectionController::printHelp() {
   printConsole(
-      "Commands: status | mode ble | mode usb | mode wifi | wifi setup | "
+      "Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | "
       "wifi status | wifi save | wifi cancel | wifi forget | help\r\n"
       "Credential input is not echoed. WiFi is saved only after a passed test.\r\n");
 }
@@ -849,14 +878,30 @@ void ConnectionController::printStatus() {
   const CompanionStatus current = status();
   char line[256];
   snprintf(line, sizeof(line),
-      "Mode=%s companion=%s via=%s USB-service=%s WiFi-config=%s link=%s IP=%s approval=%s\r\n",
+      "Mode=%s companion=%s via=%s USB-service=%s WiFi-config=%s link=%s IP=%s approval=%s storage=%s\r\n",
       modeName(current.selected), current.clientConnected ? "connected" : "idle",
       current.clientConnected ? modeName(current.connectedVia) : "none",
       current.usbConsoleEnabled ? "on" : "off",
       current.wifiConfigured ? "yes" : "no",
       current.wifiAssociated ? "associated" : "down",
       current.wifiLocalIp[0] ? current.wifiLocalIp : "none",
-      current.wifiApprovalPending ? "pending" : "none");
+      current.wifiApprovalPending ? "pending" : "none",
+      current.storageRecoveryRequired ? "recovery-required" : "ok");
+  printConsole(line);
+}
+
+void ConnectionController::printInfo() {
+  const uint8_t caps = capabilities();
+  const char* board = _hooks.getBoardName ? _hooks.getBoardName() : nullptr;
+  char line[384];
+  snprintf(line, sizeof(line),
+      "SmartUI=%s core=%s build=%s upstream=%s capabilities=%s%s%s board=%.96s\r\n",
+      SMARTUI_VERSION, SMARTUI_CORE_VERSION, SMARTUI_BUILD_SHA, SMARTUI_UPSTREAM_SHA,
+      (caps & COMPANION_CAP_BLE) ? "BLE" : "",
+      (caps & COMPANION_CAP_USB) ? ((caps & COMPANION_CAP_BLE) ? ",USB" : "USB") : "",
+      (caps & COMPANION_CAP_WIFI) ? ((caps & (COMPANION_CAP_BLE | COMPANION_CAP_USB))
+          ? ",WiFi" : "WiFi") : "",
+      board && board[0] ? board : "unknown");
   printConsole(line);
 }
 
@@ -905,12 +950,18 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   if (!line[0]) return;
   const bool quarantined = _hooks.isStorageQuarantined &&
       _hooks.isStorageQuarantined();
-  if (quarantined && strcmp(line, "status") != 0) {
+  const bool read_only_command = strcmp(line, "status") == 0 ||
+      strcmp(line, "wifi status") == 0 || strcmp(line, "info") == 0 ||
+      strcmp(line, "help") == 0;
+  if ((quarantined || _config_storage_error) && !read_only_command &&
+      (quarantined || strcmp(line, "wifi forget") != 0)) {
     printConsole("Connection settings are read-only during storage recovery.\r\n");
     return;
   }
   if (strcmp(line, "status") == 0 || strcmp(line, "wifi status") == 0) {
     printStatus();
+  } else if (strcmp(line, "info") == 0) {
+    printInfo();
   } else if (strcmp(line, "help") == 0) {
     printHelp();
   } else if (strcmp(line, "mode ble") == 0) {
@@ -935,10 +986,15 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   } else if (strcmp(line, "wifi forget") == 0) {
     printConsole("Forgetting WiFi and falling back to BLE...\r\n");
     printConsole(forgetWifi() ? "WiFi credentials forgotten.\r\n" :
-                                "WiFi cleared in RAM; persistent cleanup failed.\r\n");
+                                "WiFi cleared in RAM; persistent cleanup failed. Do not assume credentials were erased. Retry 'wifi forget'.\r\n");
   } else {
     printConsole("Unknown command. Type 'help'.\r\n");
   }
+}
+
+bool ConnectionController::consoleActive(uint32_t now) const {
+  return consoleEnabled() && (_wifi_setup_stage != WifiSetupStage::IDLE ||
+      smartui::serialServiceWindow(_console_input_seen, now, _console_last_input));
 }
 
 void ConnectionController::serviceConsole() {
@@ -958,12 +1014,17 @@ void ConnectionController::serviceConsole() {
       printConsole("Invalid connection settings reset to BLE; identity was not changed.\r\n");
       _config_reset_notice = false;
     }
+    if (_config_storage_error) {
+      printConsole("Connection storage recovery failed; settings are read-only and transports are disabled.\r\n");
+    }
   }
 
   uint8_t budget = CONSOLE_BYTES_PER_LOOP;
   while (budget-- > 0 && _console->available() > 0) {
     const int value = _console->read();
     if (value < 0) break;
+    _console_input_seen = true;
+    _console_last_input = millis();
     if (_wifi_setup_stage != WifiSetupStage::IDLE) {
       _wifi_setup_activity = millis();
     }

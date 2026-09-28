@@ -18,6 +18,12 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("navigator.serial.requestPort()", html)
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
+        self.assertIn("Помощник 1.1", html)
+        self.assertIn('id="info-firmware"', html)
+        self.assertIn('id="info-board"', html)
+        self.assertIn("120 секунд", html)
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_1.1.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_1.1.zip")
 
     def test_package_is_deterministic_and_checksums_match(self):
         with tempfile.TemporaryDirectory() as root:

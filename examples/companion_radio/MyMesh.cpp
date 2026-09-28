@@ -503,13 +503,17 @@ static void applyCompanionRxPowerSaving(uint8_t sf, float bw) {
   uint32_t rx_us = 0;
   uint32_t sleep_us = 0;
   bool ok = calcRxPowerSavingLevel(RX_POWERSAVING_BALANCED_LEVEL, sf, bw,
-                                   RX_POWERSAVING_PROFILE_PREAMBLE, &rx_us, &sleep_us) &&
+                                   RX_POWERSAVING_PROFILE_PREAMBLE, &rx_us, &sleep_us,
+                                   rxPowerSavingCaptureCost(control),
+                                   rxPowerSavingTransition(control)) &&
             control->setRxPowerSaving(true, rx_us, sleep_us);
   if (!ok) {
     control->setRxPowerSaving(false, RX_POWERSAVING_DEFAULT_RX_US,
                               RX_POWERSAVING_DEFAULT_SLEEP_US);
   }
-  MESH_DEBUG_PRINTLN("RX Power Saving: companion level=5,preamble=16,rx=%lu,sleep=%lu,%s",
+  MESH_DEBUG_PRINTLN("RX Power Saving: companion level=%u,preamble=%u,rx=%lu,sleep=%lu,%s",
+                     (unsigned)RX_POWERSAVING_BALANCED_LEVEL,
+                     (unsigned)RX_POWERSAVING_PROFILE_PREAMBLE,
                      (unsigned long)rx_us, (unsigned long)sleep_us,
                      ok ? "accepted" : "unavailable - continuous RX");
 #else
@@ -1415,6 +1419,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
   _prefs.rx_boosted_gain = 1; // enabled by default
 #endif
 #endif
+  _prefs.powersaving_enabled = 1; // Power Saving enabled by default
 }
 
 bool MyMesh::begin(bool has_display) {
@@ -2582,6 +2587,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     }
 
     // query other sensors -- target specific
+    if (sensors.getLocationProvider() != NULL && sensors.getLocationProvider()->isPowerSavingEnabled()) {
+      sensors.getLocationProvider()->syncTime(); // Request for GPS sync if GPS is in PowerSaving
+    }
     sensors.querySensors(0xFF, telemetry);
 
     int i = 0;

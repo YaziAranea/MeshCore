@@ -13,7 +13,7 @@
 #define  P_LORA_SCLK    (32 + 15)  // P1.15
 #define  P_LORA_MISO    (0 + 29)   // P0.29
 #define  P_LORA_MOSI    (0 + 2)    // P0.2
- 
+
 #define LR11X0_DIO_AS_RF_SWITCH  true
 #define LR11X0_DIO3_TCXO_VOLTAGE   1.6
 
@@ -45,7 +45,9 @@ public:
     return "Minewsemi";
   }
 
-  void powerOff() override {
+  void shutdownPeripherals() override {
+    NRF52Board::shutdownPeripherals();
+
     #ifdef HAS_GPS
         digitalWrite(GPS_VRTC_EN, LOW);
         digitalWrite(GPS_RESET, LOW);
@@ -54,18 +56,17 @@ public:
         pinMode(GPS_RESETB, OUTPUT);
         digitalWrite(GPS_RESETB, LOW);
     #endif
-    
+
     #ifdef BUZZER_EN
         digitalWrite(BUZZER_EN, LOW);
     #endif
-    
+
     #ifdef LED_PIN
     digitalWrite(LED_PIN, LOW);
     #endif
     #ifdef BUTTON_PIN
     nrf_gpio_cfg_sense_input(digitalPinToInterrupt(BUTTON_PIN), NRF_GPIO_PIN_PULLUP, NRF_GPIO_PIN_SENSE_LOW);
     #endif
-    NRF52Board::powerOff();
   }
 
   #if defined(P_LORA_TX_LED)

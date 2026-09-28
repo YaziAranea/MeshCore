@@ -213,6 +213,7 @@ class UITask : public AbstractUITask {
   void addHourlyMessage();
   void invalidateBatteryCache();
   smartui::BatteryReading readSafetyBattery() const;
+  bool hasActiveComposeSession() const;
   void markDisplayWake(bool reset_to_clock);
   void scheduleDisplayRecover(bool reset_to_clock, unsigned long now);
   void displayRecoverHandler();

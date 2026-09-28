@@ -35,12 +35,12 @@ void HeltecTrackerV2Board::begin() {
     loRaFEMControl.setRxModeEnable();
   }
 
-  void HeltecTrackerV2Board::powerOff() {
+  void HeltecTrackerV2Board::shutdownPeripherals() {
+    ESP32Board::shutdownPeripherals();
+
     // Turn off PA
     digitalWrite(P_LORA_PA_POWER, LOW);
     rtc_gpio_hold_en((gpio_num_t)P_LORA_PA_POWER);
-
-    ESP32Board::powerOff();
   }
 
   uint16_t HeltecTrackerV2Board::getBattMilliVolts()  {
@@ -63,6 +63,12 @@ void HeltecTrackerV2Board::begin() {
   }
 
   bool HeltecTrackerV2Board::setLoRaFemLnaEnabled(bool enable) {
+#if defined(RADIO_FEM_RXGAIN) && (RADIO_FEM_RXGAIN == 0)
+    enable = false;
+#elif defined(RADIO_FEM_RXGAIN) && (RADIO_FEM_RXGAIN == 1)
+    enable = true;
+#endif
+
     if (!loRaFEMControl.isLnaCanControl()) {
       return false;
     }

@@ -2,6 +2,7 @@
 
 #include "../BaseSerialInterface.h"
 #include <bluefruit.h>
+#include "BoundedFrameQueue.h"
 
 #ifndef BLE_TX_POWER
 #define BLE_TX_POWER 4
@@ -15,6 +16,9 @@ class SerialBLEInterface : public BaseSerialInterface {
   uint16_t _conn_handle;
   unsigned long _last_health_check;
   unsigned long _last_retry_attempt;
+  uint32_t _buffer_generation;
+  bool _rx_active;
+  bool _rx_overlap;
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   mutable uint32_t _session_generation;
 #endif
@@ -26,18 +30,14 @@ class SerialBLEInterface : public BaseSerialInterface {
 
   #define FRAME_QUEUE_SIZE  12
   
-  uint8_t send_queue_len;
-  Frame send_queue[FRAME_QUEUE_SIZE];
-  
-  uint8_t recv_queue_len;
-  Frame recv_queue[FRAME_QUEUE_SIZE];
+  BoundedFrameQueue<Frame, FRAME_QUEUE_SIZE> send_queue;
+  BoundedFrameQueue<Frame, FRAME_QUEUE_SIZE> recv_queue;
 
-  void clearBuffers();
+  // These helpers require the transport's task critical section.
+  void clearBuffersLocked();
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
-  void advanceSessionGeneration() const;
+  void advanceSessionGenerationLocked() const;
 #endif
-  void shiftSendQueueLeft();
-  void shiftRecvQueueLeft();
   bool isValidConnection(uint16_t handle, bool requireWaitingForSecurity = false) const;
   bool isAdvertising() const;
   static void onConnect(uint16_t connection_handle);
@@ -55,11 +55,12 @@ public:
     _conn_handle = BLE_CONN_HANDLE_INVALID;
     _last_health_check = 0;
     _last_retry_attempt = 0;
+    _buffer_generation = 0;
+    _rx_active = false;
+    _rx_overlap = false;
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
     _session_generation = 0;
 #endif
-    send_queue_len = 0;
-    recv_queue_len = 0;
   }
 
   /**
@@ -73,10 +74,10 @@ public:
   void disconnect();
   void enable() override;
   void disable() override;
-  bool isEnabled() const override { return _isEnabled; }
+  bool isEnabled() const override;
   bool isConnected() const override;
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
-  uint32_t sessionGeneration() const override { return _session_generation; }
+  uint32_t sessionGeneration() const override;
 #endif
   bool isReadBusy() const override;
   bool isWriteBusy() const override;

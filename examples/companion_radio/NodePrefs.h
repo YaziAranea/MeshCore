@@ -116,6 +116,7 @@ public:
   uint8_t night_quiet_active = 0;
   uint8_t gps_source = GPS_SOURCE_HW;
   int16_t timezone_offset_minutes = 360;  // UTC+06:00 compatibility default
+  uint8_t powersaving_enabled = 1; // Companion power-saving policy; not a new user preference.
 
 private:
   class RadioPrefs : public ConfigSerializer {  // COPIED from CommonCLI (for now)

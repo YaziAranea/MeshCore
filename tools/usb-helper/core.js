@@ -20,6 +20,7 @@
     overflow: 'Input too long; discarded.',
     readonly: 'Connection settings are read-only during storage recovery.',
     help: 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help',
+    helpInfo: 'Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help',
     helpEnd: 'Credential input is not echoed. WiFi is saved only after a passed test.'
   });
   const MESSAGES = Object.freeze({
@@ -91,13 +92,21 @@
   }
   function parseStatus(line) {
     if (typeof line !== 'string') return null;
-    const match = /^Mode=(BLE|WiFi|USB) companion=(connected|idle) via=(BLE|WiFi|USB|none) USB-service=(on|off) WiFi-config=(yes|no) link=(associated|down) IP=(none|\d{1,3}(?:\.\d{1,3}){3}) approval=(pending|none)$/.exec(line);
+    const match = /^Mode=(BLE|WiFi|USB) companion=(connected|idle) via=(BLE|WiFi|USB|none) USB-service=(on|off) WiFi-config=(yes|no) link=(associated|down) IP=(none|\d{1,3}(?:\.\d{1,3}){3}) approval=(pending|none)(?: storage=(ok|recovery-required))?$/.exec(line);
     if (!match || (match[7] !== 'none' && match[7].split('.').some(part => Number(part) > 255))) return null;
     return {
       mode: match[1].toLowerCase(), companion: match[2], via: match[3].toLowerCase(),
       usbService: match[4] === 'on', wifiConfigured: match[5] === 'yes', link: match[6],
-      ip: match[7] === 'none' ? null : match[7], approval: match[8], readOnly: false
+      ip: match[7] === 'none' ? null : match[7], approval: match[8], readOnly: match[9] === 'recovery-required'
     };
+  }
+  function parseInfo(line) {
+    // Accept only the advertised, bounded ASCII record, never arbitrary serial
+    // text. Board names may contain spaces but no markup/control characters.
+    if (typeof line !== 'string' || line.length > 383) return null;
+    const match = /^SmartUI=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) core=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) build=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) upstream=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) capabilities=(BLE(?:,USB)?(?:,WiFi)?|USB(?:,WiFi)?|WiFi) board=([A-Za-z0-9][A-Za-z0-9 ._()+:/-]{0,95})$/.exec(line);
+    if (!match || match[6].trim() !== match[6]) return null;
+    return { firmware: match[1], core: match[2], build: match[3], upstream: match[4], capabilities: match[5].split(','), board: match[6] };
   }
 
   class ConsoleClient {
@@ -108,7 +117,7 @@
       for (const key of Object.keys(DEFAULT_TIMEOUTS)) {
         if (Number.isFinite(timeouts[key]) && timeouts[key] > 0) this._timeouts[key] = timeouts[key];
       }
-      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null };
+      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null };
       this._session = null;
       this._operation = null;
       this._closing = null;
@@ -116,7 +125,10 @@
       this._candidateTimer = null;
       this._pendingPorts = new WeakSet();
     }
-    get state() { return { ...this._state, status: this._state.status ? { ...this._state.status } : null }; }
+    get state() {
+      return { ...this._state, status: this._state.status ? { ...this._state.status } : null,
+        info: this._state.info ? { ...this._state.info, capabilities: [...this._state.info.capabilities] } : null };
+    }
     _call(name, value) {
       try { if (typeof this._callbacks[name] === 'function') this._callbacks[name](value); } catch (_) { /* UI exceptions must not interrupt serial cleanup. */ }
     }
@@ -141,13 +153,14 @@
     _rejectWaiter(session, error) {
       if (session.waiter) session.waiter.finish({ error });
     }
-    async _operate(action, { allowSetup = false, connect = false, mutate = false } = {}) {
+    async _operate(action, { allowSetup = false, connect = false, mutate = false, wifi = false } = {}) {
       if (this._operation || this._closing) throw failure('BUSY');
       if (!connect) {
         if (!this._state.connected || !this._session) throw failure('NOT_CONNECTED');
         if (!this._state.verified) throw failure('NOT_VERIFIED');
         if (this._setupActive && !allowSetup) throw failure('WIFI_PENDING');
         if (mutate && this._state.status && this._state.status.readOnly) throw failure('READ_ONLY');
+        if (wifi && this._state.info && !this._state.info.capabilities.includes('WiFi')) throw failure('WIFI_UNAVAILABLE');
       } else if (this._session) throw failure('BUSY');
       const token = {};
       this._operation = token;
@@ -193,17 +206,29 @@
           // Native Web Serial's open defaults are sufficient for this console.
           session.reader = port.readable.getReader();
           session.writer = port.writable.getWriter();
-          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null });
+          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null });
           session.readTask = this._readLoop(session);
           await this._resync(session);
           let helpSeen = false;
+          let infoSupported = false;
           if (!session.readOnly) await this._exchange(session, 'help', line => {
             if (line === RX.help) helpSeen = true;
+            if (line === RX.helpInfo) { helpSeen = true; infoSupported = true; }
             if (line === RX.helpEnd && helpSeen) return success(true);
             if (line === RX.readonly) { session.readOnly = true; return success(false); }
           });
           const status = await this._readStatus(session);
           if (!status.usbService || status.mode === 'usb') throw failure('PROTOCOL');
+          // Never probe an unknown command on the legacy 0.05 console. The
+          // exact new help response is required before requesting identity.
+          if (infoSupported) {
+            const info = await this._exchange(session, 'info', line => {
+              const parsed = parseInfo(line);
+              if (parsed) return success(parsed);
+              if (line.startsWith('SmartUI=') || line === RX.unknown) return rejected('PROTOCOL');
+            });
+            this._stateChanged({ info });
+          }
           this._assertCurrent(session);
           this._stateChanged({ verified: true });
           this._event('success', session.readOnly ? 'Консоль подключена. Настройки доступны только для чтения.' : 'Сервисная консоль SmartUI подключена.');
@@ -256,7 +281,7 @@
       this._rejectWaiter(session, failure('DISCONNECTED'));
       if (this._session === session) this._session = null;
       this._clearCandidate();
-      this._stateChanged({ connected: false, verified: false, status: null });
+      this._stateChanged({ connected: false, verified: false, status: null, info: null });
       this._call('onStatus', null);
       const closing = (async () => {
         if (session.openTask) await this._bounded(session.openTask);
@@ -298,7 +323,7 @@
                 session.overflow = false;
               } else {
                 if (!session.buffer && !session.overflow) session.lineEpoch = session.rxEpoch;
-                if (session.buffer.length < 256 && !session.overflow) session.buffer += char;
+                if (session.buffer.length < 383 && !session.overflow) session.buffer += char;
                 else { session.buffer = ''; session.overflow = true; }
               }
             }
@@ -379,7 +404,7 @@
         const parsed = parseStatus(line);
         return parsed ? success(parsed) : undefined;
       });
-      status.readOnly = session.readOnly;
+      status.readOnly = status.readOnly || session.readOnly;
       this._setStatus(status);
       return status;
     }
@@ -437,7 +462,7 @@
           }
           throw error;
         } finally { ssid = ''; password = ''; }
-      }, { mutate: true });
+      }, { mutate: true, wifi: true });
     }
     async _refreshAfterCommit(session) {
       try { await this._readStatus(session); }
@@ -472,7 +497,7 @@
         this._event('success', 'Проверенные настройки WiFi сохранены на устройстве.');
         await this._refreshAfterCommit(session);
         return { saved: true, status: this.state.status };
-      }, { allowSetup: true, mutate: true });
+      }, { allowSetup: true, mutate: true, wifi: true });
     }
     async cancelWifi() {
       return this._operate(async session => {
@@ -485,7 +510,7 @@
         this._event('info', 'Настройка WiFi отменена. Новые параметры не сохранены.');
         await this._refreshAfterCommit(session);
         return { cancelled: true };
-      }, { allowSetup: true });
+      }, { allowSetup: true, wifi: true });
     }
     async setMode(mode) {
       if (!['ble', 'wifi', 'usb'].includes(mode)) throw failure('MODE_INVALID');
@@ -522,7 +547,7 @@
         this._event('success', 'Режим ' + label + ' сохранён на устройстве.');
         await this._refreshAfterCommit(session);
         return { saved: true, mode, status: this.state.status };
-      }, { mutate: true });
+      }, { mutate: true, wifi: mode === 'wifi' });
     }
     async forgetWifi() {
       return this._operate(async session => {
@@ -543,8 +568,8 @@
         this._event('success', 'Устройство подтвердило удаление сохранённых настроек WiFi.');
         await this._refreshAfterCommit(session);
         return { forgotten: true, status: this.state.status };
-      }, { mutate: true });
+      }, { mutate: true, wifi: true });
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo });
 }));

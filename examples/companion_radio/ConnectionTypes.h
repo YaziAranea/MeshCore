@@ -37,6 +37,7 @@ struct CompanionStatus {
   CompanionMode connectedVia = CompanionMode::BLE;
   bool usbConsoleEnabled = true;
   bool wifiConfigured = false;
+  bool storageRecoveryRequired = false;
   bool wifiAssociated = false;
   char wifiLocalIp[16] = {};
   bool wifiApprovalPending = false;

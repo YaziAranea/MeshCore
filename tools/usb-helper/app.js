@@ -1,7 +1,7 @@
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
-  let state = {connected:false,busy:false,verified:false,testPassed:false,status:null};
+  let state = {connected:false,busy:false,verified:false,testPassed:false,status:null,info:null};
   let choosingPort = false;
   let confirmation = null;
   const modeNames = {ble:"Bluetooth",wifi:"Wi-Fi",usb:"USB-компаньон"};
@@ -29,19 +29,21 @@
   function render() {
     const ready = state.connected && state.verified && !state.busy && !state.status?.readOnly;
     const idle = ready && !state.testPassed;
+    const wifiAvailable = !state.info || state.info.capabilities.includes("WiFi");
+    const wifiIdle = idle && wifiAvailable;
     $("connect").disabled = !supported || state.connected || state.busy || choosingPort;
     $("disconnect").disabled = !state.connected || choosingPort;
     $("connect").textContent = choosingPort ? "Выберите порт в окне браузера…" : "Выбрать USB-порт";
     $("connection").textContent = state.busy ? "Выполняется операция…" : state.verified ? "Консоль SmartUI подключена" : state.connected ? "Порт открыт; консоль не подтверждена" : "Нода не подключена";
     $("refresh").disabled = !idle;
-    ["ssid","open-network","test"].forEach(id => $(id).disabled = !idle);
-    $("password").disabled = !idle || $("open-network").checked;
-    $("show-password").disabled = !idle || $("open-network").checked;
-    $("save").disabled = !ready || !state.testPassed;
-    $("cancel").disabled = !ready;
-    $("forget").disabled = !idle;
+    ["ssid","open-network","test"].forEach(id => $(id).disabled = !wifiIdle);
+    $("password").disabled = !wifiIdle || $("open-network").checked;
+    $("show-password").disabled = !wifiIdle || $("open-network").checked;
+    $("save").disabled = !ready || !wifiAvailable || !state.testPassed;
+    $("cancel").disabled = !ready || !wifiAvailable;
+    $("forget").disabled = !wifiIdle;
     for (const mode of Object.keys(modeNames)) {
-      $("mode-" + mode).disabled = !idle;
+      $("mode-" + mode).disabled = !idle || (mode === "wifi" && !wifiAvailable);
       $("mode-" + mode).setAttribute("aria-pressed",String(state.status?.mode === mode));
     }
     const s = state.status;
@@ -50,7 +52,9 @@
     $("configured").textContent = s ? s.wifiConfigured ? "Есть" : "Не задана" : "—";
     $("network").textContent = s ? s.link === "associated" ? "Подключено" : "Нет соединения" : "—";
     $("ip").textContent = s?.ip || "—";
-    $("wifi-hint").textContent = state.testPassed ? "Сеть проверена, но ещё не сохранена. Нажмите «Сохранить сеть» или отмените проверку. Через две минуты бездействия нода отменит настройку." : "Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.";
+    for (const field of ["firmware","core","build","board"]) $("info-" + field).textContent = state.info?.[field] || "—";
+    $("info-hint").textContent = state.info ? "Данные сообщены прошивкой. Доступно: " + state.info.capabilities.join(", ") + "." : state.verified ? "Эта консоль не сообщает версию и плату (совместимый режим 0.05). Возможности Wi-Fi не определены." : "Версия и плата появятся после проверки консоли SmartUI 0.06.";
+    $("wifi-hint").textContent = !wifiAvailable ? "Прошивка сообщает: у этой платы нет Wi-Fi. Доступны Bluetooth и USB-компаньон." : state.testPassed ? "Сеть проверена, но ещё не сохранена. Нажмите «Сохранить сеть» или отмените проверку. Через две минуты бездействия нода отменит настройку." : "Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.";
     $("open-warning").hidden = !$("open-network").checked;
   }
   const client = new SmartUiConsole.ConsoleClient({

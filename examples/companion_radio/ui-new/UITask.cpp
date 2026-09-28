@@ -13,6 +13,7 @@
 #include <math.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RTCClockQuality.h>
+#include <helpers/SmartUiBuildInfo.h>
 #include <helpers/ui/Utf8Cyrillic5x7.h>
 #include "../MyMesh.h"
 #include "target.h"
@@ -196,7 +197,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef SMARTUI_RELEASE_LABEL
-  #define SMARTUI_RELEASE_LABEL "0.05"
+  #define SMARTUI_RELEASE_LABEL SMARTUI_VERSION
 #endif
 
 #ifndef UI_RECENT_PAGE
@@ -3809,6 +3810,7 @@ class HomeScreen : public UIScreen {
     FAVORITE_SLOT_3,
     UNDO_SETTING,
     DEVICE_STATUS,
+    ABOUT,
     HARDWARE_TEST,
     CONTROLS_HELP,
     SETTINGS_TRANSFER,
@@ -4604,6 +4606,7 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_SMART_B11_EXTRAS == 1
       HomePage::HARDWARE_TEST,
+      HomePage::ABOUT,
 #endif
     };
 
@@ -4762,6 +4765,7 @@ class HomeScreen : public UIScreen {
       case HomePage::FAVORITE_SLOT_3: return "Избранное 3";
       case HomePage::UNDO_SETTING: return "Отменить изменение";
       case HomePage::DEVICE_STATUS: return "Состояние";
+      case HomePage::ABOUT: return "О прошивке";
       case HomePage::HARDWARE_TEST: return "Тест оборудования";
       case HomePage::CONTROLS_HELP: return "Управление";
 #if UI_SMART_B12_TONE_LIST != 1
@@ -4981,6 +4985,7 @@ class HomeScreen : public UIScreen {
       case HomePage::DEVICE_STATUS:
       case HomePage::HARDWARE_TEST:
       case HomePage::CONTROLS_HELP:
+      case HomePage::ABOUT:
         snprintf(out, out_len, "ОТКРЫТЬ");
         break;
 #if UI_SMART_B12_TONE_LIST != 1
@@ -5088,6 +5093,7 @@ class HomeScreen : public UIScreen {
       case HomePage::DEVICE_STATUS:
       case HomePage::HARDWARE_TEST:
       case HomePage::CONTROLS_HELP:
+      case HomePage::ABOUT:
 #endif
 #if SMARTUI_CONNECTION_SELECTOR
       case HomePage::BLUETOOTH:
@@ -5915,6 +5921,9 @@ class HomeScreen : public UIScreen {
       case HomePage::DEVICE_STATUS:
         _page = HomePage::DEVICE_STATUS;
         break;
+      case HomePage::ABOUT:
+        _page = HomePage::ABOUT;
+        break;
       case HomePage::CONTROLS_HELP:
         _controls_help_page = 0;
         _page = HomePage::CONTROLS_HELP;
@@ -5969,6 +5978,10 @@ class HomeScreen : public UIScreen {
       }
 #endif
 #if UI_SMART_B11_EXTRAS == 1
+      if (_page == HomePage::ABOUT) {
+        if (c == KEY_ENTER || c == KEY_SELECT) _page = HomePage::SETTINGS;
+        return true;
+      }
       if (_page == HomePage::FAVORITE_PICKER) {
         if (c == KEY_LEFT || c == KEY_PREV) _favorite_picker.move(-1);
         else if (c == KEY_NEXT || c == KEY_RIGHT) _favorite_picker.move(1);
@@ -6365,6 +6378,7 @@ class HomeScreen : public UIScreen {
         page == HomePage::FAVORITE_SLOT_3 ||
         page == HomePage::UNDO_SETTING ||
         page == HomePage::DEVICE_STATUS ||
+        page == HomePage::ABOUT ||
         page == HomePage::HARDWARE_TEST
         || page == HomePage::CONTROLS_HELP
 #if UI_COMPACT_SETTINGS_MENU == 1
@@ -6667,6 +6681,44 @@ class HomeScreen : public UIScreen {
   }
 #endif
 
+  void renderQuickReplyMenu(DisplayDriver& display) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    const int ink_top = display.getTextInkTop();
+    const int ink_h = display.getTextInkHeight();
+    const int max_width = display.width() - 6;
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextCenteredEllipsized(display, display.width() / 2,
+                                  3 - ink_top, max_width, "Быстрый ответ");
+    display.setColor(DisplayDriver::YELLOW);
+    drawRichTextCenteredEllipsized(display, display.width() / 2,
+                                  (display.height() - ink_h) / 2 - ink_top,
+                                  max_width, quickReplyLabel());
+    display.setColor(DisplayDriver::LIGHT);
+    const char* help = "клик: далее / удерж: OK";
+    if (display.getTextWidth(help) > max_width) help = "клик > / удерж OK";
+    drawRichTextCenteredEllipsized(display, display.width() / 2,
+                                  display.height() - ink_h - ink_top - 4,
+                                  max_width, help);
+    uiPopFont(display, saved_font);
+  }
+
+  void renderBuildInfo(DisplayDriver& display) const {
+    uint8_t saved_font = uiPushCompactSettingsFont(display);
+    // Keep the full source identity, including +dirty, on narrow OLEDs.
+    const char* lines[] = {"О прошивке", "SmartUI " SMARTUI_VERSION,
+                           SMARTUI_BUILD_SHA, "Core " SMARTUI_CORE_VERSION};
+    const int row_h = (display.height() - 6) / 4;
+    const int ink_top = display.getTextInkTop();
+    const int ink_h = display.getTextInkHeight();
+    for (uint8_t row = 0; row < 4; ++row) {
+      display.setColor(row == 0 ? DisplayDriver::GREEN : DisplayDriver::LIGHT);
+      const int y = 3 + row * row_h + (row_h - ink_h) / 2 - ink_top;
+      drawRichTextCenteredEllipsized(display, display.width() / 2, y,
+                                    display.width() - 6, lines[row]);
+    }
+    uiPopFont(display, saved_font);
+  }
+
   uint8_t quickReplyMenuCount() const {
 #if UI_QUICK_REPLY_KEYBOARD
     return quick_reply_count + 2; // canned replies + keyboard + back
@@ -6818,6 +6870,20 @@ class HomeScreen : public UIScreen {
     _quick_contact_initial = -1;
     clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
+  }
+
+  bool openCannedQuickReply() {
+    const char* text = quickReplyLabel();
+    openQuickKeyboard();
+    if (!appendQuickKeyboardText(text)) {
+      resetQuickKeyboard();
+      _task->showAlert("Текст заполнен", 800);
+      return false;
+    }
+    // Canned and typed messages share the same stable target snapshot and
+    // explicit confirmation. Never silently select channel zero.
+    _quick_target_mode = QR_TARGET_KIND;
+    return true;
   }
 
   bool appendQuickKeyboardText(const char* text) {
@@ -7780,6 +7846,14 @@ public:
 #endif
        }
 
+  bool hasActiveComposeSession() const {
+#if UI_QUICK_REPLY_KEYBOARD
+    return _quick_keyboard_open;
+#else
+    return false;
+#endif
+  }
+
   void resetToFirstPage() {
 #if SMARTUI_CONNECTION_SELECTOR
     _connection_flow.reset();
@@ -7981,6 +8055,9 @@ public:
 #endif
 #if UI_T096_PREMIUM_TFT
     skip_chrome = _page == HomePage::CLOCK;
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+    if (_page == HomePage::ABOUT) skip_chrome = true;
 #endif
     if (_page != HomePage::CHAT && !skip_chrome) {
       uint8_t chrome_font = uiPushCompactChromeFont(display);
@@ -8840,32 +8917,7 @@ public:
         } else
 #endif
         {
-        display.setColor(DisplayDriver::GREEN);
-#if UI_V4_3_OLED_PROFILE
-        {
-          uint8_t small_font = uiPushCompactChromeFont(display);
-          drawRichTextCentered(display, display.width() / 2, 4, "Быстрый ответ");
-          uiPopFont(display, small_font);
-        }
-        {
-          uint8_t hero_font = uiPushOledRoleFont(display, UI_OLED_FONT_L);
-          drawRichTextCenteredEllipsized(display, display.width() / 2, 22, display.width() - 2, quickReplyLabel());
-          uiPopFont(display, hero_font);
-        }
-        {
-          uint8_t small_font = uiPushCompactChromeFont(display);
-          display.setColor(DisplayDriver::LIGHT);
-          drawRichTextCenteredEllipsized(display, display.width() / 2, 52, display.width(), "клик далее / удерж OK");
-          uiPopFont(display, small_font);
-        }
-#else
-        display.drawTextCentered(display.width() / 2, 4, "Быстрый ответ");
-        display.setTextSize(2);
-        drawRichTextCentered(display, display.width() / 2, 22, quickReplyLabel());
-        display.setTextSize(1);
-        display.drawTextCentered(display.width() / 2, 47, "клик: далее");
-        display.drawTextCentered(display.width() / 2, 56, "удерж: OK");
-#endif
+          renderQuickReplyMenu(display);
         }
       } else {
       int count = the_mesh.getRecentChannelMessages(chat, UI_CHAT_LIST_SIZE);
@@ -9706,7 +9758,9 @@ public:
     }
 #endif
 #if UI_SMART_B11_EXTRAS == 1
-    else if (_page == HomePage::DEVICE_STATUS) {
+    else if (_page == HomePage::ABOUT) {
+      renderBuildInfo(display);
+    } else if (_page == HomePage::DEVICE_STATUS) {
       uint8_t saved_font = uiPushCompactSettingsFont(display);
       display.setBold(false);
       display.setColor(DisplayDriver::GREEN);
@@ -9878,12 +9932,13 @@ public:
         if (_quick_reply_idx == quickReplyBackIndex()) {
           _quick_reply_open = false;
           _task->showAlert("Ответ закрыт", 800);
-        } else if (the_mesh.sendQuickReply(quickReplyLabel())) {
-          _quick_reply_open = false;
-          _task->notify(UIEventType::ack);
-          _task->showAlert("Ответ отправлен", 900);
         } else {
-          _task->showAlert("Ошибка ответа", 1000);
+#if UI_QUICK_REPLY_KEYBOARD
+          openCannedQuickReply();
+#else
+          // Builds without the target UI must not send to an implicit channel.
+          _task->showAlert("Выбор цели недоступен", 1000);
+#endif
         }
         return true;
       }
@@ -10920,13 +10975,21 @@ void UITask::toggleBoardLeds() {
 }
 
 bool UITask::shouldHoldLightSleepLock() const {
+  if (hasActiveComposeSession()) return true;
 #if !UI_IMPORTANT_NOTIFY_HOLD_SLEEP_LOCK
   if (false) {}
 #else
   if (_important_notify_active) return true;
 #endif
-  if (_display != NULL && _display->isOn()) return true;
   const uint32_t now = (uint32_t)millis();
+#if UI_WIRELESS_PAPER_BIG_CLOCK
+  // E-paper keeps its image and shared radio VEXT powered at idle. isOn()
+  // therefore is not evidence of interaction. Keep a bounded service window
+  // after input/wake, then allow automatic sleep with the image still visible.
+  if (!smartui::elapsedAtLeast(now, (uint32_t)_last_activity_ms, 120000U)) return true;
+#else
+  if (_display != NULL && _display->isOn()) return true;
+#endif
   if (smartui::optionalDeadlinePending(now, (uint32_t)_display_wake_lock_until)) return true;
 #if UI_DISPLAY_RECOVER_WINDOW_MS > 0
   if (smartui::optionalDeadlinePending(now, (uint32_t)_display_recover_until)) return true;
@@ -13444,6 +13507,10 @@ void UITask::gotoHomeFirstScreen() {
   }
 }
 
+bool UITask::hasActiveComposeSession() const {
+  return home != NULL && ((HomeScreen*)home)->hasActiveComposeSession();
+}
+
 void UITask::extendAutoOff(unsigned long now) {
   if (now == 0) now = millis();
 #if AUTO_OFF_MILLIS > 0
@@ -13472,7 +13539,7 @@ void UITask::markDisplayWake(bool reset_to_clock) {
   _button_wake_pending_until = 0;
   _display_wake_lock_until = smartui::optionalDeadlineAfter(
       (uint32_t)now, (uint32_t)UI_DISPLAY_WAKE_LOCK_MS);
-  if (reset_to_clock) {
+  if (reset_to_clock && !hasActiveComposeSession()) {
     gotoHomeFirstScreen();
   }
   _last_activity_ms = now;
@@ -13690,6 +13757,9 @@ void UITask::handlePendingPopupWake() {
     _popup_pending = false;
     return;
   }
+  // Keep notification output/unread state, but do not steal editor or target
+  // focus. The pending preview opens after send or explicit exit.
+  if (hasActiveComposeSession()) return;
   if (_display == NULL || msg_preview == NULL) {
     _popup_pending = false;
     return;
@@ -14005,7 +14075,7 @@ void UITask::loop() {
   displayRecoverHandler();
 
 #if UI_EINK_IDLE_SCREENSAVER
-  if (idle_saver != NULL && curr == home &&
+  if (idle_saver != NULL && curr == home && !hasActiveComposeSession() &&
       (unsigned long)(millis() - _last_activity_ms) >= UI_EINK_IDLE_SCREENSAVER_MILLIS &&
       smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry)) {
     setCurrScreen(idle_saver);
@@ -14013,7 +14083,7 @@ void UITask::loop() {
 #endif
 
 #if UI_MENU_AUTO_HOME_MILLIS > 0
-  if (!_storage_recovery_active && home != NULL && curr != NULL && curr != splash &&
+  if (!_storage_recovery_active && !hasActiveComposeSession() && home != NULL && curr != NULL && curr != splash &&
       smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry) &&
 #if UI_EINK_IDLE_SCREENSAVER
       curr != idle_saver &&

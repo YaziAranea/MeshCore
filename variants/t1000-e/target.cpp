@@ -80,12 +80,13 @@ mesh::LocalIdentity radio_new_identity() {
 }
 
 void T1000SensorManager::start_gps() {
-  gps_active = true;
-
-  if (powersaving_enabled && _nmea->isPowerSavingEnabled()) {
-    gps_wake = true;       // gps_active is true
+  if (_nmea->isPowerSavingEnabled()) {
+    gps_wake = true;       // gps_active is unchanged (true for GPS sleep, false for GPS off)
     _nmea->syncTime();     // Clear GPS data and force sync time
     _nmea->setNextSleep(); // Next time to off
+  } else {
+    gps_active = true;
+    gps_wake = true;
   }
 
   //_nmea->begin();
@@ -111,7 +112,7 @@ void T1000SensorManager::start_gps() {
 }
 
 void T1000SensorManager::sleep_gps() {
-  if (powersaving_enabled && _nmea->isPowerSavingEnabled()) {
+  if (_nmea->isPowerSavingEnabled()) {
     gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
     _nmea->stopTimeSync(); // Stop time sync
     _nmea->setNextWake();  // Next time to on
@@ -131,7 +132,7 @@ void T1000SensorManager::sleep_gps() {
 }
 
 void T1000SensorManager::stop_gps() {
-  if (powersaving_enabled && _nmea->isPowerSavingEnabled()) {
+  if (_nmea->isPowerSavingEnabled()) {
     gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
     _nmea->stopTimeSync(); // Stop time sync
     _nmea->setNextWake();  // Next time to on
@@ -173,35 +174,37 @@ void T1000SensorManager::loop() {
   static long next_gps_update = 0;
 
   // PowerSaving
-  if (powersaving_enabled) {
-    if (_nmea->isPowerSavingEnabled()) {
-      if (gps_wake && ((int32_t)(millis() - _nmea->getNextSleep()) >= 0 ||
-                       !_nmea->waitingTimeSync())) { // Time to off or GPS set
-        if ((int32_t)(millis() - _nmea->getNextSleep()) >= 0) {
-          POWERSAVING_DEBUG_PRINTLN("GPS wake timeout. Enter sleep");
-        } else if (!_nmea->waitingTimeSync()) {
-          POWERSAVING_DEBUG_PRINTLN("GPS set. Enter sleep early");
-        }
+  if (_nmea->isPowerSavingEnabled() && gps_active) {
+    // Handle change in PowerSaving mode
+    _nmea->updatePowerSavingSettings(gps_wake);
 
-        stop_gps();
-      } else if (!gps_wake && ((int32_t)(millis() - _nmea->getNextWake()) >= 0)) { // Time to on
+    if (gps_wake) {
+      // GPS is awake: check whether it should sleep
+      if ((int32_t)(millis() - _nmea->getNextSleep()) >= 0) {
+        POWERSAVING_DEBUG_PRINTLN("GPS wake timeout. Enter sleep");
+        sleep_gps();
+      } else if (!_nmea->waitingTimeSync()) {
+        POWERSAVING_DEBUG_PRINTLN("GPS set. Enter sleep early");
+        sleep_gps();
+      }
+    } else {
+      // GPS is asleep: check whether it should wake
+      if ((int32_t)(millis() - _nmea->getNextWake()) >= 0) {
         POWERSAVING_DEBUG_PRINTLN("GPS sleep timeout. Wakeup.");
-
         start_gps();
-      } else if (!gps_wake && _nmea->waitingTimeSync()) { // On for "gps sync"
+      } else if (_nmea->waitingTimeSync()) {
         POWERSAVING_DEBUG_PRINTLN("CLI gps sync. Wakeup");
-
         start_gps();
       }
     }
   }
 
-  if ((!powersaving_enabled && gps_active) || (powersaving_enabled && gps_wake)) {
+  if ((!_nmea->isPowerSavingEnabled() && gps_active) || (_nmea->isPowerSavingEnabled() && gps_wake)) {
     _nmea->loop();
   }
 
   if ((int32_t)(millis() - next_gps_update) >= 0) {
-    if ((!powersaving_enabled && gps_active) || (powersaving_enabled && gps_wake)) {
+    if ((!_nmea->isPowerSavingEnabled() && gps_active) || (_nmea->isPowerSavingEnabled() && gps_wake)) {
       if (_nmea->isValid()) {
         node_lat = ((double)_nmea->getLatitude()) / 1000000.;
         node_lon = ((double)_nmea->getLongitude()) / 1000000.;
@@ -211,10 +214,10 @@ void T1000SensorManager::loop() {
       }
 
       // In powersaving mode, GPS is on and off. Only update data when GPS is on
-      if (powersaving_enabled) next_gps_update = millis() + 1000;
+      if (_nmea->isPowerSavingEnabled()) next_gps_update = millis() + 1000;
     }
 
-    if (!powersaving_enabled) next_gps_update = millis() + 1000;
+    if (!_nmea->isPowerSavingEnabled()) next_gps_update = millis() + 1000;
   }
 }
 
@@ -232,16 +235,10 @@ const char* T1000SensorManager::getSettingValue(int i) const {
 bool T1000SensorManager::setSettingValue(const char* name, const char* value) {
   if (strcmp(name, "gps") == 0) {
     if (strcmp(value, "0") == 0) {
-      if (powersaving_enabled) {
-        _nmea->enablePowerSaving(false);
-      }
-
+      gps_active = false; // Disabled by CLI or App
       sleep_gps(); // sleep for faster fix !
     } else {
-      if (powersaving_enabled) {
-        _nmea->enablePowerSaving(true);
-      }
-
+      gps_active = true; // Enabled by CLI or App
       start_gps();
     }
     return true;

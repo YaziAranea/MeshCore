@@ -27,7 +27,7 @@ public:
   bool setAdcMultiplier(float multiplier) override;
   float getAdcMultiplier() const override;
   const char* getManufacturerName() const override ;
-  void powerOff() override;
+  void shutdownPeripherals() override;
   bool setLoRaFemLnaEnabled(bool enable) override;
   bool canControlLoRaFemLna() const override;
   bool isLoRaFemLnaEnabled() const override;

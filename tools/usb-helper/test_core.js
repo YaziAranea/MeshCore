@@ -4,12 +4,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReadableStream, WritableStream } = require('node:stream/web');
-const { ConsoleClient, ConsoleError, validateCredentials, parseStatus } = require('./core.js');
+const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo } = require('./core.js');
 
 const STATUS = 'Mode=BLE companion=idle via=none USB-service=on WiFi-config=no link=down IP=none approval=none';
 const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
 const PASSWORD_PROMPT = "Password input is hidden; enter 8..64 bytes, blank for open WiFi, or 'cancel':";
 const HELP = 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.';
+const HELP_INFO = HELP.replace('Commands: status', 'Commands: info | status');
+const INFO = 'SmartUI=0.06 core=PS22b17 build=1234abcd upstream=5ad64e00 capabilities=BLE,USB,WiFi board=Heltec V3';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 class FakePort {
@@ -84,7 +86,8 @@ class FakePort {
     const command = raw.trim().toLowerCase();
     if (this.options.readOnly && command !== 'status') { this.reply('Connection settings are read-only during storage recovery.'); return; }
     switch (command) {
-      case 'help': this.reply(HELP); break;
+      case 'help': this.reply(this.options.info ? HELP_INFO : HELP); break;
+      case 'info': this.reply(this.options.info || "Unknown command. Type 'help'."); break;
       case 'status': this.reply(STATUS.replace('Mode=BLE', 'Mode=' + this.mode).replace('WiFi-config=no', 'WiFi-config=' + (this.configured ? 'yes' : 'no'))); break;
       case 'wifi setup': this.stage = 'ssid'; this.reply(SSID_PROMPT); break;
       case 'wifi cancel': this.stage = 'idle'; this.reply('WiFi setup cancelled.'); break;
@@ -151,7 +154,76 @@ test('status parser is anchored and exposes only enumerated values and IPv4', ()
   assert.equal(parseStatus(STATUS).mode, 'ble');
   assert.equal(parseStatus(STATUS).ip, null);
   assert.equal(parseStatus(STATUS.replace('IP=none', 'IP=192.168.1.2')).ip, '192.168.1.2');
+  assert.equal(parseStatus(STATUS + ' storage=ok').readOnly, false);
+  assert.equal(parseStatus(STATUS + ' storage=recovery-required').readOnly, true);
+  assert.equal(parseStatus(STATUS + ' storage=<private>'), null);
   for (const bad of ['<script>' + STATUS, STATUS + '<img>', STATUS.replace('IP=none', 'IP=300.1.1.1'), STATUS.replace('IP=none', 'IP=<secret>')]) assert.equal(parseStatus(bad), null);
+});
+
+test('info parser bounds all fields, rejects markup, controls, duplicate capabilities and damaged records', () => {
+  assert.deepEqual(parseInfo(INFO), {firmware:'0.06',core:'PS22b17',build:'1234abcd',upstream:'5ad64e00',capabilities:['BLE','USB','WiFi'],board:'Heltec V3'});
+  assert.equal(parseInfo(INFO.replace('Heltec V3', 'x'.repeat(96))).board.length, 96);
+  for (const bad of [
+    INFO.replace('Heltec V3', 'x'.repeat(97)), INFO.replace('0.06', 'x'.repeat(33)),
+    INFO.replace('1234abcd', 'x'.repeat(41)), INFO.replace('5ad64e00', 'x'.repeat(41)),
+    INFO.replace('Heltec V3', '<img src=x onerror=alert(1)>'), INFO + '<private>',
+    INFO.replace('Heltec V3', 'Private\u202eBoard'), INFO.replace('Heltec V3', 'Board\x1b[31m'),
+    INFO.replace('BLE,USB,WiFi', 'BLE,USB,USB'), INFO.replace('BLE,USB,WiFi', 'BLE,USB,Unknown'),
+    INFO.replace('Heltec V3', ' trailing '), INFO.replace(' board=', ' password='),
+    'x'.repeat(384), null
+  ]) assert.equal(parseInfo(bad), null);
+});
+
+test('0.06 advertises info before probing it; 0.05 stays unknown and usable without an info command', async () => {
+  const modern = await connected({ info: INFO, fragment: 1 });
+  assert.deepEqual(modern.port.commands, ['cancel','wifi cancel','help','status','info']);
+  assert.equal(modern.instance.state.info.firmware, '0.06');
+  modern.instance.state.info.capabilities.pop();
+  assert.equal(modern.instance.state.info.capabilities.includes('WiFi'), true, 'state snapshots cannot mutate capabilities');
+  await modern.instance.disconnect();
+  assert.equal(modern.instance.state.info, null);
+  const old = await connected();
+  assert.equal(old.instance.state.info, null);
+  assert.equal(old.port.commands.includes('info'), false);
+  await old.instance.testWifi('legacy network', 'password');
+  await old.instance.disconnect();
+});
+
+test('known non-WiFi firmware blocks WiFi commands before serial writes; Bluetooth and USB remain available', async () => {
+  const { instance, port } = await connected({info:INFO.replace('BLE,USB,WiFi','BLE,USB').replace('Heltec V3','Heltec T114')});
+  const count = port.commands.length;
+  for (const action of [() => instance.testWifi('private network','private password'), () => instance.saveWifi(),
+      () => instance.cancelWifi(), () => instance.forgetWifi(), () => instance.setMode('wifi')]) {
+    await assert.rejects(action(), code('WIFI_UNAVAILABLE'));
+  }
+  assert.equal(port.commands.length, count);
+  await instance.setMode('ble');
+  assert.equal((await instance.setMode('usb')).requestedMode, 'usb');
+});
+
+test('advertised invalid info fails closed without displaying raw text or sending credentials', async () => {
+  for (const bad of [INFO.replace('Heltec V3','<private>'), INFO.replace('Heltec V3','x'.repeat(97)),
+      INFO.replace('BLE,USB,WiFi','BLE,BLE'), INFO + 'x'.repeat(384)]) {
+    const port = new FakePort({info:bad});
+    const {instance,seen} = client();
+    await assert.rejects(instance.connect(port), error => ['PROTOCOL','TIMEOUT'].includes(error.code));
+    assert.equal(instance.state.connected, false);
+    assert.equal(instance.state.info, null);
+    assert.equal(port.commands.includes('wifi setup'), false);
+    assert.equal(JSON.stringify(seen).includes('<private>'), false);
+  }
+});
+
+test('0.06 storage recovery status blocks settings even without the legacy read-only notice', async () => {
+  const { instance, port } = await connected({info:INFO,onCommand(raw,p) {
+    if(raw === 'status') {p.reply(STATUS + ' storage=recovery-required'); return false;}
+  }});
+  assert.equal(instance.state.status.readOnly, true);
+  const count = port.commands.length;
+  await assert.rejects(instance.setMode('wifi'), code('READ_ONLY'));
+  await assert.rejects(instance.testWifi('private network','private password'), code('READ_ONLY'));
+  assert.equal(port.commands.length, count);
+  await instance.disconnect();
 });
 
 test('connect verifies fragmented protocol, sets baud/flow, never toggles DTR/RTS', async () => {

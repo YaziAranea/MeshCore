@@ -395,40 +395,43 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
         bool enabled = l->isEnabled(); // is EN pin on ?
         bool fix = l->isValid();       // has fix ?
         int sats = l->satellitesCount();
-        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
+        bool active = !strcmp(_sensors->getSettingByKey("gps") ?: "0", "1"); // Use "0" if GPS setting is not found
 
-        if (_prefs->powersaving_enabled && l->isPowerSavingEnabled()) { // GPS Power Saving
-          if (enabled) {
-            unsigned long mins = (l->getNextSleep() - millis()) / 60000UL;
-            sprintf(reply, "on (powersaving, sleep in %luh %lum), %s, %s, %d sats", 
-              mins / 60UL, 
-              mins % 60UL,
-              active ? "active" : "deactivated", 
-              fix ? "fix" : "no fix", 
-              sats);
-          } else {
-            unsigned long mins = (l->getNextWake() - millis()) / 60000UL;
-            sprintf(reply, "off (powersaving, wake in %luh %lum)",
-              mins / 60UL,
-              mins % 60UL);
-          }
+        if (l->isPowerSavingEnabled()) { // GPS Power Saving
+          if(active) {
+            if (enabled) {
+              unsigned long mins = (l->getNextSleep() - millis()) / 60000UL;
+              sprintf(reply, "on, powered (powersaving, sleep in %luh %lum), %s, %d sats",
+                mins / 60UL,
+                mins % 60UL,
+                fix ? "fix" : "no fix",
+                sats);
+            } else {
+              unsigned long mins = (l->getNextWake() - millis()) / 60000UL;
+              sprintf(reply, "on, unpowered (powersaving, wake in %luh %lum)",
+                mins / 60UL,
+                mins % 60UL);
+            }
 
-          // "last sync" from GPS
-          DateTime dt = DateTime(l->getLastValidTimeSync());
-          if (dt.unixtime() == 0) {
-            sprintf(reply + strlen(reply), ", last sync: none");
+            // "last sync" from GPS
+            DateTime dt = DateTime(l->getLastValidTimeSync());
+            if (dt.unixtime() == 0) {
+              sprintf(reply + strlen(reply), ", last sync: none");
+            } else {
+              sprintf(reply + strlen(reply), ", last sync: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(),
+                      dt.day(), dt.month(), dt.year());
+            }
           } else {
-            sprintf(reply + strlen(reply), ", last sync: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(),
-                    dt.day(), dt.month(), dt.year());
+            sprintf(reply, "off, %s", enabled ? "powered" : "unpowered");
           }
         } else { // Normal mode
-          if (enabled) {
+          if(active) {
             sprintf(reply, "on, %s, %s, %d sats",
-              active?"active":"deactivated",
+              enabled?"powered":"unpowered",
               fix?"fix":"no fix",
               sats);
           } else {
-            strcpy(reply, "off");
+            sprintf(reply, "off, %s", enabled ? "powered" : "unpowered");
           }
         }
       } else {
@@ -438,12 +441,10 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
     } else if (memcmp(command, "powersaving on", 14) == 0) {
 #if defined(NRF52_PLATFORM)
       _prefs->powersaving_enabled = 1;
-      _sensors->powersaving_enabled = 1;
       savePrefs();
       strcpy(reply, "on - Immediate effect");
 #elif defined(ESP32) && !defined(WITH_BRIDGE)
       _prefs->powersaving_enabled = 1;
-      _sensors->powersaving_enabled = 1;
       savePrefs();
       strcpy(reply, "on - After 2 minutes");
 #elif defined(WITH_BRIDGE)
@@ -453,7 +454,6 @@ void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* re
 #endif
     } else if (memcmp(command, "powersaving off", 15) == 0) {
       _prefs->powersaving_enabled = 0;
-      _sensors->powersaving_enabled = 0;
       savePrefs();
       strcpy(reply, "off");
     } else if (memcmp(command, "powersaving", 11) == 0) {
@@ -655,8 +655,6 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       strcpy(reply, "Error: state must be on or off");
     }
-  } else if (strncmp(config, "radio.rxps.rfrx_disabled ", 25) == 0) {
-    RXPowerSavingCLI::setRfRxDisabled(&config[25], _rxps_control, reply, 160);
   } else if (memcmp(config, "radio.rxps ", 11) == 0) {
     if (RXPowerSavingCLI::set(&config[11], _prefs->sf, _prefs->bw, &_prefs->rxps,
                               _rxps_control, reply, 160)) {
@@ -677,7 +675,8 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       _prefs->bw = bw;
       bool rxps_retuned = recalcRxPowerSavingFromLevel(
           _prefs->rxps.level, _prefs->sf, _prefs->bw, _prefs->rxps.preamble,
-          &_prefs->rxps.rx_us, &_prefs->rxps.sleep_us);
+          &_prefs->rxps.rx_us, &_prefs->rxps.sleep_us,
+          rxPowerSavingCaptureCost(_rxps_control), rxPowerSavingTransition(_rxps_control));
       _callbacks->savePrefs();
       strcpy(reply, rxps_retuned ? "OK - reboot to apply (rxps retuned)" : "OK - reboot to apply");
     } else {
@@ -717,7 +716,7 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       strcpy(reply, "OK");
     } else {
       strcpy(reply, "Error, max 64");
-    } 
+    }
   } else if (memcmp(config, "flood.max.advert ", 17) == 0) {
     uint8_t m = atoi(&config[17]);
     if (m <= 64) {
@@ -949,10 +948,14 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     } else {
       sprintf(reply, "> %s", _board->isLoRaFemPaGainEnabled() ? "on" : "off");
     }
-  } else if (strcmp(config, "radio.rxps.rfrx_disabled") == 0) {
-    RXPowerSavingCLI::getRfRxDisabled(_rxps_control, reply, 160);
-  } else if (strcmp(config, "radio.rxps") == 0) {
-    RXPowerSavingCLI::get(&_prefs->rxps, _rxps_control, reply, 160);
+  } else if (memcmp(config, "radio.rxps", 10) == 0 &&
+             (config[10] == 0 || config[10] == ' ')) {
+    // Exact match plus an optional trailing space, the same shape as the `tx`
+    // key below. A plain strcmp() looks stricter but is a trap here: `get
+    // radio.rxps ` fails it, falls through to the `radio` prefix branch further
+    // down and cheerfully answers with the frequency and bandwidth. Every other
+    // key in this chain is a prefix match and so never noticed the space.
+    RXPowerSavingCLI::get(&_prefs->rxps, _rxps_control, _prefs->sf, _prefs->bw, reply, 160);
   } else if (memcmp(config, "radio", 5) == 0) {
     char freq[16], bw[16];
     strcpy(freq, StrHelper::ftoa(_prefs->freq));
@@ -1074,7 +1077,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
     char* tmp = reply;
     for (int i = 0; i < 3 && _prefs->extra_sf[i] != 0; i++) {
       tmp += sprintf(tmp, "%s%d", (i == 0) ? "" : ",", _prefs->extra_sf[i]);
-    } 
+    }
     if (tmp == reply) {
       sprintf(reply, "No extra SF configured");
     }
@@ -1260,7 +1263,7 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
   } else if (n >= 3 && strcmp(parts[1], "list") == 0) {
     uint8_t mask = 0;
     bool invert = false;
-    
+
     if (strcmp(parts[2], "allowed") == 0) {
       mask = REGION_DENY_FLOOD;
       invert = false;  // list regions that DON'T have DENY flag
@@ -1271,7 +1274,7 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
       strcpy(reply, "Err - use 'allowed' or 'denied'");
       return;
     }
-    
+
     int len = _region_map->exportNamesTo(reply, 160, mask, invert);
     if (len == 0) {
       strcpy(reply, "-none-");

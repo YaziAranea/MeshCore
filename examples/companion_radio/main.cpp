@@ -1,10 +1,17 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#include <helpers/SmartUiBuildInfo.h>
 
 #ifdef ESP32_PLATFORM
 #include "esp_pm.h"
 #include "esp_bt.h"
+#include <helpers/SmartUiSleepPolicy.h>
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+static esp_pm_lock_handle_t companion_sleep_lock = nullptr;
+static bool companion_sleep_lock_held = false;
+static bool companion_wifi_awake = false;
+#endif
 #endif
 
 // Believe it or not, this std C function is busted on some platforms!
@@ -123,6 +130,12 @@ static void resetCompanionSession() {
 static void setWifiSleepInhibit(bool inhibit) {
 #if defined(ESP32)
   board.setInhibitSleep(inhibit);
+  companion_wifi_awake = inhibit;
+  // This firmware uses automatic IDF sleep, not ESP32Board::sleep().
+  // Acquire before WiFi setup can yield; release is reconciled in loop().
+  if (inhibit && companion_sleep_lock && !companion_sleep_lock_held) {
+    companion_sleep_lock_held = esp_pm_lock_acquire(companion_sleep_lock) == ESP_OK;
+  }
 #else
   (void)inhibit;
 #endif
@@ -130,6 +143,10 @@ static void setWifiSleepInhibit(bool inhibit) {
 
 static bool isCompanionCliRescue() {
   return the_mesh.isCLIRescue();
+}
+
+static const char* companionBoardName() {
+  return board.getManufacturerName();
 }
 
 static bool isCompanionStorageQuarantined() {
@@ -214,6 +231,11 @@ static void showFatalStorageError(DisplayDriver* disp, const char* title,
 #endif
 
 void setup() {
+  // Keep an exact-source marker in the linked image for release validation.
+  // The volatile reads prevent link-time removal of this non-display metadata.
+  const volatile char* build_identity = "SmartUI-source:" SMARTUI_BUILD_SHA;
+  for (size_t i = 0; i < sizeof("SmartUI-source:" SMARTUI_BUILD_SHA); ++i)
+    (void)build_identity[i];
   Serial.begin(115200);
   board.begin();
 
@@ -397,6 +419,7 @@ void setup() {
   connection_hooks.setWifiSleepInhibit = setWifiSleepInhibit;
   connection_hooks.isCliRescue = isCompanionCliRescue;
   connection_hooks.isStorageQuarantined = isCompanionStorageQuarantined;
+  connection_hooks.getBoardName = companionBoardName;
   connection_controller.begin(
       store, interface_manager, Serial,
     #if defined(ESP32)
@@ -406,6 +429,16 @@ void setup() {
     #endif
       connection_hooks);
 #endif
+
+#if ENV_INCLUDE_GPS == 1
+  // Apply PowerSaving profile for GPS
+  if (sensors.getLocationProvider() != NULL) {
+    // GPS on and off duration in seconds
+    sensors.getLocationProvider()->setPowerSavingProfile(the_mesh.getNodePrefs()->powersaving_enabled, 600,
+                                                         1800); // Max 10 minutes, 30 minutes
+  }
+#endif
+
   sensors.begin();
 
 #if ENV_INCLUDE_GPS == 1
@@ -438,13 +471,28 @@ void setup() {
 #endif
 
   // Configure Power Management
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
-  // Disable automatic light sleep for USB CDC Serial
+#if (defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT) || \
+    (defined(ENABLE_USB_INTERFACE) && \
+     !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR))
+  // Disable automatic light sleep for USB CDC Serial and USB Companion
   pm_config = { .max_freq_mhz = 80, .min_freq_mhz = 40, .light_sleep_enable = false };
 #else
   pm_config = { .max_freq_mhz = 80, .min_freq_mhz = 40, .light_sleep_enable = true };
 #endif
 
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  if (pm_config.light_sleep_enable) {
+    const esp_err_t lock_result = esp_pm_lock_create(
+        ESP_PM_NO_LIGHT_SLEEP, 0, "smartui_io", &companion_sleep_lock);
+    if (lock_result != ESP_OK ||
+        esp_pm_lock_acquire(companion_sleep_lock) != ESP_OK) {
+      // Prefer stable USB over sleeping without a working transport guard.
+      pm_config.light_sleep_enable = false;
+    } else {
+      companion_sleep_lock_held = true;
+    }
+  }
+#endif
   esp_err_t errPM = esp_pm_configure(&pm_config);
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   // Selected USB carries framed companion traffic only.  Never inject text
@@ -482,6 +530,25 @@ void loop() {
   rtc_clock.tick();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
+#endif
+
+#if defined(ESP32_PLATFORM) && defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  if (companion_sleep_lock) {
+    bool ui_active = false;
+#ifdef DISPLAY_CLASS
+    ui_active = ui_task.shouldHoldLightSleepLock();
+#endif
+    const bool hold = smartui::holdCompanionLightSleep(
+        connection_controller.status().selected == CompanionMode::USB,
+        companion_wifi_awake, connection_controller.consoleActive(millis()),
+        ui_active, the_mesh.isCLIRescue());
+    if (hold && !companion_sleep_lock_held) {
+      companion_sleep_lock_held = esp_pm_lock_acquire(companion_sleep_lock) == ESP_OK;
+    } else if (!hold && companion_sleep_lock_held) {
+      if (esp_pm_lock_release(companion_sleep_lock) == ESP_OK)
+        companion_sleep_lock_held = false;
+    }
+  }
 #endif
 
   if (!the_mesh.hasPendingWork()) {

@@ -16,7 +16,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.0.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.1.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -36,14 +36,14 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest }) {
+function installSerialMock({ supported, readOnly, manualTest, info }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
   }
   const mock = window.__serialMock = {
     requests: 0, commands: [], raw: [], mode: 'BLE', configured: false,
-    stage: 'idle', manualTest, readOnly, closed: false, ssid: null, password: null,
+    stage: 'idle', manualTest, readOnly, info, closed: false, ssid: null, password: null,
     emit(text) {
       if (this.closed) return;
       const bytes = new TextEncoder().encode(text + '\r\n');
@@ -74,7 +74,8 @@ function installSerialMock({ supported, readOnly, manualTest }) {
       const command = raw.trim().toLowerCase();
       if (this.readOnly && command !== 'status') { this.emit('Connection settings are read-only during storage recovery.'); return; }
       switch (command) {
-        case 'help': this.emit('Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.'); break;
+        case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.'); break;
+        case 'info': this.emit(this.info || "Unknown command. Type 'help'."); break;
         case 'status': {
           const online = this.mode === 'WiFi' && this.configured;
           this.emit('Mode=' + this.mode + ' companion=idle via=none USB-service=on WiFi-config=' + (this.configured ? 'yes' : 'no') + ' link=' + (online ? 'associated' : 'down') + ' IP=' + (online ? '192.168.1.77' : 'none') + ' approval=none');
@@ -126,7 +127,7 @@ async function fixture(options = {}) {
   const network = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest) });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -205,6 +206,8 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     assert.equal(await page.locator('#unsupported').isVisible(), false);
     await connect(page);
     await ready(page);
+    assert.equal(await page.locator('#info-firmware').textContent(), '—');
+    assert.equal(await page.evaluate(() => window.__serialMock.commands.includes('info')), false, 'legacy 0.05 must not receive info');
     assert.equal(await page.locator('#mode').textContent(), 'Bluetooth');
     await page.locator('#ssid').fill('  Сеть Home  ');
     await page.locator('#password').fill('  private<PW>  ');
@@ -280,6 +283,46 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     assert.match(await page.locator('#feedback').textContent(), /результат неизвестен/);
     assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
   } finally { await f.close(); }
+});
+
+test('0.06 identity uses text fields, fits narrow screens and gates known non-WiFi boards', async () => {
+  for (const wifi of [true, false]) {
+    const board = wifi ? 'Heltec V3' : 'Heltec T114 (nRF52840)';
+    const f = await fixture({info:'SmartUI=0.06 core=PS22b17 build=0123456789012345678901234567890123456789 upstream=abcdef01 capabilities=BLE,USB' + (wifi ? ',WiFi' : '') + ' board=' + board});
+    try {
+      await connect(f.page);
+      assert.equal(await f.page.locator('#info-firmware').textContent(), '0.06');
+      assert.equal(await f.page.locator('#info-core').textContent(), 'PS22b17');
+      assert.equal(await f.page.locator('#info-board').textContent(), board);
+      assert.equal(await f.page.locator('#info-build').textContent(), '0123456789012345678901234567890123456789');
+      assert.equal(await f.page.evaluate(() => window.__serialMock.commands.filter(x => x === 'info').length), 1);
+      for (const id of ['ssid','password','show-password','open-network','test','cancel','forget','mode-wifi']) {
+        assert.equal(await f.page.locator('#' + id).isEnabled(), wifi, id + ' capability gate');
+      }
+      for (const id of ['mode-ble','mode-usb','refresh']) assert.equal(await f.page.locator('#' + id).isEnabled(), true);
+      for (const width of [320, 390, 1280]) {
+        await f.page.setViewportSize({width,height:1000});
+        await noOverlap(f.page);
+        await f.page.screenshot({path:path.join(output, 'info-' + (wifi ? 'wifi' : 'nrf') + '-' + width + '.png'),fullPage:true});
+      }
+      await f.page.locator('#disconnect').click();
+      await f.page.waitForFunction(() => document.getElementById('connection').textContent === 'Нода не подключена');
+      assert.equal(await f.page.locator('#info-board').textContent(), '—');
+    } finally {await f.close();}
+  }
+});
+
+test('invalid advertised info never renders device markup or enables credentials', async () => {
+  const f = await fixture({info:'SmartUI=0.06 core=PS22b17 build=123abc upstream=abc123 capabilities=BLE,USB board=<img src=x onerror=alert(1)>'});
+  try {
+    await f.page.locator('#connect').click();
+    await f.page.waitForFunction(() => document.getElementById('feedback').textContent.includes('Ответ не соответствует'));
+    assert.equal(await f.page.locator('#test').isDisabled(), true);
+    assert.equal(await f.page.locator('#info-board').textContent(), '—');
+    assert.equal(await f.page.locator('img').count(), 0);
+    assert.equal((await f.page.locator('body').textContent()).includes('<img'), false);
+    assert.equal(await f.page.evaluate(() => window.__serialMock.commands.includes('wifi setup')), false);
+  } finally {await f.close();}
 });
 
 test('unplug clears secrets/status and ignores hostile serial text', async () => {

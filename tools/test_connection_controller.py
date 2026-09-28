@@ -46,7 +46,10 @@ public:
 class File;
 class FakeFS {
 public:
-  std::map<std::string, std::vector<uint8_t>> files;
+  using State = std::map<std::string, std::vector<uint8_t>>;
+  State files;
+  bool record_snapshots = false;
+  std::vector<State> snapshots;
   bool fail_next_rename = false;
   std::string fail_remove_path;
   std::string fail_write_open_path;
@@ -54,14 +57,21 @@ public:
   std::string corrupt_flush_path;
   std::string fail_rename_from;
   std::string corrupt_rename_to;
+  std::string permanent_remove_path;
+  std::string permanent_write_open_path;
+
+  void checkpoint() { if (record_snapshots) snapshots.push_back(files); }
 
   bool exists(const char* path) const { return files.count(path) != 0; }
   bool remove(const char* path) {
+    if (permanent_remove_path == path) return false;
     if (fail_remove_path == path) {
       fail_remove_path.clear();
       return false;
     }
-    return files.erase(path) != 0;
+    const bool removed = files.erase(path) != 0;
+    if (removed) checkpoint();
+    return removed;
   }
   bool rename(const char* from, const char* to) {
     if (fail_next_rename || fail_rename_from == from) {
@@ -77,6 +87,7 @@ public:
       corrupt_rename_to.clear();
       if (!files[to].empty()) files[to][0] ^= 0xff;
     }
+    checkpoint();
     return true;
   }
   File open(const char* path, const char* mode, bool create = false);
@@ -91,7 +102,10 @@ public:
   File() = default;
   File(FakeFS* fs, const char* path, bool write)
       : fs_(fs), path_(path), open_(fs != nullptr) {
-    if (open_ && write) fs_->files[path_].clear();
+    if (open_ && write) {
+      fs_->files[path_].clear();
+      fs_->checkpoint();
+    }
   }
   explicit operator bool() const { return open_; }
   size_t size() const {
@@ -116,6 +130,7 @@ public:
     if (bytes.size() < offset_ + len) bytes.resize(offset_ + len);
     std::memcpy(bytes.data() + offset_, data, len);
     offset_ += len;
+    fs_->checkpoint();
     return len;
   }
   void flush() {
@@ -123,6 +138,7 @@ public:
       fs_->corrupt_flush_path.clear();
       auto& bytes = fs_->files[path_];
       if (!bytes.empty()) bytes.back() ^= 0xff;
+      fs_->checkpoint();
     }
   }
   void close() { open_ = false; }
@@ -130,6 +146,7 @@ public:
 
 inline File FakeFS::open(const char* path, const char* mode, bool) {
   const bool write = mode && mode[0] == 'w';
+  if (write && permanent_write_open_path == path) return File();
   if (write && fail_write_open_path == path) {
     fail_write_open_path.clear();
     return File();
@@ -295,6 +312,8 @@ HARNESS = r'''#include <cassert>
 #include "ConnectionController.h"
 #include "DataStore.h"
 #include <helpers/MultiSerialInterface.h>
+#include <helpers/StorageTransaction.h>
+#include <helpers/SmartUiBuildInfo.h>
 #if defined(ESP32)
 #include <helpers/esp32/SerialWifiInterface.h>
 #include <WiFi.h>
@@ -343,6 +362,7 @@ static void resetSession() { ++reset_count; }
 static void setSleep(bool value) { sleep_inhibited = value; }
 static bool isCli() { return cli_rescue; }
 static bool isQuarantined() { return quarantined; }
+static const char* boardName() { return "Test Board"; }
 
 static ConnectionControllerHooks hooks() {
   ConnectionControllerHooks value;
@@ -350,6 +370,7 @@ static ConnectionControllerHooks hooks() {
   value.setWifiSleepInhibit = setSleep;
   value.isCliRescue = isCli;
   value.isStorageQuarantined = isQuarantined;
+  value.getBoardName = boardName;
   return value;
 }
 
@@ -496,12 +517,241 @@ static void testModeChangeErrors() {
   }
 }
 
-#if defined(ESP32)
 static bool containsBytes(const std::vector<uint8_t>& bytes, const char* text) {
   const std::string haystack(bytes.begin(), bytes.end());
   return haystack.find(text) != std::string::npos;
 }
+
+static std::vector<uint8_t> configRecord(CompanionMode mode, bool credentials = false) {
+  // Keep the established 109-byte v1 ABI: header9 + SSID32 + password64 + CRC4.
+  std::vector<uint8_t> record(109, 0);
+  std::memcpy(record.data(), "MCC1", 4);
+  record[4] = 1;
+  record[5] = static_cast<uint8_t>(mode);
+  if (credentials) {
+    const char* ssid = "private-network";
+    const char* password = "private-password";
+    record[6] = 1;
+    record[7] = std::strlen(ssid);
+    record[8] = std::strlen(password);
+    std::memcpy(record.data() + 9, ssid, record[7]);
+    std::memcpy(record.data() + 41, password, record[8]);
+  }
+  mesh::storage::Crc32 crc;
+  crc.update(record.data(), 105);
+  const uint32_t checksum = crc.value();
+  for (unsigned i = 0; i < 4; ++i) record[105 + i] = checksum >> (8 * i);
+  return record;
+}
+
+struct RecoveryFixture {
+  FakeFS fs;
+  DataStore store;
+  FakeTransport ble, usb;
+  MultiSerialInterface manager;
+  FakeStream console;
+  ConnectionController controller;
+#if defined(ESP32)
+  SerialWifiInterface wifi;
 #endif
+
+  RecoveryFixture() : store(fs) {
+    manager.addInterface(InterfaceType::Bluetooth, &ble);
+    manager.addInterface(InterfaceType::USB, &usb);
+#if defined(ESP32)
+    manager.addInterface(InterfaceType::WiFi, &wifi);
+#endif
+    manager.enable();
+  }
+  void boot() {
+    controller.begin(store, manager, console,
+#if defined(ESP32)
+                     &wifi,
+#else
+                     nullptr,
+#endif
+                     hooks());
+  }
+};
+
+static void assertNoCredentials(const FakeFS::State& files) {
+  for (const auto& item : files) {
+    assert(!containsBytes(item.second, "private-network"));
+    assert(!containsBytes(item.second, "private-password"));
+  }
+}
+
+static void assertCleanReboot(const FakeFS::State& files, CompanionMode mode) {
+  RecoveryFixture next;
+  next.fs.files = files;
+  next.boot();
+  assert(next.controller.status().selected == mode);
+  assert(!next.controller.status().wifiConfigured);
+  assert(!next.controller.status().storageRecoveryRequired);
+  assert(next.fs.files["/connection.cfg"] == configRecord(mode));
+  assertNoCredentials(next.fs.files);
+}
+
+static void testCredentialFreeRecovery() {
+  for (CompanionMode mode : {CompanionMode::BLE, CompanionMode::USB
+#if defined(ESP32)
+                            , CompanionMode::WiFi
+#endif
+                            }) {
+    for (const char* source : {"/connection.cfg.tmp", "/connection.cfg.bak"}) {
+      for (bool corrupt_primary : {false, true}) {
+        for (unsigned fault = 0; fault < 10; ++fault) {
+          RecoveryFixture first;
+          const auto record = configRecord(mode);
+          first.fs.files[source] = record;
+          if (corrupt_primary) first.fs.files["/connection.cfg"] = {1, 2, 3};
+          switch (fault) {
+            case 1: first.fs.fail_write_open_path = "/connection.forgot"; break;
+            case 2: first.fs.short_write_path = "/connection.forgot"; break;
+            case 3: first.fs.fail_write_open_path = "/connection.cfg"; break;
+            case 4: first.fs.short_write_path = "/connection.cfg"; break;
+            case 5: first.fs.corrupt_flush_path = "/connection.cfg"; break;
+            case 6: first.fs.fail_remove_path = source; break;
+            case 7: first.fs.permanent_remove_path = source;
+                    first.fs.fail_write_open_path = source; break;
+            case 8: first.fs.fail_remove_path = "/connection.forgot"; break;
+            // Recovery no longer needs rename and cannot consume its sole .tmp.
+            case 9: first.fs.fail_next_rename = true; break;
+          }
+          first.fs.record_snapshots = true;
+          first.boot();
+          assert(first.controller.status().selected == mode);
+          assert(!first.controller.status().wifiConfigured);
+          if (first.controller.status().storageRecoveryRequired) {
+            assert(!first.manager.isEnabled());
+            assert(!first.controller.setMode(CompanionMode::BLE));
+            assert(first.controller.lastChangeError() == ConnectionChangeError::StorageReadOnly);
+          }
+          // A healthy next boot recovers both clean mode and durable primary.
+          assertCleanReboot(first.fs.files, mode);
+          // Every simulated power-cut keeps at least one complete clean record.
+          for (const auto& snapshot : first.fs.snapshots) assertCleanReboot(snapshot, mode);
+        }
+      }
+    }
+  }
+
+  // Read-only external modes never even create the recovery marker.
+  for (bool cli : {false, true}) {
+    RecoveryFixture readonly;
+    readonly.fs.files["/connection.cfg.tmp"] = configRecord(CompanionMode::USB);
+    const auto before = readonly.fs.files;
+    cli_rescue = cli;
+    quarantined = !cli;
+    readonly.boot();
+    assert(readonly.fs.files == before);
+    assert(readonly.controller.status().selected == CompanionMode::USB);
+    assert(!readonly.manager.isEnabled());
+    cli_rescue = quarantined = false;
+  }
+}
+
+static void testForgetFailurePrivacy() {
+  const char* paths[] = {"/connection.cfg", "/connection.cfg.tmp", "/connection.cfg.bak"};
+  for (const char* blocked : paths) {
+    for (unsigned fault = 0; fault < 5; ++fault) {
+      RecoveryFixture first;
+      const auto secret = configRecord(CompanionMode::BLE, true);
+      first.fs.files["/connection.cfg"] = secret;
+      first.boot();
+      for (const char* path : paths) first.fs.files[path] = secret;
+      first.fs.record_snapshots = true;
+      first.fs.permanent_remove_path = blocked;
+      switch (fault) {
+        case 0: first.fs.permanent_write_open_path = blocked; break;
+        case 1: first.fs.short_write_path = blocked; break;
+        case 2: first.fs.corrupt_flush_path = blocked; break;
+        case 3: break;  // Failed unlink can be neutralized by verified overwrite.
+        case 4: first.fs.fail_remove_path = "/connection.forgot"; break;
+      }
+      send(first.controller, first.console, "wifi forget\n");
+      assert(!first.controller.status().wifiConfigured);
+      if (first.controller.status().storageRecoveryRequired) {
+        assert(first.fs.exists("/connection.forgot"));
+        assert(!first.manager.isEnabled());
+        assert(first.console.output.find("Do not assume credentials were erased") != std::string::npos);
+      } else {
+        assert(!first.fs.exists("/connection.forgot"));
+        assertNoCredentials(first.fs.files);
+      }
+      for (const auto& snapshot : first.fs.snapshots) {
+        assertCleanReboot(snapshot, CompanionMode::BLE);
+      }
+      // Permanent write+unlink failure must stay fail-closed on every boot,
+      // including loss of the clean primary after a failed backup cleanup.
+      if (fault == 0) {
+        for (bool corrupt_clean_primary : {false, true}) {
+          FakeFS::State state = first.fs.files;
+          if (corrupt_clean_primary && std::strcmp(blocked, "/connection.cfg") != 0) {
+            state["/connection.cfg"] = {1, 2, 3};
+          }
+          for (unsigned boot = 0; boot < 2; ++boot) {
+            RecoveryFixture next;
+            next.fs.files = state;
+            next.fs.permanent_remove_path = blocked;
+            next.fs.permanent_write_open_path = blocked;
+            next.boot();
+            assert(!next.controller.status().wifiConfigured);
+            assert(next.controller.status().storageRecoveryRequired);
+            assert(!next.manager.isEnabled());
+            assert(next.fs.exists("/connection.forgot"));
+#if defined(ESP32)
+            assert(!next.wifi.enabled && !sleep_inhibited);
+#endif
+            state = next.fs.files;
+          }
+        }
+      }
+      // Retry is available without reboot once the storage fault is gone.
+      first.fs.permanent_remove_path.clear();
+      first.fs.permanent_write_open_path.clear();
+      send(first.controller, first.console, "wifi forget\n");
+      assert(!first.controller.status().storageRecoveryRequired);
+      assert(first.manager.isEnabled());
+      assertNoCredentials(first.fs.files);
+      assertCleanReboot(first.fs.files, CompanionMode::BLE);
+    }
+  }
+
+  // A storage device that cannot create the barrier cannot claim Forget.
+  // Existing data must remain intact and the failure must be explicit.
+  RecoveryFixture unavailable;
+  unavailable.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE, true);
+  unavailable.boot();
+  const auto before = unavailable.fs.files;
+  unavailable.fs.permanent_write_open_path = "/connection.forgot";
+  send(unavailable.controller, unavailable.console, "wifi forget\n");
+  assert(unavailable.fs.files == before);
+  assert(unavailable.controller.status().storageRecoveryRequired);
+  assert(!unavailable.controller.status().wifiConfigured && !unavailable.manager.isEnabled());
+  assert(unavailable.console.output.find("Do not assume credentials were erased") != std::string::npos);
+}
+
+static void testInfoReadOnly() {
+  RecoveryFixture fixture;
+  fixture.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE, true);
+  fixture.boot();
+  pump(fixture.controller);
+  fixture.console.output.clear();
+  const auto before = fixture.fs.files;
+  for (bool quarantine : {false, true}) {
+    quarantined = quarantine;
+    send(fixture.controller, fixture.console, "info\n");
+    assert(fixture.console.output.find("SmartUI=" SMARTUI_VERSION " core=" SMARTUI_CORE_VERSION
+        " build=" SMARTUI_BUILD_SHA " upstream=" SMARTUI_UPSTREAM_SHA " capabilities=BLE,USB") != std::string::npos);
+    assert(fixture.console.output.find(" board=Test Board\r\n") != std::string::npos);
+    assert(fixture.console.output.find("private-network") == std::string::npos);
+    assert(fixture.console.output.find("private-password") == std::string::npos);
+    assert(fixture.fs.files == before);
+    fixture.console.output.clear();
+  }
+  quarantined = false;
+}
 
 int main() {
   FakeFS fs;
@@ -824,6 +1074,9 @@ int main() {
   assert(blocked_console.max_write <= 7 && blocked_console.max_write <= 64);
 
   testModeChangeErrors();
+  testCredentialFreeRecovery();
+  testForgetFailurePrivacy();
+  testInfoReadOnly();
   return 0;
 }
 '''
@@ -901,6 +1154,8 @@ def main() -> None:
         for name in ("ConnectionController.cpp", "ConnectionController.h", "ConnectionTypes.h"):
             shutil.copy2(CONTROLLER / name, example / name)
         shutil.copy2(ROOT / "src/helpers/StorageTransaction.h", source_helpers / "StorageTransaction.h")
+        shutil.copy2(ROOT / "src/helpers/SmartUiBuildInfo.h", source_helpers / "SmartUiBuildInfo.h")
+        shutil.copy2(ROOT / "src/helpers/SmartUiSleepPolicy.h", source_helpers / "SmartUiSleepPolicy.h")
         # Angle-bracket helper includes resolve through stubs first.
         shutil.copy2(source_helpers / "StorageTransaction.h", helpers / "StorageTransaction.h")
         (root / "stubs/Arduino.h").write_text(ARDUINO, encoding="utf-8")
@@ -911,7 +1166,7 @@ def main() -> None:
         (root / "controller_test.cpp").write_text(HARNESS, encoding="utf-8")
         run_build(root, esp32=True)
         run_build(root, esp32=False)
-    print("[PASS] ConnectionController persistence, failure reasons, recovery, hidden setup, bounded console, retry, approval, quarantine")
+    print("[PASS] ConnectionController persistence, two-boot/crash recovery, permanent-failure Forget privacy, info, hidden setup, bounded console, retry, approval, quarantine")
 
 
 if __name__ == "__main__":

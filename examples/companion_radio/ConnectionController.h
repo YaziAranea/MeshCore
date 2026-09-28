@@ -16,6 +16,7 @@ struct ConnectionControllerHooks {
   void (*setWifiSleepInhibit)(bool inhibit) = nullptr;
   bool (*isCliRescue)() = nullptr;
   bool (*isStorageQuarantined)() = nullptr;
+  const char* (*getBoardName)() = nullptr;
 };
 
 class ConnectionController {
@@ -32,6 +33,7 @@ public:
   // Result of the latest setMode request, unaffected by background config saves.
   ConnectionChangeError lastChangeError() const { return _last_change_error; }
   bool resolveWifiClient(uint32_t request_id, bool approve);
+  bool consoleActive(uint32_t now) const;
 
 private:
   static const size_t WIFI_SSID_MAX = 32;
@@ -66,7 +68,10 @@ private:
   ConnectionChangeError _last_change_error = ConnectionChangeError::None;
   bool _started = false;
   bool _config_reset_notice = false;
+  bool _config_storage_error = false;
   bool _console_announced = false;
+  bool _console_input_seen = false;
+  uint32_t _console_last_input = 0;
   bool _quarantine_latched = false;
   bool _wifi_radio_on = false;
   bool _wifi_was_associated = false;
@@ -99,8 +104,8 @@ private:
   bool configsEqual(const Config& first, const Config& second) const;
   bool loadConfig();
   bool saveConfig(const Config& config, ConnectionChangeError* error = nullptr);
+  bool persistCleanConfig(const Config& clean);
   bool forgetWifi();
-  void scrubConfigArtifacts();
   bool removeOrNeutralizeConfigFile(const char* path, const Config& clean);
   void scrubCandidate();
   void stopWifiRadio(bool erase_sdk_credentials = false);
@@ -112,6 +117,7 @@ private:
   void handleConsoleLine(char* line);
   void printConsole(const char* text);
   void printStatus();
+  void printInfo();
   void printHelp();
   void cancelWifiSetup(bool restore_selected_wifi);
   bool startWifiSetup();

@@ -738,18 +738,12 @@ const char* EnvironmentSensorManager::getSettingValue(int i) const {
 
 bool EnvironmentSensorManager::setSettingValue(const char* name, const char* value) {
   #if ENV_INCLUDE_GPS
-  if (gps_detected && strcmp(name, "gps") == 0) {
+  if (_location && gps_detected && strcmp(name, "gps") == 0) {
     if (strcmp(value, "0") == 0) {
-      if (powersaving_enabled) {
-        _location->enablePowerSaving(false);
-      }
-
+      gps_active = false; // Disabled by CLI or App
       stop_gps();
     } else {
-      if (powersaving_enabled) {
-        _location->enablePowerSaving(true);
-      }
-
+      gps_active = true; // Enabled by CLI or App
       start_gps();
     }
     return true;
@@ -765,6 +759,9 @@ bool EnvironmentSensorManager::setSettingValue(const char* name, const char* val
 
 #if ENV_INCLUDE_GPS
 void EnvironmentSensorManager::initBasicGPS() {
+  gps_active = gps_wake = false;
+  gps_detected = false;
+  if (!_location) return;
 
 #if defined(SMARTUI_OPTIONAL_UART_GPS) && SMARTUI_OPTIONAL_UART_GPS
   // This is a user-connectable port, not an onboard receiver to probe at boot.
@@ -806,6 +803,9 @@ void EnvironmentSensorManager::initBasicGPS() {
     MESH_DEBUG_PRINTLN("GPS detected");
     #ifdef PERSISTANT_GPS
       gps_active = true;
+      gps_wake = true;
+      _location->syncTime();
+      _location->setNextSleep();
       return;
     #endif
   } else {
@@ -813,12 +813,14 @@ void EnvironmentSensorManager::initBasicGPS() {
   }
   _location->stop();
   gps_active = false; //Set GPS visibility off until setting is changed
+  gps_wake = false;
 }
 
 // gps code for rak might be moved to MicroNMEALoactionProvider
 // or make a new location provider ...
 #ifdef RAK_WISBLOCK_GPS
 void EnvironmentSensorManager::rakGPSInit() {
+  if (!_location) return;
   Serial1.setPins(PIN_GPS_TX, PIN_GPS_RX);
 
 #ifdef GPS_BAUD_RATE
@@ -830,6 +832,8 @@ void EnvironmentSensorManager::rakGPSInit() {
   // search for the correct IO standby pin depending on socket used
   if (gpsIsAwake(WB_IO2)) {
     _location->setPinEn(WB_IO2); // WB_IO2 is the power switch for all sensor and IO slots
+    _location->begin();
+    gps_wake = true;
   } else {
     MESH_DEBUG_PRINTLN("No GPS found");
     gps_active = false;
@@ -840,7 +844,10 @@ void EnvironmentSensorManager::rakGPSInit() {
 
 #ifndef FORCE_GPS_ALIVE // for use with repeaters, until GPS toggle is implimented
   // Now that GPS is found and set up, set to sleep for initial state
+  gps_active = false;
   stop_gps();
+#else
+  gps_wake = gps_active;
 #endif
 }
 
@@ -888,20 +895,20 @@ bool EnvironmentSensorManager::gpsIsAwake(uint8_t ioPin) {
     return true;
   }
 
+  #ifndef RAK_3401
   pinMode(ioPin, INPUT);
+  #endif
   MESH_DEBUG_PRINTLN("GPS did not init with this IO pin... try the next");
   return false;
 }
 #endif
 
 void EnvironmentSensorManager::start_gps() {
-  gps_active = true;
-
-  if (powersaving_enabled && _location->isPowerSavingEnabled()) {
-    gps_wake = true;           // gps_active is true
-    _location->syncTime();     // Clear GPS data and force sync time
-    _location->setNextSleep(); // Next time to off
-  }
+  // User intent and physical wake state are separate. The scheduler cannot
+  // turn a user-disabled receiver back on, even for a telemetry sync request.
+  if (!_location || !gps_detected || !gps_active || gps_wake) return;
+  gps_wake = true;
+  _next_gps_update = static_cast<uint32_t>(millis());
 
 #ifdef RAK_WISBLOCK_GPS
 #ifdef FORCE_GPS_ALIVE
@@ -911,11 +918,12 @@ void EnvironmentSensorManager::start_gps() {
   pinMode(gpsResetPin, OUTPUT);
   digitalWrite(gpsResetPin, HIGH); // WB_IO2
 #endif
-  return;
 #endif
 
   _location->begin();
   _location->reset();
+  _location->syncTime();
+  _location->setNextSleep();
 
 #ifndef PIN_GPS_EN
   MESH_DEBUG_PRINTLN("Start GPS is N/A on this board. Actual GPS state unchanged");
@@ -923,14 +931,10 @@ void EnvironmentSensorManager::start_gps() {
 }
 
 void EnvironmentSensorManager::stop_gps() {
-  if (powersaving_enabled && _location->isPowerSavingEnabled()) {
-    gps_wake = false;          // gps_active is unchanged (true) even the GPS sleep (e.g: off)
-    _location->stopTimeSync(); // Stop time sync
-    _location->setNextWake();  // Next time to on
-  } else {
-    gps_active = false;
-    gps_wake = false; // When GPS is off, wake is false to be sure
-  }
+  gps_wake = false;
+  if (!_location) return;
+  _location->stopTimeSync();
+  _location->setNextWake();
 
   #ifdef RAK_WISBLOCK_GPS
   #ifdef FORCE_GPS_ALIVE
@@ -940,7 +944,6 @@ void EnvironmentSensorManager::stop_gps() {
     pinMode(gpsResetPin, OUTPUT);
     digitalWrite(gpsResetPin, LOW); // WB_IO2
   #endif
-    return;
   #endif
 
   _location->stop();
@@ -955,62 +958,34 @@ void EnvironmentSensorManager::stop_gps() {
 void EnvironmentSensorManager::loop() {
 
   #if ENV_INCLUDE_GPS
-  static long next_gps_update = 0;
-
-  // PowerSaving
-  if (powersaving_enabled) {
-    if (gps_detected && _location->isPowerSavingEnabled()) {
-      if (gps_wake && ((int32_t)(millis() - _location->getNextSleep()) >= 0 ||
-                         !_location->waitingTimeSync())) { // Time to off or GPS set
-        if ((int32_t)(millis() - _location->getNextSleep()) >= 0) {
-          POWERSAVING_DEBUG_PRINTLN("GPS wake timeout. Enter sleep");
+  if (_location && gps_detected && gps_active) {
+    const bool power_saving = _location->isPowerSavingEnabled();
+    // Observe both ON and OFF transitions. Disabling duty cycling must wake a
+    // sleeping receiver, but never one whose user setting is OFF.
+    _location->updatePowerSavingSettings(gps_wake);
+    if (!gps_wake && (!power_saving || _location->waitingTimeSync() ||
+        static_cast<int32_t>(static_cast<uint32_t>(millis()) - _location->getNextWake()) >= 0)) {
+      start_gps();
+    }
+    if (gps_wake) {
+      _location->loop();
+      const uint32_t now = millis();
+      const bool ready_to_sleep = power_saving &&
+          (static_cast<int32_t>(now - _location->getNextSleep()) >= 0 ||
+           !_location->waitingTimeSync());
+      // Preserve the final fresh fix before stop() invalidates parser state.
+      if (ready_to_sleep || static_cast<int32_t>(now - _next_gps_update) >= 0) {
+        if (_location->isValid()) {
+          node_lat = static_cast<double>(_location->getLatitude()) / 1000000.;
+          node_lon = static_cast<double>(_location->getLongitude()) / 1000000.;
+          node_altitude = static_cast<double>(_location->getAltitude()) / 1000.;
         }
-        else if (!_location->waitingTimeSync()) {
-          POWERSAVING_DEBUG_PRINTLN("GPS set. Enter sleep early");
-        }
-
-        stop_gps();
-      } else if (!gps_wake && ((int32_t)(millis() - _location->getNextWake()) >= 0)) { // Time to on
-        POWERSAVING_DEBUG_PRINTLN("GPS sleep timeout. Wakeup.");
-
-        start_gps();
-      } else if (!gps_wake && _location->waitingTimeSync()) { // On for "gps sync"
-        POWERSAVING_DEBUG_PRINTLN("CLI gps sync. Wakeup");
-        
-        start_gps();
+        _next_gps_update = now + gps_update_interval_sec * 1000U;
       }
+      if (ready_to_sleep) stop_gps();
     }
-  }
-
-  if ((!powersaving_enabled && gps_active) || (powersaving_enabled && gps_wake)) {
-    _location->loop();
-  }
-
-  if ((int32_t)(millis() - next_gps_update) >= 0) {
-    if((!powersaving_enabled && gps_active) || (powersaving_enabled && gps_wake)){
-    #ifdef RAK_WISBLOCK_GPS
-    if ((i2cGPSFlag || serialGPSFlag) && _location->isValid()) {
-      node_lat = ((double)_location->getLatitude())/1000000.;
-      node_lon = ((double)_location->getLongitude())/1000000.;
-      MESH_DEBUG_PRINTLN("lat %f lon %f", node_lat, node_lon);
-      node_altitude = ((double)_location->getAltitude()) / 1000.0;
-      MESH_DEBUG_PRINTLN("lat %f lon %f alt %f", node_lat, node_lon, node_altitude);
-    }
-    #else
-    if (_location->isValid()) {
-      node_lat = ((double)_location->getLatitude())/1000000.;
-      node_lon = ((double)_location->getLongitude())/1000000.;
-      MESH_DEBUG_PRINTLN("lat %f lon %f", node_lat, node_lon);
-      node_altitude = ((double)_location->getAltitude()) / 1000.0;
-      MESH_DEBUG_PRINTLN("lat %f lon %f alt %f", node_lat, node_lon, node_altitude);
-    }
-    #endif
-
-      // In powersaving mode, GPS is on and off. Only update data when GPS is on
-      if(powersaving_enabled) next_gps_update = millis() + (gps_update_interval_sec * 1000);
-    }
-
-    if(!powersaving_enabled) next_gps_update = millis() + (gps_update_interval_sec * 1000);
+  } else if (gps_wake) {
+    stop_gps();
   }
   #endif
   #if ENV_INCLUDE_BME680_BSEC
