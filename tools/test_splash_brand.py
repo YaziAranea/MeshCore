@@ -26,6 +26,10 @@ from simulate_wireless_paper_ps17_qa import PROFILES
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_PATH = ROOT / "examples/companion_radio/ui-new/UITask.cpp"
+BUILD_INFO = (ROOT / "src/helpers/SmartUiBuildInfo.h").read_text(encoding="utf-8")
+VERSION_DEFINE = re.search(r'^#define SMARTUI_VERSION\s+"([^"\n]+)"$', BUILD_INFO, re.M)
+assert VERSION_DEFINE, "missing source build version"
+VERSION = VERSION_DEFINE.group(1)
 SX, SY = 1.875, 2.109375
 BOARDS = (
     ("T096", "t096", 160, 80, 160, 80, range(5, 20), 10),
@@ -93,7 +97,6 @@ def production_code(source):
     helpers = source[centered:source.index("\n}", centered) + 2] + "\n" + helpers
     release = re.search(r'#ifndef SMARTUI_RELEASE_LABEL\s+.*?#endif', source, re.S)
     assert release and 'SMARTUI_RELEASE_LABEL SMARTUI_VERSION' in release.group(), "release label must use build identity"
-    assert '#define SMARTUI_VERSION "0.06"' in (ROOT / 'src/helpers/SmartUiBuildInfo.h').read_text()
     assert "Мешкор" not in method and "Омск" not in method
     assert not re.search(r'draw[^;\n]*MESHCORE_UI_VERSION', method), "internal marker must not be displayed"
     assert "_version_info" not in method
@@ -113,7 +116,7 @@ def execute_cpp(kind, method, helpers, release, output, marker=None, name=None):
              "UI_WIRELESS_PAPER_BIG_CLOCK": int(kind == "paper")}
     marker = marker or board_marker(next(board[0] for board in BOARDS if board[1] == kind))
     slug = (name or kind).lower().replace(" ", "-")
-    code = '#define SMARTUI_VERSION "0.06"\n' + "".join(f"#define {flag} {value}\n" for flag, value in flags.items()) + release + "\n"
+    code = VERSION_DEFINE.group() + "\n" + "".join(f"#define {flag} {value}\n" for flag, value in flags.items()) + release + "\n"
     code += "#define MESHCORE_UI_VERSION " + json.dumps(marker, ensure_ascii=False) + "\n"
     code += r'''
 #include <cassert>
@@ -141,7 +144,7 @@ struct DisplayDriver {
   void setColor(int value) { color=value; }
   const Metric& metric() const { return table.at({font,size,bold}); }
   int getTextWidth(const char* text) const {
-    assert(!strcmp(text,"MeshCore") || !strcmp(text,"0.06"));
+    assert(!strcmp(text,"MeshCore") || !strcmp(text,SMARTUI_VERSION));
     return !strcmp(text,"MeshCore") ? metric().brand : metric().label;
   }
   int getTextInkTop() const { return metric().top; }
@@ -162,7 +165,7 @@ struct UIScreen { virtual int render(DisplayDriver&)=0; virtual ~UIScreen()=defa
         for size in (1, 2):
             for bold in (False, True):
                 a = metrics(kind, font, size, bold, "MeshCore")
-                b = metrics(kind, font, size, bold, "0.06")
+                b = metrics(kind, font, size, bold, VERSION)
                 code += f"d.table[{{{font},{size},{str(bold).lower()}}}]={{{a[0]},{b[0]},{a[1]},{a[2]},{a[3]}}};\n"
     first = 5 if kind == "t096" else 0
     code += f"for(int initial={first};initial<{count};++initial) {{\n"
@@ -170,7 +173,7 @@ struct UIScreen { virtual int render(DisplayDriver&)=0; virtual ~UIScreen()=defa
   d.font=initial; d.size=1; d.bold=false; d.draws.clear(); SplashScreen splash;
   assert(splash.render(d)==1000);
   assert(d.font==initial && d.size==1 && !d.bold);
-  assert(d.draws.size()==2 && d.draws[0].text=="MeshCore" && d.draws[1].text=="0.06");
+  assert(d.draws.size()==2 && d.draws[0].text=="MeshCore" && d.draws[1].text==SMARTUI_VERSION);
   for(const auto& draw:d.draws) {
     assert(draw.x>=4 && draw.x+draw.width<=d.w-4);
     assert(draw.x==d.w/2-draw.width/2);
@@ -289,15 +292,16 @@ def main(out, preview):
             _, brand_top, brand_ink, _ = metrics(kind, brand["font"], brand["size"], brand["bold"], "MeshCore")
             assert abs((brand["y"] + brand_top) * 2 + brand_ink - height) <= 1, "brand ink is not vertically centred"
             label = records[1]
-            _, label_top, label_ink, _ = metrics(kind, label["font"], label["size"], label["bold"], "0.06")
+            _, label_top, label_ink, _ = metrics(kind, label["font"], label["size"], label["bold"], VERSION)
             assert label["y"] + label_top + label_ink == height - (10 if height >= 96 else 6), "release label bottom margin differs"
             assert label["bold"] == 0, "release label inherited hero bold"
-            assert records[1]["text"] == "0.06" and len(records) == 2
+            assert records[1]["text"] == VERSION and len(records) == 2
             image.save(out / f"{name.lower().replace(' ', '-')}-{initial}.png")
             checks += 1
             if initial == default:
                 defaults.append((name, image))
-    report = {"checks": checks, "failed": 0, "boards": len(BOARDS), "render_sha256": hashlib.sha256(method.encode()).hexdigest(),
+    report = {"checks": checks, "failed": 0, "boards": len(BOARDS), "version": VERSION,
+              "render_sha256": hashlib.sha256(method.encode()).hexdigest(),
               "binary_markers": {name: board_marker(name) for name, *_ in BOARDS},
               "marker_retention": "all six exact markers present under -O2 -flto -ffunction-sections -fdata-sections -Wl,--gc-sections",
               "scope": "actual SplashScreen render and role helpers; exact bitmap/OLED/E213 metrics and pixels; recording stubs, not whole firmware or hardware"}
@@ -319,7 +323,7 @@ def main(out, preview):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=ROOT / "qa_outputs/splash-smartui-0.06")
-    parser.add_argument("--preview", type=Path, default=ROOT / "docs/assets/ui/boot-smartui-0.06.png")
+    parser.add_argument("--out-dir", type=Path, default=ROOT / f"qa_outputs/splash-smartui-{VERSION}")
+    parser.add_argument("--preview", type=Path, default=ROOT / f"qa_outputs/splash-smartui-{VERSION}/SPLASH_ALL_SIX.png")
     arguments = parser.parse_args()
     main(arguments.out_dir, arguments.preview)

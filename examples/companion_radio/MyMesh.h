@@ -173,9 +173,10 @@ class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
 
-  // Returns false when persistent identity cannot be loaded or durably created.
-  // Callers must fail-stop before enabling companion/radio traffic in that case.
+  // Returns false when identity storage or radio startup fails. Callers must
+  // stop before enabling companion traffic and distinguish the failure cause.
   bool begin(bool has_display);
+  bool isRadioStartupError() const { return _radio_startup_error; }
   void startInterface(BaseSerialInterface &serial);
 
   const char *getNodeName();
@@ -198,7 +199,6 @@ public:
   void resetLocalAppSession();
   bool isCLIRescue() const { return _cli_rescue; }
   bool isStorageRecoveryRequired() const { return storage_recovery_required; }
-  bool isRadioStartupError() const { return _radio_startup_error; }
 #endif
   bool isPhoneGpsEnabled() const {
 #if UI_PHONE_GPS == 1

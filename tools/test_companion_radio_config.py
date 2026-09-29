@@ -27,6 +27,21 @@ def main():
     common = (ROOT / 'src/helpers/radiolib/RadioLibWrappers.cpp').read_text(encoding='utf-8')
     base = (ROOT / 'src/helpers/radiolib/RadioLibWrappers.h').read_text(encoding='utf-8')
     startup = (ROOT / 'examples/companion_radio/main.cpp').read_text(encoding='utf-8')
+    header = (ROOT / 'examples/companion_radio/MyMesh.h').read_text(encoding='utf-8')
+    # Startup is shared by non-SmartUI targets too. Its error discriminator
+    # must not disappear when the optional connection selector is disabled.
+    guards = []
+    for line in header.splitlines():
+        directive = line.strip()
+        if directive.startswith(('#if ', '#ifdef ', '#ifndef ')):
+            guards.append(directive)
+        elif directive.startswith('#endif'):
+            guards.pop()
+        if 'bool isRadioStartupError() const' in line:
+            assert not guards, f'radio startup getter hidden by {guards}'
+            break
+    else:
+        raise AssertionError('missing shared radio startup error getter')
     failed_start = body(startup, 'if (!mesh_started)')
     radio_failure = body(failed_start, 'if (the_mesh.isRadioStartupError())')
     assert '"RADIO ERROR"' in radio_failure and 'halt();' in radio_failure
