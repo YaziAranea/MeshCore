@@ -48,7 +48,8 @@ def session_code(source):
     start = source.index('  uint8_t quickReplyMenuCount() const')
     methods = source[start:source.index('  void drawQuickKeyboardKey(', start)] + '\n#endif\n'
     home_methods = '\n'.join(function(source, marker) for marker in (
-        '  bool hasActiveComposeSession() const', '  void resetToFirstPage()', '  bool isClockPage() const'))
+        '  bool hasActiveComposeSession() const', '  void resetToFirstPage()', '  bool isClockPage() const',
+        '  void captureChatFilterChoice()'))
     start = source.index('  bool handleInput(char c) override', source.index('class HomeScreen'))
     start = source.index('    if (_quick_reply_open)', start)
     input_block = source[start:source.index('#if UI_COMPACT_SETTINGS_MENU == 1', start)]
@@ -103,6 +104,8 @@ struct UITask {
   void extendAutoOff(unsigned long) {}
   void scheduleDisplayRecover(bool, unsigned long) {}
   bool areMsgPopupsEnabled() { return popups; }
+  bool reading=false;
+  bool hasActiveInboxSession() const { return reading; }
 ''' + host_methods + '\n void checkIdle() {\n' + idle + r'''
  }
 };
@@ -177,6 +180,14 @@ int main() {
   CHECK(completed.shouldHoldLightSleepLock());
   canned.resetQuickKeyboard(); CHECK(!completed.shouldHoldLightSleepLock());
 #endif
+  // A long message view survives ordinary idle and a display wake, without
+  // converting it into a compose session or a persistent draft.
+  canned._page=HomePage::CHAT; completed.curr=(void*)99; completed.reading=true;
+  completed._alert_expiry=0; completed._last_activity_ms=100; now=60100;
+  completed.checkIdle(); CHECK(completed.curr==(void*)99);
+  completed.markDisplayWake(true); CHECK(completed.curr==(void*)99 && canned._page==HomePage::CHAT);
+  completed.reading=false; now+=30001; completed.checkIdle();
+  CHECK(completed.curr==&canned && canned._page==HomePage::CLOCK);
   printf("PASS %u actual compose/idle/wake/popup/canned checks\n",checks);
 }
 '''

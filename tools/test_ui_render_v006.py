@@ -28,7 +28,7 @@ def recordings(source, profiles, out):
     assert 'display.setUiFont(0);' in role
     assert 'return uiPushCompactChromeFont(display);' in role
     assert methods.count('uiPushCompactSettingsFont(display)')==2
-    labels=['Написать...']+re.findall(r'"([^"]+)"',source.split('static const char* quick_reply_texts[]',1)[1].split('};',1)[0])+['Назад']
+    labels=['Написать...']+re.findall(r'"([^"]+)"',source.split('static const char* quick_reply_texts[]',1)[1].split('};',1)[0])+['Канал ленты...','Входящие ЛС','Назад']
     characters=set(''.join(labels)+'Быстрый ответклик: далее / удерж: OKО прошивкеSmartUI SHA Core0123456789abcdef+dirtyunknown. ')
     code=r'''
 #include <cstdint>

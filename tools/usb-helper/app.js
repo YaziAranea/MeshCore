@@ -4,8 +4,33 @@
   let state = {connected:false,busy:false,verified:false,testPassed:false,status:null,info:null};
   let choosingPort = false;
   let confirmation = null;
+  let renderedReplies = Array(9).fill(null);
+  let firmwareBusy = false;
+  let droppedFirmware = null, droppedManifest = null;
   const modeNames = {ble:"Bluetooth",wifi:"Wi-Fi",usb:"USB-компаньон"};
   const supported = Boolean(window.isSecureContext && navigator.serial);
+  // Keep the existing connect -> Wi-Fi -> mode workflow ahead of optional tools.
+  $("replies-title").closest("section").before($("mode-title").closest("section"));
+  const replyDefaults = ["Да","Нет","Потом","Сейчас","Завтра","Сегодня","Привет","Пока","Тест?"];
+  for (let slot = 0; slot < 9; ++slot) {
+    const row = document.createElement("div"); row.className = "reply-row";
+    const label = document.createElement("label"); label.className = "field"; label.htmlFor = "reply-" + slot;
+    label.textContent = "Фраза " + (slot + 1) + " · стандартная: «" + replyDefaults[slot] + "»";
+    const input = document.createElement("input"); input.type = "text"; input.id = "reply-" + slot; input.disabled = true; input.autocomplete = "off";
+    const bytes = document.createElement("p"); bytes.className = "hint"; bytes.id = "reply-bytes-" + slot;
+    input.oninput = () => { bytes.textContent = new TextEncoder().encode(input.value).length + " / 64 байт UTF-8"; };
+    const buttons = document.createElement("div"); buttons.className = "buttons";
+    const save = document.createElement("button"); save.id = "reply-save-" + slot; save.disabled = true; save.textContent = "Сохранить фразу " + (slot + 1);
+    const clear = document.createElement("button"); clear.id = "reply-clear-" + slot; clear.disabled = true; clear.textContent = "Вернуть стандартную";
+    save.onclick = () => run(async () => { const result = await client.saveQuickReply(slot,input.value); input.value = result.text; input.oninput(); });
+    clear.onclick = async () => {
+      if (await confirmAction("Вернуть стандартную фразу «" + replyDefaults[slot] + "» в слот " + (slot + 1) + "?")) await run(async () => { const result = await client.saveQuickReply(slot,""); input.value = result.text; input.oninput(); });
+    };
+    buttons.append(save,clear); row.append(label,input,bytes,buttons); $("reply-fields").append(row);
+  }
+  for (const profile of SmartUiFirmware.PROFILES) {
+    const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.label; $("firmware-board").append(option);
+  }
   const feedback = (text, kind = "info") => {
     $("feedback").textContent = text;
     $("feedback").dataset.kind = kind;
@@ -35,13 +60,23 @@
     $("disconnect").disabled = !state.connected || choosingPort;
     $("connect").textContent = choosingPort ? "Выберите порт в окне браузера…" : "Выбрать USB-порт";
     $("connection").textContent = state.busy ? "Выполняется операция…" : state.verified ? "Консоль SmartUI подключена" : state.connected ? "Порт открыт; консоль не подтверждена" : "Нода не подключена";
-    $("refresh").disabled = !idle;
+    $("refresh").disabled = !state.connected || !state.verified || state.busy || state.testPassed;
     ["ssid","open-network","test"].forEach(id => $(id).disabled = !wifiIdle);
     $("password").disabled = !wifiIdle || $("open-network").checked;
     $("show-password").disabled = !wifiIdle || $("open-network").checked;
     $("save").disabled = !ready || !wifiAvailable || !state.testPassed;
     $("cancel").disabled = !ready || !wifiAvailable;
-    $("forget").disabled = !wifiIdle;
+    const recovery = state.connected && state.verified && !state.busy && !state.testPassed && state.status?.recoveryRequired;
+    $("forget").disabled = !(wifiIdle || recovery);
+    $("forget").textContent = recovery ? "Повторить очистку хранилища подключения" : "Удалить сеть с ноды";
+    $("replies-load").disabled = !state.connected || !state.verified || state.busy || state.testPassed || !state.quickRepliesSupported;
+    $("replies-hint").textContent = state.quickRepliesSupported ? "Поддержка подтверждена прошивкой. После записи помощник читает сохранённый слот обратно." : "Нужна новая прошивка с поддержкой своих фраз; у 0.05/0.06 этот раздел недоступен.";
+    for (let slot = 0; slot < 9; ++slot) {
+      const stored = state.replies?.[slot] ?? null;
+      if (stored !== renderedReplies[slot]) { $("reply-" + slot).value = stored ?? ""; $("reply-" + slot).oninput(); }
+      for (const prefix of ["reply-","reply-save-","reply-clear-"]) $(prefix + slot).disabled = !idle || !state.quickRepliesSupported || stored === null;
+    }
+    renderedReplies = [...(state.replies || Array(9).fill(null))];
     for (const mode of Object.keys(modeNames)) {
       $("mode-" + mode).disabled = !idle || (mode === "wifi" && !wifiAvailable);
       $("mode-" + mode).setAttribute("aria-pressed",String(state.status?.mode === mode));
@@ -97,6 +132,44 @@
   };
   $("disconnect").onclick = () => run(() => client.disconnect());
   $("refresh").onclick = () => run(() => client.refreshStatus());
+  $("replies-load").onclick = () => run(async () => {
+    const replies = await client.loadQuickReplies();
+    replies.forEach((text,slot) => { $("reply-" + slot).value = text; $("reply-" + slot).oninput(); });
+  });
+  const resetFirmwareResult = () => { $("firmware-result").textContent = "Файлы изменены. Выполните проверку заново."; };
+  $("firmware-file").onchange = () => { droppedFirmware = null; resetFirmwareResult(); };
+  $("firmware-manifest").onchange = () => { droppedManifest = null; resetFirmwareResult(); };
+  $("firmware-board").onchange = resetFirmwareResult;
+  const firmwareSection = $("firmware-title").closest("section");
+  firmwareSection.ondragover = e => { e.preventDefault(); };
+  firmwareSection.ondrop = e => {
+    e.preventDefault();
+    if (firmwareBusy) return;
+    for (const file of e.dataTransfer.files) {
+      if (/\.(bin|uf2)$/i.test(file.name)) droppedFirmware = file;
+      else if (/\.json$/i.test(file.name)) droppedManifest = file;
+    }
+    $("firmware-result").textContent = "Выбраны локальные файлы: " + (droppedFirmware?.name || "нет BIN/UF2") + "; " + (droppedManifest?.name || "нет манифеста") + ". Нажмите «Проверить файлы».";
+  };
+  $("firmware-check").onclick = async () => {
+    if (firmwareBusy) return;
+    firmwareBusy = true; $("firmware-check").disabled = true;
+    for (const id of ["firmware-file","firmware-manifest","firmware-board"]) $(id).disabled = true;
+    $("firmware-result").textContent = "Локальная проверка…";
+    const infoAtStart = state.info ? {...state.info} : null;
+    try {
+      const file = droppedFirmware || $("firmware-file").files[0];
+      const manifest = droppedManifest || $("firmware-manifest").files[0];
+      if (!file || !manifest || file.size > SmartUiFirmware.MAX_BYTES || manifest.size > 2 * 1024 * 1024) throw new Error("files");
+      const target = $("firmware-board").value;
+      const result = await SmartUiFirmware.verify({name:file.name, bytes:new Uint8Array(await file.arrayBuffer()), manifestText:await manifest.text(), target, info:infoAtStart});
+      $("firmware-result").textContent = "Проверка файла пройдена. " + file.name + "\n" + result.board + ", SmartUI " + result.version + ".\n" +
+        (result.matchedConnectedBoard ? "Модель совпала со сведениями ноды на момент начала проверки." : "Модель выбрана вручную; реальная плата не проверена.") + "\n" +
+        "Тип: " + result.kind + (result.offset ? "; адрес " + result.offset : "") + ".\nSHA-256: " + result.sha256 + "\nSource: " + result.source + "\n" + result.warning + "\n" + result.integrityNotice;
+    } catch (error) {
+      $("firmware-result").textContent = error.safe ? error.message : "Проверка не выполнена. Выберите BIN/UF2 до 32 МиБ и манифест до 2 МиБ; проверьте доступ к локальным файлам.";
+    } finally { firmwareBusy = false; $("firmware-check").disabled = false; for (const id of ["firmware-file","firmware-manifest","firmware-board"]) $(id).disabled = false; }
+  };
   $("show-password").onchange = () => { $("password").type = $("show-password").checked ? "text" : "password"; };
   $("open-network").onchange = () => { if ($("open-network").checked) clearPassword(); render(); };
   $("wifi-form").onsubmit = async e => {

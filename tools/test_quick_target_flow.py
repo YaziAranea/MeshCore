@@ -34,6 +34,10 @@ struct ChannelDetails { struct { uint8_t secret[32] = {}; } channel; char name[3
 struct FakeMesh {
   std::vector<ContactInfo> contacts;
   std::vector<ChannelDetails> channels;
+  const char* quick_overrides[9] = {};
+  const char* getQuickReplyOverride(uint8_t slot) const {
+    return slot < 9 && quick_overrides[slot] != nullptr ? quick_overrides[slot] : "";
+  }
   int sent = 0; int last_contact = -1; int last_channel = -1;
   bool getContactByIdx(uint32_t i, ContactInfo& out) {
     if (i >= contacts.size()) return false;
@@ -74,6 +78,7 @@ struct FakeTask {
   char alert[80] = {};
   void showAlert(const char* text, int) { snprintf(alert, sizeof(alert), "%s", text); }
   void notify(UIEventType) {}
+  void showUnreadMessages() {}
 };
 '''
 
@@ -100,6 +105,10 @@ int main() {
     h._quick_reply_idx = i + 1; CHECK(!strcmp(h.quickReplyLabel(), quick_reply_texts[i]));
   }
   h._quick_reply_idx = h.quickReplyBackIndex(); CHECK(!strcmp(h.quickReplyLabel(), "Назад"));
+  the_mesh.quick_overrides[0] = "Custom reply";
+  h._quick_reply_idx = 1; CHECK(!strcmp(h.quickReplyLabel(), "Custom reply"));
+  CHECK(h.openCannedQuickReply()); CHECK(!strcmp(h._quick_keyboard_text, "Custom reply"));
+  h.resetQuickKeyboard(); the_mesh.quick_overrides[0] = nullptr;
   typing(h); contactsHome(h);
   CHECK(h._quick_target_mode == QR_TARGET_CONTACT_HOME);
   CHECK(h.quickTargetTotalCount() == 3);
@@ -185,6 +194,29 @@ int main() {
   typing(ch); ch._quick_keyboard_page = 1; ch._quick_keyboard_cursor = 14;
   ch._quick_keyboard_text[0] = 0; ch.selectQuickKeyboardKey();
   CHECK(!strcmp(ch._quick_keyboard_text, "Ё"));
+
+  // Incoming-message replies preserve the full key through typing and confirmation.
+  seed(); Home incoming;
+  uint8_t incoming_key[32]; memcpy(incoming_key, the_mesh.contacts[0].id.pub_key, 32);
+  CHECK(incoming.beginDirectReply(incoming_key, "Displayed name"));
+  CHECK(incoming._quick_target_mode == QR_TARGET_CLOSED);
+  strcpy(incoming._quick_keyboard_text, "Reply");
+  incoming._quick_keyboard_cursor = 24; // locate SEND rather than depending on key order
+  for (int i = 0; i < QR_KB_KEYS; ++i)
+    if (quick_reply_keyboard_pages[0][i].action == QR_KB_SEND) incoming._quick_keyboard_cursor = i;
+  incoming.selectQuickKeyboardKey();
+  CHECK(incoming._quick_confirm_open); CHECK(the_mesh.sent == 0);
+  std::swap(the_mesh.contacts[0], the_mesh.contacts[2]);
+  incoming.selectQuickTarget(); CHECK(the_mesh.last_contact == 1);
+  CHECK(the_mesh.sent == 1);
+  CHECK(incoming.beginDirectReply(incoming_key, "Displayed name"));
+  strcpy(incoming._quick_keyboard_text, "Keep while backing out");
+  for (int i = 0; i < QR_KB_KEYS; ++i)
+    if (quick_reply_keyboard_pages[0][i].action == QR_KB_SEND) incoming._quick_keyboard_cursor = i;
+  incoming.selectQuickKeyboardKey();
+  incoming._quick_confirm_send = false; incoming.selectQuickTarget();
+  CHECK(!incoming._quick_confirm_open); CHECK(incoming._quick_target_mode == QR_TARGET_CLOSED);
+  CHECK(incoming._quick_keyboard_text[0] != 0);
   std::cout << checks << " actual keyboard/target-flow checks passed\n";
 }
 '''

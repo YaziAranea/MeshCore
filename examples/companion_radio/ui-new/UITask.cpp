@@ -6,6 +6,7 @@
 #include "ConfirmedChoice.h"
 #include "QuickTargetUi.h"
 #include "SettingUndo.h"
+#include "CheckedUiSnapshot.h"
 #if SMARTUI_CONNECTION_SELECTOR
   #include "ConnectionUiPolicy.h"
   #include "../ConnectionController.h"
@@ -3850,6 +3851,17 @@ class HomeScreen : public UIScreen {
   uint8_t _quick_initial_count = 0;
   bool _quick_confirm_open = false;
   bool _quick_confirm_send = true;
+  bool _quick_direct_reply = false;
+  bool _chat_filter_open = false;
+  bool _chat_filter_active = false;
+  uint16_t _chat_filter_cursor = 0;
+  uint8_t _chat_filter_channel_id = 0;
+  uint8_t _chat_filter_identity[PUB_KEY_SIZE] = {};
+  char _chat_filter_label[32] = {};
+  bool _chat_filter_pick_valid = false;
+  uint8_t _chat_filter_pick_id = 0;
+  uint8_t _chat_filter_pick_identity[PUB_KEY_SIZE] = {};
+  char _chat_filter_pick_label[32] = {};
   bool _quick_target_identity_valid;
   uint8_t _quick_target_identity_mode;
   uint16_t _quick_target_identity_cursor;
@@ -4220,15 +4232,110 @@ class HomeScreen : public UIScreen {
     snprintf(out, out_len, "S%+d R%d", roundSnrQ4(entry->snr_q4), entry->rssi);
   }
 
+#if UI_QUICK_REPLY_KEYBOARD
+  void captureChatFilterChoice() {
+    _chat_filter_pick_valid = false;
+    if (_chat_filter_cursor == 0) return;
+    ChannelDetails channel;
+    uint8_t id;
+    if (!the_mesh.getQuickReplyChannel(_chat_filter_cursor - 1, id, channel)) return;
+    _chat_filter_pick_id = id;
+    memcpy(_chat_filter_pick_identity, channel.channel.secret, PUB_KEY_SIZE);
+    snprintf(_chat_filter_pick_label, sizeof(_chat_filter_pick_label), "%s", channel.name);
+    _chat_filter_pick_valid = true;
+  }
+
+  bool handleChatFilterInput(char c) {
+    if (!_chat_filter_open) return false;
+    uint16_t total = the_mesh.getQuickReplyChannelCount() + 2; // All + channels + Back
+    if (_chat_filter_pick_valid && total < _chat_filter_cursor + 2) total = _chat_filter_cursor + 2;
+    if (c == KEY_LEFT || c == KEY_PREV || c == KEY_NEXT || c == KEY_RIGHT) {
+      _chat_filter_cursor = (c == KEY_LEFT || c == KEY_PREV)
+        ? (_chat_filter_cursor + total - 1) % total : (_chat_filter_cursor + 1) % total;
+      captureChatFilterChoice();
+      return true;
+    }
+    if (c != KEY_ENTER && c != KEY_SELECT) return true;
+    if (_chat_filter_cursor == 0) {
+      _chat_filter_active = false;
+    } else if (_chat_filter_pick_valid) {
+      ChannelDetails channel;
+      if (!the_mesh.getChannel(_chat_filter_pick_id, channel) ||
+          memcmp(channel.channel.secret, _chat_filter_pick_identity, PUB_KEY_SIZE) != 0 ||
+          strcmp(channel.name, _chat_filter_pick_label) != 0) {
+        _task->showAlert("Канал изменился", 1100);
+        return true;
+      }
+      _chat_filter_active = true;
+      _chat_filter_channel_id = _chat_filter_pick_id;
+      memcpy(_chat_filter_identity, _chat_filter_pick_identity, PUB_KEY_SIZE);
+      snprintf(_chat_filter_label, sizeof(_chat_filter_label), "%s", _chat_filter_pick_label);
+    }
+    _chat_filter_open = false;
+    _quick_reply_open = false;
+    _chat_layout_valid = false;
+    _chat_latest_ts = 0;
+    _chat_scroll_px = 0;
+    return true;
+  }
+
+  void renderChatFilter(DisplayDriver& display) {
+    const uint8_t saved_font = uiPushCompactSettingsFont(display);
+    const int line_h = display.getTextLineHeight();
+    const int row_h = display.height() / 4;
+    const int dy = row_h > line_h ? (row_h - line_h) / 2 : 0;
+    char label[52];
+    if (_chat_filter_cursor == 0) snprintf(label, sizeof(label), "Все каналы");
+    else if (_chat_filter_pick_valid)
+      snprintf(label, sizeof(label), "CH%u %s", (unsigned)_chat_filter_pick_id + 1, _chat_filter_pick_label);
+    else snprintf(label, sizeof(label), "Назад");
+    const char* rows[] = {"Канал ленты", label, "Клик: выбор", "Удерж: применить"};
+    for (uint8_t i = 0; i < 4; ++i) {
+      display.setColor(i == 1 ? DisplayDriver::YELLOW : DisplayDriver::LIGHT);
+      drawRichTextCenteredEllipsized(display, display.width() / 2, row_h * i + dy,
+                                     display.width() - 4, rows[i]);
+    }
+    uiPopFont(display, saved_font);
+  }
+
+  void validateChatFilter() {
+    if (!_chat_filter_active) return;
+    ChannelDetails channel;
+    if (!the_mesh.getChannel(_chat_filter_channel_id, channel) ||
+        memcmp(channel.channel.secret, _chat_filter_identity, PUB_KEY_SIZE) != 0 ||
+        strcmp(channel.name, _chat_filter_label) != 0) {
+      _chat_filter_active = false;
+      _chat_layout_valid = false;
+      _chat_latest_ts = 0;
+      _task->showAlert("Фильтр сброшен", 1100);
+    }
+  }
+#endif
+
+  void renderChatFilterHeader(DisplayDriver& display, int height) {
+    const uint8_t saved_font = uiPushCompactSettingsFont(display);
+    char label[52];
+#if UI_QUICK_REPLY_KEYBOARD
+    if (_chat_filter_active)
+      snprintf(label, sizeof(label), "CH%u %s", (unsigned)_chat_filter_channel_id + 1, _chat_filter_label);
+    else
+#endif
+      snprintf(label, sizeof(label), "Все каналы");
+    display.setColor(DisplayDriver::DARK);
+    display.fillRect(0, 0, display.width(), height);
+    display.setColor(DisplayDriver::GREEN);
+    drawRichTextStaticEllipsized(display, 1, 0, display.width() - 2, label);
+    uiPopFont(display, saved_font);
+  }
+
   void renderChatList(DisplayDriver& display, int count) {
     if (count <= 0) return;
     count = selectChatRenderCount(display, count);
     if (count <= 0) return;
-    uint32_t newest_ts = chat[0].recv_timestamp;
-    uint32_t layout_sig = newest_ts ^ ((uint32_t)count << 24) ^ ((uint32_t)display.getUiFont() << 16);
-    layout_sig ^= (uint8_t)chat[0].origin[0];
-    layout_sig ^= ((uint32_t)(uint8_t)chat[0].text[0]) << 8;
-    layout_sig ^= chat[count - 1].recv_timestamp;
+    // A revision identifies content, including equal-second arrivals and FIFO
+    // shifts. Timestamp XORs can collide and retain an obsolete scroll limit.
+    uint32_t newest_ts = the_mesh.getRecentChannelMessagesRevision();
+    uint32_t layout_sig = newest_ts;
 
     int total_h = _chat_layout_total_h;
     if (!_chat_layout_valid || _chat_layout_ts != layout_sig || _chat_layout_count != count ||
@@ -4241,7 +4348,11 @@ class HomeScreen : public UIScreen {
       _chat_layout_width = display.width();
       _chat_layout_valid = true;
     }
-    int max_scroll = total_h > display.height() ? total_h - display.height() : 0;
+    uint8_t header_font = uiPushCompactSettingsFont(display);
+    const int header_h = display.getTextLineHeight() + 2;
+    uiPopFont(display, header_font);
+    const int visible_h = display.height() - header_h;
+    int max_scroll = total_h > visible_h ? total_h - visible_h : 0;
 
     if (_chat_latest_ts != newest_ts) {
       _chat_latest_ts = newest_ts;
@@ -4254,7 +4365,8 @@ class HomeScreen : public UIScreen {
     if (_chat_scroll_px > max_scroll) _chat_scroll_px = max_scroll;
     if (_chat_scroll_px < 0) _chat_scroll_px = 0;
 
-    renderChatFeed(display, count, 0, _chat_scroll_px, true);
+    renderChatFeed(display, count, header_h, _chat_scroll_px, true);
+    renderChatFilterHeader(display, header_h);
 
     if (max_scroll <= 0) return;
     unsigned long now = millis();
@@ -5708,15 +5820,74 @@ class HomeScreen : public UIScreen {
   }
 #endif
 
+  bool compactSettingMutatesPrefs(uint8_t page) const {
+    switch (page) {
+      case HomePage::ALERTS:
+      case HomePage::IMPORTANT_NOTIFY:
+      case HomePage::MSG_POPUP:
+#if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
+      case HomePage::OFFLINE_DM_LED:
+      case HomePage::BLE_DM_LED:
+#endif
+#if UI_APPEARANCE_MENU && UI_UNREAD_LED_PAGE == 1
+      case HomePage::UNREAD_LED:
+#endif
+#ifdef PIN_MSG_TONE
+#if UI_SMART_B12_TONE_LIST != 1
+      case HomePage::ALERT_SOUND:
+#endif
+#if UI_SMART_B11_EXTRAS == 1
+      case HomePage::ALERT_SOUND_DM:
+      case HomePage::ALERT_SOUND_MENTION:
+#endif
+#if UI_TONE_8BIT_PAGE == 1
+      case HomePage::ALERT_TONE_STYLE:
+#endif
+#if UI_TONE_HIGH_DRIVE_PAGE == 1
+      case HomePage::ALERT_VOLUME:
+#endif
+#if UI_TONE_BRIDGE_PAGE == 1
+      case HomePage::ALERT_TONE_BRIDGE:
+#endif
+#endif
+#if UI_APPEARANCE_MENU && UI_COLOR_APPEARANCE_MENU
+      case HomePage::UI_TOP_COLOR:
+      case HomePage::UI_BOTTOM_COLOR:
+#endif
+#if UI_APPEARANCE_MENU && UI_BACKLIGHT_TIMEOUT_PAGE == 1
+      case HomePage::BACKLIGHT_TIMEOUT:
+#endif
+#if UI_AUTO_ADVERT_PAGE == 1
+      case HomePage::ADVERT_TIMER:
+#endif
+#if UI_CLIENT_REPEAT_PAGE == 1
+      case HomePage::CLIENT_REPEAT:
+#endif
+#if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
+      case HomePage::GPS:
+#endif
+#if UI_CH2_RELAY_PAGE == 1
+      case HomePage::CH2_RELAY:
+#endif
+#if UI_BOARD_LEDS_PAGE == 1
+      case HomePage::BOARD_LEDS:
+#endif
+#if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
+      case HomePage::LOW_BATT_SHUTDOWN:
+#endif
+#if UI_SMART_B11_EXTRAS == 1 && UI_SMART_B12_TONE_LIST != 1
+      case HomePage::SMART_PROFILE:
+#endif
+        return true;
+      default: return false;
+    }
+  }
+
   void activateCompactSetting(uint8_t page) {
 #if UI_SMART_B11_EXTRAS == 1
-    NodePrefs before = *_node_prefs;
-    bool track_undo = page != HomePage::UNDO_SETTING &&
-                      page != HomePage::DEVICE_STATUS &&
-                      page != HomePage::HARDWARE_TEST &&
-                      page != HomePage::SETTINGS_TRANSFER &&
-                      page != HomePage::RADIO &&
-                      page != HomePage::LINK_TEST;
+    const bool track_undo = compactSettingMutatesPrefs(page);
+    smartui::CheckedUiSnapshot<NodePrefs> before(track_undo ? _node_prefs : nullptr);
+    if (track_undo && !before) { _task->showAlert("Недостаточно памяти", 1400); return; }
 #endif
     switch (page) {
       case HomePage::ALERTS:
@@ -5905,9 +6076,10 @@ class HomeScreen : public UIScreen {
         break;
       case HomePage::UNDO_SETTING:
         if (_compact_undo.available()) {
-          const NodePrefs current = *_node_prefs;
+          smartui::CheckedUiSnapshot<NodePrefs> current(_node_prefs);
+          if (!current) { _task->showAlert("Недостаточно памяти", 1400); return; }
           smartui::SettingUndo::Result result = _compact_undo.apply(
-              [&current]() { return the_mesh.commitPrefsOrRollback(current); });
+              [&current]() { return the_mesh.commitPrefsOrRollback(*current); });
           if (result == smartui::SettingUndo::Applied) {
             _task->applyImportedPrefs();
             _task->showAlert("Изменение отменено", 1000);
@@ -5942,22 +6114,23 @@ class HomeScreen : public UIScreen {
         break;
     }
 #if UI_SMART_B11_EXTRAS == 1
-    bool prefs_changed = memcmp(&before, _node_prefs, sizeof(NodePrefs)) != 0;
+    bool prefs_changed = before && memcmp(before.get(), _node_prefs, sizeof(NodePrefs)) != 0;
 #if UI_SMART_B12_TONE_LIST != 1
     bool favorite_config = page == HomePage::FAVORITE_SLOT_1 ||
                            page == HomePage::FAVORITE_SLOT_2 ||
                            page == HomePage::FAVORITE_SLOT_3;
     if (prefs_changed && page != HomePage::SMART_PROFILE && !favorite_config &&
         _node_prefs->smart_profile_id != SMART_PROFILE_CUSTOM) {
-      NodePrefs after_action = *_node_prefs;
+      smartui::CheckedUiSnapshot<NodePrefs> after_action(_node_prefs);
+      if (!after_action) { _task->showAlert("Недостаточно памяти", 1400); return; }
       _node_prefs->smart_profile_id = SMART_PROFILE_CUSTOM;
-      if (!the_mesh.commitPrefsOrRollback(after_action)) {
+      if (!the_mesh.commitPrefsOrRollback(*after_action)) {
         _task->showAlert("Не сохранено: память", 1400);
       }
     }
 #endif
     if (track_undo && prefs_changed) {
-      rememberSettingUndo(before, page);
+      rememberSettingUndo(*before, page);
     }
 #endif
   }
@@ -5988,7 +6161,9 @@ class HomeScreen : public UIScreen {
         else if (c == KEY_ENTER) {
           int16_t selected;
           if (_favorite_picker.selected(selected) && selected != favoriteIdAt(_favorite_picker_slot)) {
-            NodePrefs before = *_node_prefs;
+            smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+            if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+            const NodePrefs& before = *snapshot;
             setFavoriteId(_favorite_picker_slot, selected);
             if (the_mesh.commitPrefsOrRollback(before)) {
               rememberSettingUndo(before, HomePage::FAVORITE_SLOT_1 + _favorite_picker_slot);
@@ -6022,7 +6197,9 @@ class HomeScreen : public UIScreen {
         int16_t value;
         if (_notify_picker.selected(value)) {
 #if UI_SMART_B11_EXTRAS == 1
-          NodePrefs before = *_node_prefs;
+          smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+          if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+          const NodePrefs& before = *snapshot;
 #endif
           applyNotifyPickerChoice(value);
 #if UI_SMART_B11_EXTRAS == 1
@@ -6047,7 +6224,9 @@ class HomeScreen : public UIScreen {
         if (c != KEY_ENTER) return false;
         if (_timezone_picker_cursor < TIMEZONE_CHOICE_COUNT) {
 #if UI_SMART_B11_EXTRAS == 1
-          NodePrefs before = *_node_prefs;
+          smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+          if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+          const NodePrefs& before = *snapshot;
 #endif
           int16_t selected = timezoneMinutesAt(_timezone_picker_cursor);
           bool changed = selected != _task->getTimezoneOffsetMinutes();
@@ -6086,7 +6265,9 @@ class HomeScreen : public UIScreen {
         }
 
 #if UI_SMART_B11_EXTRAS == 1
-        NodePrefs before = *_node_prefs;
+        smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+        if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+        const NodePrefs& before = *snapshot;
 #endif
         bool changed = *cursor != (font_picker ? _task->getUiFontChoiceIndex()
                                                 : _task->getUiThemeChoiceIndex());
@@ -6122,7 +6303,9 @@ class HomeScreen : public UIScreen {
         }
 
 #if UI_SMART_B11_EXTRAS == 1
-        NodePrefs before = *_node_prefs;
+        smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+        if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+        const NodePrefs& before = *snapshot;
 #endif
         bool changed = _tone_picker_cursor != _task->getNotifyToneId();
         _task->setCommonNotifyTone(_tone_picker_cursor);
@@ -6705,7 +6888,7 @@ class HomeScreen : public UIScreen {
   void renderBuildInfo(DisplayDriver& display) const {
     uint8_t saved_font = uiPushCompactSettingsFont(display);
     // Keep the full source identity, including +dirty, on narrow OLEDs.
-    const char* lines[] = {"О прошивке", "SmartUI " SMARTUI_VERSION,
+    const char* lines[] = {"SmartUI", SMARTUI_VERSION,
                            SMARTUI_BUILD_SHA, "Core " SMARTUI_CORE_VERSION};
     const int row_h = (display.height() - 6) / 4;
     const int ink_top = display.getTextInkTop();
@@ -6721,7 +6904,7 @@ class HomeScreen : public UIScreen {
 
   uint8_t quickReplyMenuCount() const {
 #if UI_QUICK_REPLY_KEYBOARD
-    return quick_reply_count + 2; // canned replies + keyboard + back
+    return quick_reply_count + 4; // canned replies + keyboard + filter + inbox + back
 #else
     return quick_reply_count + 1; // canned replies + back
 #endif
@@ -6735,7 +6918,7 @@ class HomeScreen : public UIScreen {
 
   uint8_t quickReplyBackIndex() const {
 #if UI_QUICK_REPLY_KEYBOARD
-    return quick_reply_count + 1;
+    return quick_reply_count + 3;
 #else
     return quick_reply_count;
 #endif
@@ -6744,9 +6927,17 @@ class HomeScreen : public UIScreen {
   const char* quickReplyLabel() const {
 #if UI_QUICK_REPLY_KEYBOARD
     if (_quick_reply_idx == quickReplyKeyboardIndex()) return "Написать...";
-    if (_quick_reply_idx <= quick_reply_count) return quick_reply_texts[_quick_reply_idx - 1];
+    if (_quick_reply_idx == quick_reply_count + 1) return "Канал ленты...";
+    if (_quick_reply_idx == quick_reply_count + 2) return "Входящие ЛС";
+    if (_quick_reply_idx <= quick_reply_count) {
+      const char* custom = the_mesh.getQuickReplyOverride(_quick_reply_idx - 1);
+      return custom != NULL && custom[0] != 0 ? custom : quick_reply_texts[_quick_reply_idx - 1];
+    }
 #else
-    if (_quick_reply_idx < quick_reply_count) return quick_reply_texts[_quick_reply_idx];
+    if (_quick_reply_idx < quick_reply_count) {
+      const char* custom = the_mesh.getQuickReplyOverride(_quick_reply_idx);
+      return custom != NULL && custom[0] != 0 ? custom : quick_reply_texts[_quick_reply_idx];
+    }
 #endif
     return "Назад";
   }
@@ -6850,6 +7041,7 @@ class HomeScreen : public UIScreen {
 
   void resetQuickKeyboard() {
     _quick_keyboard_open = false;
+    _quick_direct_reply = false;
     _quick_keyboard_page = 0;
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
@@ -6862,6 +7054,7 @@ class HomeScreen : public UIScreen {
 
   void openQuickKeyboard() {
     _quick_keyboard_open = true;
+    _quick_direct_reply = false;
     _quick_keyboard_page = 0;
     _quick_keyboard_cursor = 0;
     _quick_target_mode = QR_TARGET_CLOSED;
@@ -6870,6 +7063,22 @@ class HomeScreen : public UIScreen {
     _quick_contact_initial = -1;
     clearQuickTargetIdentity();
     _quick_keyboard_text[0] = 0;
+  }
+
+  bool beginDirectReply(const uint8_t* pub_key, const char* name) {
+    if (pub_key == NULL) return false;
+    ContactInfo* contact = the_mesh.lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+    if (contact == NULL || contact->type != ADV_TYPE_CHAT) return false;
+    openQuickKeyboard();
+    _quick_reply_open = true;
+    _quick_direct_reply = true;
+    _quick_target_identity_valid = true;
+    _quick_target_identity_mode = QR_TARGET_CONTACT;
+    _quick_target_identity_cursor = 0;
+    memcpy(_quick_target_contact_pubkey, pub_key, PUB_KEY_SIZE);
+    snprintf(_quick_target_identity_label, sizeof(_quick_target_identity_label), "%s",
+             name != NULL && name[0] != 0 ? name : contact->name);
+    return true;
   }
 
   bool openCannedQuickReply() {
@@ -7020,6 +7229,7 @@ class HomeScreen : public UIScreen {
     if (_quick_confirm_open) {
       if (!_quick_confirm_send) {
         _quick_confirm_open = false;
+        if (_quick_direct_reply) _quick_target_mode = QR_TARGET_CLOSED;
         return true;
       }
       if (!quickTargetIdentityMatchesCursor()) {
@@ -7185,6 +7395,13 @@ class HomeScreen : public UIScreen {
       case QR_KB_SEND:
         if (_quick_keyboard_text[0] == 0) {
           _task->showAlert("Пустое сообщение", 800);
+          return true;
+        }
+        if (_quick_direct_reply) {
+          _quick_target_mode = QR_TARGET_CONTACT;
+          _quick_target_cursor = 0;
+          _quick_confirm_open = true;
+          _quick_confirm_send = true;
           return true;
         }
         _quick_target_mode = QR_TARGET_KIND;
@@ -7854,6 +8071,20 @@ public:
 #endif
   }
 
+  bool openIncomingReply(const uint8_t* pub_key, const char* name) {
+#if UI_QUICK_REPLY_KEYBOARD
+    if (hasActiveComposeSession() || !beginDirectReply(pub_key, name)) return false;
+    _settings_open = false;
+    _chat_filter_open = false;
+    _page = HomePage::CHAT;
+    return true;
+#else
+    (void)pub_key;
+    (void)name;
+    return false;
+#endif
+  }
+
   void resetToFirstPage() {
 #if SMARTUI_CONNECTION_SELECTOR
     _connection_flow.reset();
@@ -7866,6 +8097,7 @@ public:
     _quick_reply_open = false;
     _quick_reply_idx = 0;
 #if UI_QUICK_REPLY_KEYBOARD
+    _chat_filter_open = false;
     resetQuickKeyboard();
 #endif
 #if UI_COMPACT_SETTINGS_MENU == 1
@@ -8910,6 +9142,11 @@ public:
     } else if (_page == HomePage::CHAT) {
       display.setTextSize(1);
       display.setColor(DisplayDriver::LIGHT);
+#if UI_QUICK_REPLY_KEYBOARD
+      if (_chat_filter_open) {
+        renderChatFilter(display);
+      } else
+#endif
       if (_quick_reply_open) {
 #if UI_QUICK_REPLY_KEYBOARD
         if (_quick_keyboard_open) {
@@ -8920,8 +9157,17 @@ public:
           renderQuickReplyMenu(display);
         }
       } else {
-      int count = the_mesh.getRecentChannelMessages(chat, UI_CHAT_LIST_SIZE);
+      int count;
+#if UI_QUICK_REPLY_KEYBOARD
+      validateChatFilter();
+      count = _chat_filter_active
+        ? the_mesh.getRecentChannelMessagesForChannel(chat, UI_CHAT_LIST_SIZE, _chat_filter_identity)
+        : the_mesh.getRecentChannelMessages(chat, UI_CHAT_LIST_SIZE);
+#else
+      count = the_mesh.getRecentChannelMessages(chat, UI_CHAT_LIST_SIZE);
+#endif
       if (count == 0) {
+        renderChatFilterHeader(display, display.getTextLineHeight() + 2);
         display.setColor(DisplayDriver::YELLOW);
         display.drawTextCentered(display.width() / 2, 31, "Нет чата");
       } else {
@@ -9908,6 +10154,9 @@ public:
     if (_wifi_approval.open()) return handleWifiApprovalInput(c);
     if (handleConnectionInput(c)) return true;
 #endif
+#if UI_QUICK_REPLY_KEYBOARD
+    if (_chat_filter_open) return handleChatFilterInput(c);
+#endif
     if (_quick_reply_open) {
 #if UI_QUICK_REPLY_KEYBOARD
       if (_quick_keyboard_open) {
@@ -9927,6 +10176,13 @@ public:
         if (_quick_reply_idx == quickReplyKeyboardIndex()) {
           openQuickKeyboard();
           _task->showAlert("Клавиатура", 700);
+        } else if (_quick_reply_idx == quick_reply_count + 1) {
+          _chat_filter_open = true;
+          _chat_filter_cursor = 0;
+          captureChatFilterChoice();
+        } else if (_quick_reply_idx == quick_reply_count + 2) {
+          _quick_reply_open = false;
+          _task->showUnreadMessages();
         } else
 #endif
         if (_quick_reply_idx == quickReplyBackIndex()) {
@@ -10189,7 +10445,9 @@ public:
     if (c == KEY_ENTER && _settings_open && _page == HomePage::ADC) {
       if (_adc_edit) {
 #if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
-        NodePrefs before = *_node_prefs;
+        smartui::CheckedUiSnapshot<NodePrefs> snapshot(_node_prefs);
+        if (!snapshot) { _task->showAlert("Недостаточно памяти", 1400); return true; }
+        const NodePrefs& before = *snapshot;
 #endif
         if (_task->setAdcMultiplier(_adc_draft, true)) {
 #if UI_SMART_B11_EXTRAS == 1 && UI_COMPACT_SETTINGS_MENU == 1
@@ -10259,6 +10517,8 @@ class MsgPreviewScreen : public UIScreen {
   mesh::RTCClock* _rtc;
 
   struct MsgEntry {
+    uint32_t preview_id;
+    uint32_t snooze_until;
     uint32_t timestamp;
     uint32_t arrived_ms;
     uint32_t generation;
@@ -10283,13 +10543,14 @@ class MsgPreviewScreen : public UIScreen {
   uint8_t cached_font = 0xFF;
   uint32_t cached_arrived_ms = 0;
   int cached_unread_count = -1;
-  // Direct frames dismissed locally still remain in MyMesh::offline_queue.
-  // Count them so a later BLE sync acknowledges those frames without deleting
-  // the next still-visible preview a second time.
-  uint16_t direct_sync_debt = 0;
   char fitted_line[80];
   char count_label[12];
   char header_line[40];
+  uint32_t next_preview_id = 0;
+  uint32_t selected_preview_id = 0;
+  bool detail_open = false;
+  uint8_t detail_action = 0;
+  MsgEntry opened_entry = {};
 
   int unreadIndexFromNewest(int offset) const {
     return (head + MAX_UNREAD_MSGS - offset) % MAX_UNREAD_MSGS;
@@ -10447,28 +10708,60 @@ public:
     return num_unread;
   }
 
-  void addDirectSyncDebt(uint16_t count) {
-#if UI_UNREAD_DIRECT_ONLY
-    uint32_t total = (uint32_t)direct_sync_debt + count;
-    direct_sync_debt = total > 0xFFFFU ? 0xFFFFU : (uint16_t)total;
-#else
-    (void)count;
-#endif
+  int selectedOffset() const {
+    for (int offset = 0; offset < num_unread; ++offset)
+      if (unread[unreadIndexFromNewest(offset)].preview_id == selected_preview_id) return offset;
+    return 0;
   }
 
-  bool consumeDirectSyncDebt() {
-#if UI_UNREAD_DIRECT_ONLY
-    if (direct_sync_debt > 0) {
-      direct_sync_debt--;
+  void selectNewest() {
+    if (!detail_open && num_unread > 0) selected_preview_id = unread[head].preview_id;
+  }
+
+  void closeDetails() { detail_open = false; }
+  bool isReading() const { return detail_open; }
+
+  bool removePreviewById(uint32_t id) {
+    for (int offset = 0; offset < num_unread; ++offset) {
+      if (unread[unreadIndexFromNewest(offset)].preview_id != id) continue;
+      for (int older = offset; older + 1 < num_unread; ++older)
+        unread[unreadIndexFromNewest(older)] = unread[unreadIndexFromNewest(older + 1)];
+      --num_unread;
+      selected_preview_id = num_unread > 0 ? unread[unreadIndexFromNewest(offset < num_unread ? offset : 0)].preview_id : 0;
+      cached_entry = -1;
+      cached_unread_count = -1;
       return true;
     }
-#endif
+    return false;
+  }
+
+  bool snoozePreviewById(uint32_t id) {
+    for (int offset = 0; offset < num_unread; ++offset) {
+      MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
+      if (entry.preview_id != id) continue;
+      entry.snooze_until = smartui::optionalDeadlineAfter((uint32_t)millis(), 15UL * 60UL * 1000UL);
+      return true;
+    }
+    return false;
+  }
+
+  bool takeDueReminder(uint32_t& generation, uint8_t& flags) {
+    for (int offset = 0; offset < num_unread; ++offset) {
+      MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
+      if (entry.snooze_until == 0 ||
+          !smartui::deadlineReached((uint32_t)millis(), entry.snooze_until)) continue;
+      entry.snooze_until = 0;
+      generation = entry.generation;
+      flags = entry.notify_flags;
+      if (!detail_open) selected_preview_id = entry.preview_id;
+      return true;
+    }
     return false;
   }
 
   bool removeOldestPreview(bool locally_dismissed = false) {
+    (void)locally_dismissed;
     if (num_unread <= 0) return false;
-    if (locally_dismissed) addDirectSyncDebt(1);
     num_unread--;
     cached_entry = -1;
     cached_unread_count = -1;
@@ -10477,8 +10770,10 @@ public:
   }
 
   void clearPreviews(bool locally_dismissed = false) {
-    if (locally_dismissed && num_unread > 0) addDirectSyncDebt((uint16_t)num_unread);
+    (void)locally_dismissed;
     num_unread = 0;
+    detail_open = false;
+    selected_preview_id = 0;
     cached_entry = -1;
     cached_unread_count = -1;
     scroll_entry = -1;
@@ -10487,15 +10782,15 @@ public:
   void addPreview(uint8_t path_len, const char* from_name, const char* msg,
                   uint8_t notify_flags, uint32_t generation,
                   const uint8_t* sender_id, uint8_t sender_id_len) {
-    if (num_unread >= MAX_UNREAD_MSGS) {
-      // The oldest direct frame is still queued for BLE, but no longer fits on
-      // the node's small preview ring.  Treat the eviction like a local hide.
-      addDirectSyncDebt(1);
-    }
+    // Preview eviction and companion-queue transfer are independent. Neither
+    // is a human read receipt and neither consumes another message's preview.
     head = (head + 1) % MAX_UNREAD_MSGS;
     if (num_unread < MAX_UNREAD_MSGS) num_unread++;
 
     auto p = &unread[head];
+    if (++next_preview_id == 0) ++next_preview_id;
+    p->preview_id = next_preview_id;
+    p->snooze_until = 0;
     p->timestamp = _rtc->getCurrentTime();
     p->arrived_ms = millis();
     p->generation = generation;
@@ -10510,17 +10805,13 @@ public:
                        sizeof(p->sender));
 
     const char* preview_msg = msg != NULL ? msg : "";
-    bool ch2_msg = msg != NULL && strncmp(msg, "ch2 ", 4) == 0;
-    if (ch2_msg) {
-      preview_msg = msg + 4;
-    }
     (void)path_len;
     StrHelper::strncpy(p->msg, preview_msg, sizeof(p->msg));
     cached_entry = -1;
     cached_unread_count = -1;
   }
 
-  int render(DisplayDriver& display) override {
+  int renderSenderSummary(DisplayDriver& display) {
     uint8_t saved_font = uiPushCompactSettingsFont(display);
     int line_h = display.getTextLineHeight();
     if (line_h < 1) line_h = 1;
@@ -10593,23 +10884,140 @@ public:
 #endif
   }
 
-  bool handleInput(char c) override {
-    if (c == KEY_NEXT || c == KEY_RIGHT) {
-      removeOldestPreview(true);
-      if (num_unread == 0) {
-        _task->msgRead(0);
+  int renderDetailText(DisplayDriver& display, int top, int bottom, int scroll, bool draw) {
+    const int line_h = display.getTextLineHeight();
+    int y = top - scroll;
+    const char* text = opened_entry.msg;
+    char line[UI_UNREAD_TEXT_LEN];
+    while (*text != 0) {
+      const char* before = text;
+      line[0] = 0;
+      const bool nonempty = nextWrappedUnreadLine(display, text, line, sizeof(line), display.width() - 4);
+      if (!nonempty && before == text) break;
+      if (draw && y >= top && y + line_h <= bottom) {
+        display.setColor(DisplayDriver::LIGHT);
+        drawUnreadTextLine(display, 2, y, line);
+      }
+      y += line_h;
+    }
+    return y - top + scroll;
+  }
+
+  int render(DisplayDriver& display) override {
+    const uint8_t saved_font = uiPushCompactSettingsFont(display);
+    display.setTextSize(1);
+    display.setBold(false);
+    const int w = display.width(), h = display.height();
+    const int line_h = display.getTextLineHeight();
+    if (!detail_open) {
+      const int row_h = h / 4;
+      const int dy = row_h > line_h ? (row_h - line_h) / 2 : 0;
+      const int offset = selectedOffset();
+      if (num_unread > 0) {
+        const MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
+        selected_preview_id = entry.preview_id;
+        snprintf(header_line, sizeof(header_line), "ЛС %d/%d #%02X%02X", offset + 1, num_unread,
+                 entry.sender_id_len >= 2 ? entry.sender_id[entry.sender_id_len - 2] : 0,
+                 entry.sender_id_len >= 2 ? entry.sender_id[entry.sender_id_len - 1] : 0);
+        display.setColor(DisplayDriver::GREEN);
+        drawRichTextCenteredEllipsized(display, w / 2, dy, w - 4, header_line);
+        display.setColor(DisplayDriver::YELLOW);
+        drawRichTextCenteredEllipsized(display, w / 2, row_h + dy, w - 4, entry.sender);
+        display.setColor(DisplayDriver::LIGHT);
+        drawFittedUnreadText(display, 2, row_h * 2 + dy, w - 4, entry.msg);
       } else {
-        _task->msgRead(num_unread);
+        display.setColor(DisplayDriver::GREEN);
+        drawRichTextCenteredEllipsized(display, w / 2, row_h + dy, w - 4, "Нет непрочитанных");
+      }
+      display.setColor(DisplayDriver::LIGHT);
+      drawRichTextCenteredEllipsized(display, w / 2, row_h * 3 + dy, w - 4,
+                                     num_unread > 0 ? "Удерж: читать" : "Удерж: назад");
+      uiPopFont(display, saved_font);
+      return 1000;
+    }
+
+    // Header and two action rows use the same compact font as the body. The
+    // body alone scrolls, so sender identity and the selected action stay put.
+    const int top = line_h + 2;
+    const int footer = h - line_h * 2 - 2;
+    const int visible = footer - top;
+    const int total = renderDetailText(display, top, footer, 0, false);
+    int max_scroll = total > visible ? total - visible : 0;
+    if (scroll_px > max_scroll) scroll_px = max_scroll;
+    renderDetailText(display, top, footer, scroll_px, true);
+    display.setColor(DisplayDriver::GREEN);
+    char identity[10];
+    snprintf(identity, sizeof(identity), "#%02X%02X",
+             opened_entry.sender_id_len >= 2 ? opened_entry.sender_id[opened_entry.sender_id_len - 2] : 0,
+             opened_entry.sender_id_len >= 2 ? opened_entry.sender_id[opened_entry.sender_id_len - 1] : 0);
+    const int id_w = display.getTextWidth(identity);
+    drawRichTextStaticEllipsized(display, 1, 0, w - id_w - 5, opened_entry.sender);
+    display.drawTextRightAlign(w - 1, 0, identity);
+    const char* actions[] = {"Ответить", "Прочитано", "Напомнить 15м", "Назад"};
+    display.setColor(DisplayDriver::YELLOW);
+    drawRichTextCenteredEllipsized(display, w / 2, footer + 1, w - 4, actions[detail_action]);
+    display.setColor(DisplayDriver::LIGHT);
+    drawRichTextCenteredEllipsized(display, w / 2, h - line_h, w - 4, "Клик / удерж: OK");
+    if (max_scroll > 0 && smartui::deadlineReached((uint32_t)millis(), (uint32_t)scroll_pause_until)) {
+      // Small TFTs may fit only one complete body line. Pixel scrolling plus
+      // strict clipping would show blank intermediate frames there. Advance
+      // whole lines and give each at least 1.5 seconds of reading time.
+      scroll_px += scroll_dir * line_h;
+      scroll_pause_until = smartui::optionalDeadlineAfter((uint32_t)millis(), 1500U);
+      if (scroll_px >= max_scroll || scroll_px <= 0) {
+        scroll_px = scroll_px <= 0 ? 0 : max_scroll;
+        scroll_dir = scroll_px == 0 ? 1 : -1;
+        scroll_pause_until = smartui::optionalDeadlineAfter((uint32_t)millis(), UI_CHAT_EDGE_PAUSE_MILLIS);
+      }
+    }
+    uiPopFont(display, saved_font);
+#if AUTO_OFF_MILLIS == 0
+    return max_scroll > 0 ? UI_EINK_SCROLL_REFRESH_MILLIS : 1000;
+#else
+    return max_scroll > 0 ? UI_CHAT_REFRESH_MILLIS : 1000;
+#endif
+  }
+
+  bool handleInput(char c) override {
+    const bool previous = c == KEY_PREV || c == KEY_LEFT;
+    const bool next = c == KEY_NEXT || c == KEY_RIGHT;
+    if (previous || next) {
+      if (detail_open) detail_action = (detail_action + (previous ? 3 : 1)) % 4;
+      else if (num_unread > 0) {
+        const int offset = (selectedOffset() + (previous ? num_unread - 1 : 1)) % num_unread;
+        selected_preview_id = unread[unreadIndexFromNewest(offset)].preview_id;
       }
       return true;
     }
-    if (c == KEY_ENTER) {
-      clearPreviews(true);
-      _task->msgRead(0);
-      _task->showAlert("Непроч. очищ.", 800);
+    if (c != KEY_ENTER && c != KEY_SELECT) return false;
+    if (!detail_open) {
+      if (num_unread == 0) { _task->gotoHomeScreen(); return true; }
+      opened_entry = unread[unreadIndexFromNewest(selectedOffset())];
+      selected_preview_id = opened_entry.preview_id;
+      detail_open = true;
+      detail_action = 0;
+      scroll_px = 0;
+      scroll_dir = 1;
+      scroll_pause_until = smartui::optionalDeadlineAfter((uint32_t)millis(), UI_CHAT_EDGE_PAUSE_MILLIS);
       return true;
     }
-    return false;
+    if (detail_action == 0) {
+      if (_task->replyToIncomingMessage(opened_entry.sender_id, opened_entry.sender_id_len, opened_entry.sender))
+        detail_open = false;
+      else _task->showAlert("Контакт недоступен", 1100);
+    } else if (detail_action == 1) {
+      removePreviewById(opened_entry.preview_id);
+      detail_open = false;
+      _task->localMessageRead(opened_entry.generation);
+      _task->showAlert("ЛС прочитано", 900);
+    } else if (detail_action == 2) {
+      if (snoozePreviewById(opened_entry.preview_id)) {
+        _task->dismissMessageNotification(opened_entry.generation);
+        detail_open = false;
+        _task->showAlert("Напомню через 15м", 1000);
+      } else _task->showAlert("Уже вне буфера", 1100);
+    } else detail_open = false;
+    return true;
   }
 };
 
@@ -10622,6 +11030,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   next_batt_chck = ui_started_at + LOW_BATTERY_SHUTDOWN_BOOT_GRACE_MILLIS;
   _low_batt_strikes = 0;
   _last_connection_state = hasConnection();
+  _low_batt_threshold = 0;
   _ble_state_changed_at = ui_started_at;
   _popup_pending = false;
   _display_recover_until = 0;
@@ -13326,7 +13735,7 @@ void UITask::msgRead(int msgcount, bool dismiss_notification) {
       return;
     }
     if (curr == msg_preview && msg_preview != NULL && ((MsgPreviewScreen *) msg_preview)->hasUnreadPreviews()) {
-      _next_refresh = 100;
+      _next_refresh = 0;
       return;
     }
     gotoHomeScreen();
@@ -13334,20 +13743,10 @@ void UITask::msgRead(int msgcount, bool dismiss_notification) {
 }
 
 void UITask::directMsgRead(bool dismiss_notification) {
-#if UI_UNREAD_DIRECT_ONLY
-  if (msg_preview == NULL) return;
-  MsgPreviewScreen* preview = (MsgPreviewScreen *)msg_preview;
-  if (!preview->consumeDirectSyncDebt()) preview->removeOldestPreview(false);
-  _msgcount = preview->unreadPreviewCount();
-  if (_msgcount == 0) {
-    _popup_pending = false;
-    if (dismiss_notification) clearImportantNotify();
-    if (curr == msg_preview) gotoHomeScreen();
-  }
-  _next_refresh = 0;
-#else
+  // Legacy hook has no message identity. Transport acceptance is not human
+  // read, so it must never delete an arbitrary local preview. Current sync
+  // uses messageTransferState(generation, ...) for notification bookkeeping.
   (void)dismiss_notification;
-#endif
 }
 
 void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text, int msgcount, uint8_t flags) {
@@ -13436,6 +13835,7 @@ void UITask::newMsg(uint8_t path_len, const char* from_name, const char* text,
   if (direct_preview) {
     preview->addPreview(path_len, from_name, text, important_flags,
                         generation, sender_id, sender_id_len);
+    if (curr != msg_preview) preview->selectNewest();
   }
   _msgcount = preview->unreadPreviewCount();
 #else
@@ -13496,8 +13896,61 @@ void UITask::userLedHandler() {
 }
 
 void UITask::setCurrScreen(UIScreen* c) {
+  if (curr != NULL && curr == msg_preview && c != msg_preview)
+    ((MsgPreviewScreen*)msg_preview)->closeDetails();
   curr = c;
-  _next_refresh = 100;
+  _next_refresh = 0;
+}
+
+bool UITask::replyToIncomingMessage(const uint8_t* public_key, uint8_t key_len, const char* name) {
+  if (key_len != PUB_KEY_SIZE || public_key == NULL || home == NULL) return false;
+  if (!((HomeScreen*)home)->openIncomingReply(public_key, name)) return false;
+  _popup_pending = false;
+  setCurrScreen(home);
+  _last_activity_ms = millis();
+  extendAutoOff();
+  return true;
+}
+
+void UITask::showUnreadMessages() {
+  if (msg_preview == NULL) return;
+  setCurrScreen(msg_preview);
+  _last_activity_ms = millis();
+  extendAutoOff();
+}
+
+void UITask::dismissMessageNotification(uint32_t generation) {
+  if (generation == 0) return;
+  if (_important_notify_generation == generation) finishImportantNotify(true, false);
+  if (_ble_smart_notify_generation == generation) clearBleSmartNotify();
+  _next_refresh = 0;
+}
+
+void UITask::localMessageRead(uint32_t generation) {
+  dismissMessageNotification(generation);
+  if (msg_preview == NULL) return;
+  _msgcount = ((MsgPreviewScreen*)msg_preview)->unreadPreviewCount();
+  if (_msgcount == 0) {
+    _popup_pending = false;
+    if (curr == msg_preview) gotoHomeScreen();
+  }
+  _next_refresh = 0;
+}
+
+void UITask::snoozedMessageHandler() {
+  if (msg_preview == NULL || _storage_recovery_active || areNotificationsMuted() ||
+      getImportantNotifyMode() == NOTIFY_MODE_SILENT || _important_notify_active ||
+      _ble_smart_notify_flags != UI_MSG_FLAG_NONE) return;
+  uint32_t generation;
+  uint8_t flags;
+  if (!((MsgPreviewScreen*)msg_preview)->takeDueReminder(generation, flags)) return;
+  // Snooze belongs to this stored message only. A new arrival still uses the
+  // ordinary independent notification path, including while this timer waits.
+  beginImportantNotify(flags, generation, false);
+  if (areMsgPopupsEnabled()) {
+    _popup_pending = true;
+    _popup_pending_important = true;
+  }
 }
 
 void UITask::gotoHomeFirstScreen() {
@@ -13509,6 +13962,10 @@ void UITask::gotoHomeFirstScreen() {
 
 bool UITask::hasActiveComposeSession() const {
   return home != NULL && ((HomeScreen*)home)->hasActiveComposeSession();
+}
+
+bool UITask::hasActiveInboxSession() const {
+  return curr == msg_preview && msg_preview != NULL && ((MsgPreviewScreen*)msg_preview)->isReading();
 }
 
 void UITask::extendAutoOff(unsigned long now) {
@@ -13539,7 +13996,7 @@ void UITask::markDisplayWake(bool reset_to_clock) {
   _button_wake_pending_until = 0;
   _display_wake_lock_until = smartui::optionalDeadlineAfter(
       (uint32_t)now, (uint32_t)UI_DISPLAY_WAKE_LOCK_MS);
-  if (reset_to_clock && !hasActiveComposeSession()) {
+  if (reset_to_clock && !hasActiveComposeSession() && !hasActiveInboxSession()) {
     gotoHomeFirstScreen();
   }
   _last_activity_ms = now;
@@ -13579,7 +14036,7 @@ bool UITask::handleRawButtonWakeWhenDark() {
   if (!user_btn.isPressed()) return false;
 
   unsigned long now = millis();
-  clearImportantNotify();
+  if (curr != msg_preview) clearImportantNotify();
   _display->turnOn();
   bool reset_to_clock =
 #if UI_WAKE_SHOW_CLOCK
@@ -13654,7 +14111,7 @@ void UITask::handleButtonWakeLatch() {
 #if UI_WAKE_DEBUG_LOG
       Serial.printf("[DBG UI] buttonWakeLatch turnOn ok now=%lu\r\n", millis());
 #endif
-      clearImportantNotify();
+      if (curr != msg_preview) clearImportantNotify();
       markDisplayWake(
 #if UI_WAKE_SHOW_CLOCK
           true
@@ -14039,7 +14496,9 @@ void UITask::loop() {
   }
 
   if (c != 0 && curr) {
-    clearImportantNotify();
+    // Inbox actions address one stored generation. Do not dismiss B's newer
+    // reminder while the user reads or snoozes A.
+    if (curr != msg_preview) clearImportantNotify();
     _last_activity_ms = millis();
 #if UI_EINK_IDLE_SCREENSAVER
     if (curr == idle_saver) {
@@ -14051,7 +14510,7 @@ void UITask::loop() {
       curr->handleInput(c);
     }
     extendAutoOff();
-    _next_refresh = 100;  // trigger refresh
+    _next_refresh = 0;  // immediate sentinel, also after 24.8 days of uptime
   }
 
   userLedHandler();
@@ -14065,6 +14524,8 @@ void UITask::loop() {
   messageVibeHandler();
   bleSmartNotifyHandler();
   importantNotifyHandler();
+
+  snoozedMessageHandler();
 
 #ifdef PIN_BUZZER
   if (buzzer.isPlaying())  buzzer.loop();
@@ -14083,7 +14544,7 @@ void UITask::loop() {
 #endif
 
 #if UI_MENU_AUTO_HOME_MILLIS > 0
-  if (!_storage_recovery_active && !hasActiveComposeSession() && home != NULL && curr != NULL && curr != splash &&
+  if (!_storage_recovery_active && !hasActiveComposeSession() && !hasActiveInboxSession() && home != NULL && curr != NULL && curr != splash &&
       smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)_alert_expiry) &&
 #if UI_EINK_IDLE_SCREENSAVER
       curr != idle_saver &&
@@ -14160,7 +14621,14 @@ void UITask::loop() {
 #endif
 
 #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
-  const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();
+  const uint16_t shutdownThreshold = smartui::effectiveBatteryShutdownThreshold(
+      getLowBatteryShutdownThreshold(), LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS,
+      _board != NULL && _board->isExternalPowered());
+  if (_low_batt_threshold != shutdownThreshold) {
+    // Evidence collected below 3.2 V is not evidence below the 2.7 V floor.
+    _low_batt_threshold = shutdownThreshold;
+    _low_batt_strikes = 0;
+  }
   if (shutdownThreshold == 0) {
     _low_batt_strikes = 0;
   } else if (smartui::deadlineDueOrImmediate((uint32_t)millis(), (uint32_t)next_batt_chck)) {
@@ -14264,7 +14732,7 @@ char UITask::checkDisplayOn(char c) {
       if (!checked_display) {
         _display->turnOn();   // turn display on and consume event
       }
-      clearImportantNotify();
+      if (curr != msg_preview) clearImportantNotify();
       bool reset_to_clock =
 #if UI_WAKE_SHOW_CLOCK
           true;

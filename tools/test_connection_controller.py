@@ -363,6 +363,14 @@ static void setSleep(bool value) { sleep_inhibited = value; }
 static bool isCli() { return cli_rescue; }
 static bool isQuarantined() { return quarantined; }
 static const char* boardName() { return "Test Board"; }
+static std::string quick_replies[9];
+static bool reply_save_fail = false;
+static const char* getReply(uint8_t slot) { return slot < 9 ? quick_replies[slot].c_str() : ""; }
+static bool setReply(uint8_t slot, const char* text) {
+  if (slot >= 9 || reply_save_fail) return false;
+  quick_replies[slot] = text;
+  return true;
+}
 
 static ConnectionControllerHooks hooks() {
   ConnectionControllerHooks value;
@@ -371,6 +379,8 @@ static ConnectionControllerHooks hooks() {
   value.isCliRescue = isCli;
   value.isStorageQuarantined = isQuarantined;
   value.getBoardName = boardName;
+  value.getQuickReply = getReply;
+  value.setQuickReply = setReply;
   return value;
 }
 
@@ -579,6 +589,87 @@ static void assertNoCredentials(const FakeFS::State& files) {
     assert(!containsBytes(item.second, "private-network"));
     assert(!containsBytes(item.second, "private-password"));
   }
+}
+
+static void testCredentialBearingRecovery() {
+  for (const char* path : {"/connection.cfg.tmp", "/connection.cfg.bak"}) {
+    for (unsigned fault = 0; fault < 4; ++fault) {
+      RecoveryFixture first;
+      const auto record = configRecord(CompanionMode::USB, true);
+      first.fs.files[path] = record;
+      first.fs.files["/connection.cfg"] = {1, 2};
+      if (fault == 1) first.fs.fail_write_open_path = "/connection.cfg";
+      if (fault == 2) first.fs.short_write_path = "/connection.cfg";
+      if (fault == 3) first.fs.corrupt_flush_path = "/connection.cfg";
+      first.fs.record_snapshots = true;
+      first.boot();
+      assert(first.controller.status().wifiConfigured);
+      assert(first.controller.status().selected == CompanionMode::USB);
+      assert(first.controller.status().storageRecoveryRequired == (fault != 0));
+      if (fault) {
+        assert(first.controller.status().usbConsoleEnabled);
+        assert(!first.manager.isEnabled());
+      }
+      first.fs.snapshots.push_back(first.fs.files);
+      for (const auto& files : first.fs.snapshots) {
+        RecoveryFixture second;
+        second.fs.files = files;
+        second.boot();
+        assert(second.controller.status().wifiConfigured);
+        assert(second.controller.status().selected == CompanionMode::USB);
+        assert(!second.controller.status().storageRecoveryRequired);
+        assert(second.fs.files["/connection.cfg"] == record);
+      }
+    }
+  }
+}
+
+static void testRecoveryConsoleAndReplies() {
+  RecoveryFixture recovery;
+  recovery.fs.files["/connection.cfg"] = configRecord(CompanionMode::USB);
+  recovery.fs.fail_remove_path = "/connection.forgot";
+  recovery.boot();
+  assert(recovery.controller.status().storageRecoveryRequired);
+  assert(recovery.controller.status().usbConsoleEnabled);
+  assert(!recovery.manager.isEnabled());
+  send(recovery.controller, recovery.console, "wifi forget\n");
+  assert(!recovery.controller.status().storageRecoveryRequired);
+  assert(recovery.manager.isEnabled());
+  assert(recovery.controller.status().selected == CompanionMode::BLE);
+
+  send(recovery.controller, recovery.console, "reply set 1 d094d0b0\nreply get 1\n");
+  assert(quick_replies[0] == "\xd0\x94\xd0\xb0");
+  assert(recovery.console.output.find("Reply=1 hex=d094d0b0") != std::string::npos);
+  const std::string max_command = "reply set 9 " + std::string(128, '6') + "\n";
+  send(recovery.controller, recovery.console, max_command.c_str());
+  assert(quick_replies[8] == std::string(64, 'f'));
+  for (const char* invalid : {"reply set 1 00\n", "reply set 1 c080\n", "reply set 1 f4908080\n", "reply set 1 eda080\n", "reply set 1 0a\n", "reply set 1 zz\n", "reply set 0 61\n"}) {
+    send(recovery.controller, recovery.console, invalid);
+    assert(quick_replies[0] == "\xd0\x94\xd0\xb0");
+  }
+  reply_save_fail = true;
+  send(recovery.controller, recovery.console, "reply set 1 61\n");
+  assert(quick_replies[0] == "\xd0\x94\xd0\xb0");
+  reply_save_fail = false;
+  quarantined = true;
+  send(recovery.controller, recovery.console, "reply set 1 61\nreply get 1\n");
+  assert(quick_replies[0] == "\xd0\x94\xd0\xb0");
+  quarantined = false;
+  send(recovery.controller, recovery.console, "reply set 1 -\nreply get 1\n");
+  assert(quick_replies[0].empty());
+  assert(recovery.console.output.find("Reply=1 hex=-") != std::string::npos);
+#if defined(ESP32)
+  RecoveryFixture online;
+  online.fs.files["/connection.cfg"] = configRecord(CompanionMode::WiFi, true);
+  online.boot();
+  WiFi.status_code = WL_CONNECTED;
+  online.wifi.connected = true;
+  online.controller.loop();
+  const int begins = WiFi.begin_count;
+  send(online.controller, online.console, "wifi cancel\n");
+  assert(WiFi.begin_count == begins);
+  assert(online.controller.status().clientConnected);
+#endif
 }
 
 static void assertCleanReboot(const FakeFS::State& files, CompanionMode mode) {
@@ -1075,6 +1166,8 @@ int main() {
 
   testModeChangeErrors();
   testCredentialFreeRecovery();
+  testCredentialBearingRecovery();
+  testRecoveryConsoleAndReplies();
   testForgetFailurePrivacy();
   testInfoReadOnly();
   return 0;
@@ -1156,6 +1249,7 @@ def main() -> None:
         shutil.copy2(ROOT / "src/helpers/StorageTransaction.h", source_helpers / "StorageTransaction.h")
         shutil.copy2(ROOT / "src/helpers/SmartUiBuildInfo.h", source_helpers / "SmartUiBuildInfo.h")
         shutil.copy2(ROOT / "src/helpers/SmartUiSleepPolicy.h", source_helpers / "SmartUiSleepPolicy.h")
+        shutil.copy2(ROOT / "src/helpers/SmartUiQuickReplies.h", source_helpers / "SmartUiQuickReplies.h")
         # Angle-bracket helper includes resolve through stubs first.
         shutil.copy2(source_helpers / "StorageTransaction.h", helpers / "StorageTransaction.h")
         (root / "stubs/Arduino.h").write_text(ARDUINO, encoding="utf-8")

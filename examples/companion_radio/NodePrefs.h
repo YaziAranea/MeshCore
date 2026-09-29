@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint> // For uint8_t, uint32_t
 #include <helpers/ConfigSerializer.h>
+#include <helpers/SmartUiQuickReplies.h>
 
 #define TELEM_MODE_DENY            0
 #define TELEM_MODE_ALLOW_FLAGS     1     // use contact.flags
@@ -117,6 +118,7 @@ public:
   uint8_t gps_source = GPS_SOURCE_HW;
   int16_t timezone_offset_minutes = 360;  // UTC+06:00 compatibility default
   uint8_t powersaving_enabled = 1; // Companion power-saving policy; not a new user preference.
+  char quick_replies[SMARTUI_QUICK_REPLY_COUNT][SMARTUI_QUICK_REPLY_MAX_BYTES + 1] = {};
 
 private:
   class RadioPrefs : public ConfigSerializer {  // COPIED from CommonCLI (for now)
@@ -242,6 +244,11 @@ private:
       def("night_quiet", _parent->night_quiet_active);
       def("gps_source", _parent->gps_source);
       def("tz_min", _parent->timezone_offset_minutes);
+      for (uint8_t slot = 0; slot < SMARTUI_QUICK_REPLY_COUNT; ++slot) {
+        char key[] = "reply_1";
+        key[6] = static_cast<char>('1' + slot);
+        def(key, _parent->quick_replies[slot], sizeof(_parent->quick_replies[slot]));
+      }
     }
   public:
     SmartUIPrefs(NodePrefs* parent) : _parent(parent) { }
@@ -317,6 +324,7 @@ private:
     night_quiet_active = other.night_quiet_active;
     gps_source = other.gps_source;
     timezone_offset_minutes = other.timezone_offset_minutes;
+    memcpy(quick_replies, other.quick_replies, sizeof(quick_replies));
     repeat.disable_fwd = other.repeat.disable_fwd;
   }
 
@@ -349,6 +357,12 @@ public:
   // new accessor methods
   bool isRepeatEn() const { return repeat.disable_fwd == 0; }
   void setRepeatEn(bool en) { repeat.disable_fwd = en ? 0 : 1; }
+  void normalizeQuickReplies() {
+    for (auto& text : quick_replies) {
+      text[SMARTUI_QUICK_REPLY_MAX_BYTES] = 0;
+      if (!smartui::validQuickReply(text)) memset(text, 0, sizeof(text));
+    }
+  }
 };
 
 inline bool migrateLegacyNotifyPins(NodePrefs& prefs, int8_t alert_pin,

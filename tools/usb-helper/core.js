@@ -21,6 +21,7 @@
     readonly: 'Connection settings are read-only during storage recovery.',
     help: 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help',
     helpInfo: 'Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help',
+    helpReplies: 'Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | reply get N | reply set N HEX | help',
     helpEnd: 'Credential input is not echoed. WiFi is saved only after a passed test.'
   });
   const MESSAGES = Object.freeze({
@@ -51,7 +52,11 @@
     FORGET_FAILED: 'WiFi очищен в памяти, но очистка постоянного хранилища не подтверждена. Проверьте устройство.',
     FORGET_UNCERTAIN: 'Подтверждение удаления WiFi не получено. Проверьте устройство; результат неизвестен.',
     PROTOCOL: 'Ответ не соответствует сервисной консоли SmartUI. Переподключитесь.',
-    INPUT_OVERFLOW: 'Устройство отклонило слишком длинный ввод.'
+    INPUT_OVERFLOW: 'Устройство отклонило слишком длинный ввод.',
+    REPLIES_UNAVAILABLE: 'Свои фразы требуют прошивку с поддержкой этой функции.',
+    INVALID_REPLY: 'Фраза: не более 64 байт UTF-8, без управляющих символов. Пустое поле возвращает стандартную фразу.',
+    REPLY_FAILED: 'Фраза не сохранена. Проверьте состояние хранилища.',
+    REPLY_UNCERTAIN: 'Результат сохранения фразы неизвестен. Переподключитесь и прочитайте фразы с ноды.'
   });
   const DEFAULT_TIMEOUTS = Object.freeze({ command: 6000, test: 25000, usb: 2000, close: 1500, candidate: 120000 });
   const encoder = new TextEncoder();
@@ -97,8 +102,23 @@
     return {
       mode: match[1].toLowerCase(), companion: match[2], via: match[3].toLowerCase(),
       usbService: match[4] === 'on', wifiConfigured: match[5] === 'yes', link: match[6],
-      ip: match[7] === 'none' ? null : match[7], approval: match[8], readOnly: match[9] === 'recovery-required'
+      ip: match[7] === 'none' ? null : match[7], approval: match[8], readOnly: match[9] === 'recovery-required',
+      recoveryRequired: match[9] === 'recovery-required'
     };
+  }
+
+  function encodeReply(text) {
+    if (typeof text !== 'string' || !validUnicode(text) || controls.test(text) || encoder.encode(text).length > 64) throw failure('INVALID_REPLY');
+    return text === '' ? '-' : Array.from(encoder.encode(text), value => value.toString(16).padStart(2, '0')).join('');
+  }
+  function decodeReply(line, slot) {
+    const match = /^Reply=([1-9]) hex=(-|(?:[0-9a-f]{2}){1,64})$/.exec(line);
+    if (!match || Number(match[1]) !== slot + 1) return null;
+    try {
+      const text = match[2] === '-' ? '' : new TextDecoder('utf-8', {fatal:true}).decode(Uint8Array.from(match[2].match(/../g), value => parseInt(value, 16)));
+      encodeReply(text);
+      return { text };
+    } catch (_) { return null; }
   }
   function parseInfo(line) {
     // Accept only the advertised, bounded ASCII record, never arbitrary serial
@@ -117,7 +137,7 @@
       for (const key of Object.keys(DEFAULT_TIMEOUTS)) {
         if (Number.isFinite(timeouts[key]) && timeouts[key] > 0) this._timeouts[key] = timeouts[key];
       }
-      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null };
+      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null) };
       this._session = null;
       this._operation = null;
       this._closing = null;
@@ -127,6 +147,7 @@
     }
     get state() {
       return { ...this._state, status: this._state.status ? { ...this._state.status } : null,
+        replies: [...this._state.replies],
         info: this._state.info ? { ...this._state.info, capabilities: [...this._state.info.capabilities] } : null };
     }
     _call(name, value) {
@@ -153,14 +174,15 @@
     _rejectWaiter(session, error) {
       if (session.waiter) session.waiter.finish({ error });
     }
-    async _operate(action, { allowSetup = false, connect = false, mutate = false, wifi = false } = {}) {
+    async _operate(action, { allowSetup = false, connect = false, mutate = false, wifi = false, recovery = false } = {}) {
       if (this._operation || this._closing) throw failure('BUSY');
       if (!connect) {
         if (!this._state.connected || !this._session) throw failure('NOT_CONNECTED');
         if (!this._state.verified) throw failure('NOT_VERIFIED');
         if (this._setupActive && !allowSetup) throw failure('WIFI_PENDING');
-        if (mutate && this._state.status && this._state.status.readOnly) throw failure('READ_ONLY');
-        if (wifi && this._state.info && !this._state.info.capabilities.includes('WiFi')) throw failure('WIFI_UNAVAILABLE');
+        const localRecovery = recovery && this._state.status && this._state.status.recoveryRequired;
+        if (mutate && this._state.status && this._state.status.readOnly && !localRecovery) throw failure('READ_ONLY');
+        if (wifi && this._state.info && !this._state.info.capabilities.includes('WiFi') && !localRecovery) throw failure('WIFI_UNAVAILABLE');
       } else if (this._session) throw failure('BUSY');
       const token = {};
       this._operation = token;
@@ -206,7 +228,7 @@
           // Native Web Serial's open defaults are sufficient for this console.
           session.reader = port.readable.getReader();
           session.writer = port.writable.getWriter();
-          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null });
+          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null) });
           session.readTask = this._readLoop(session);
           await this._resync(session);
           let helpSeen = false;
@@ -214,11 +236,12 @@
           if (!session.readOnly) await this._exchange(session, 'help', line => {
             if (line === RX.help) helpSeen = true;
             if (line === RX.helpInfo) { helpSeen = true; infoSupported = true; }
+            if (line === RX.helpReplies) { helpSeen = true; infoSupported = true; this._stateChanged({quickRepliesSupported:true}); }
             if (line === RX.helpEnd && helpSeen) return success(true);
             if (line === RX.readonly) { session.readOnly = true; return success(false); }
           });
           const status = await this._readStatus(session);
-          if (!status.usbService || status.mode === 'usb') throw failure('PROTOCOL');
+          if (!status.usbService || (status.mode === 'usb' && !status.recoveryRequired)) throw failure('PROTOCOL');
           // Never probe an unknown command on the legacy 0.05 console. The
           // exact new help response is required before requesting identity.
           if (infoSupported) {
@@ -241,10 +264,10 @@
     }
     async _resync(session) {
       // Clear any partial credential/command without submitting it. The firmware
-      // retains partial input across browser disconnects (CONSOLE_LINE_MAX=96).
+      // retains partial input across browser disconnects (up to 160 bytes).
       // Backspace cannot clear its overflow flag: one discarded line is followed
       // by a second cancellation. Neither step can save credentials.
-      const cancel = '\b'.repeat(96) + 'cancel';
+      const cancel = '\b'.repeat(160) + 'cancel';
       const result = await this._exchange(session, cancel, line => {
         if (line === RX.cancelled || line === RX.unknown) return success('idle');
         if (line === RX.overflow) return success('overflow');
@@ -281,7 +304,7 @@
       this._rejectWaiter(session, failure('DISCONNECTED'));
       if (this._session === session) this._session = null;
       this._clearCandidate();
-      this._stateChanged({ connected: false, verified: false, status: null, info: null });
+      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null) });
       this._call('onStatus', null);
       const closing = (async () => {
         if (session.openTask) await this._bounded(session.openTask);
@@ -554,10 +577,14 @@
         try {
           await this._exchange(session, 'wifi forget', line => {
             if (line === 'WiFi credentials forgotten.') return success(true);
-            if (line === 'WiFi cleared in RAM; persistent cleanup failed.') return rejected('FORGET_FAILED');
+            if (line === 'WiFi cleared in RAM; persistent cleanup failed.' || line === "WiFi cleared in RAM; persistent cleanup failed. Do not assume credentials were erased. Retry 'wifi forget'.") return rejected('FORGET_FAILED');
             if (line === RX.readonly) return rejected('READ_ONLY');
           });
         } catch (error) {
+          if (error.code === 'FORGET_FAILED') {
+            await this._refreshAfterCommit(session);
+            throw error;
+          }
           if (['TIMEOUT', 'SERIAL_ERROR', 'DISCONNECTED', 'FORGET_FAILED'].includes(error.code)) {
             if (this._current(session)) { this._stateChanged({ verified: false }); this._setStatus(null); }
             if (error.code !== 'FORGET_FAILED') throw failure('FORGET_UNCERTAIN');
@@ -565,11 +592,55 @@
           throw error;
         }
         this._clearCandidate();
+        session.readOnly = false;
         this._event('success', 'Устройство подтвердило удаление сохранённых настроек WiFi.');
         await this._refreshAfterCommit(session);
         return { forgotten: true, status: this.state.status };
-      }, { mutate: true, wifi: true });
+      }, { mutate: true, wifi: true, recovery: true });
+    }
+    async _readReply(session, slot) {
+      return this._exchange(session, 'reply get ' + (slot + 1), line => {
+        const result = decodeReply(line, slot);
+        if (result) return success(result.text);
+        if (line.startsWith('Reply=') || line === 'Quick replies unavailable.' || line === RX.unknown) return rejected('PROTOCOL');
+      });
+    }
+    async loadQuickReplies() {
+      return this._operate(async session => {
+        if (!this._state.quickRepliesSupported) throw failure('REPLIES_UNAVAILABLE');
+        const replies = [];
+        for (let slot = 0; slot < 9; ++slot) replies.push(await this._readReply(session, slot));
+        this._stateChanged({replies});
+        return [...replies];
+      });
+    }
+    async saveQuickReply(slot, text) {
+      if (!Number.isInteger(slot) || slot < 0 || slot >= 9) throw failure('INVALID_REPLY');
+      const hex = encodeReply(text);
+      return this._operate(async session => {
+        if (!this._state.quickRepliesSupported) throw failure('REPLIES_UNAVAILABLE');
+        try {
+          await this._exchange(session, 'reply set ' + (slot + 1) + ' ' + hex, line => {
+            if (line === 'Reply ' + (slot + 1) + ' saved.') return success(true);
+            if (line === 'Invalid quick reply.' || line === 'Invalid reply command.') return rejected('INVALID_REPLY');
+            if (line === 'Quick reply save failed.') return rejected('REPLY_FAILED');
+            if (line === RX.readonly) return rejected('READ_ONLY');
+          });
+          const stored = await this._readReply(session, slot);
+          if (stored !== text) throw failure('PROTOCOL');
+          const replies = [...this._state.replies]; replies[slot] = stored;
+          this._stateChanged({replies});
+          this._event('success', 'Фраза ' + (slot + 1) + ' сохранена и прочитана обратно с ноды.');
+          return {saved:true, slot, text:stored};
+        } catch (error) {
+          if (['TIMEOUT','SERIAL_ERROR','DISCONNECTED','PROTOCOL'].includes(error.code)) {
+            if (this._current(session)) this._stateChanged({verified:false, replies:Array(9).fill(null)});
+            throw failure('REPLY_UNCERTAIN');
+          }
+          throw error;
+        }
+      }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply });
 }));

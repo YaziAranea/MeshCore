@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_1.1.html"
-ZIP_NAME = "SmartUI_USB_Helper_1.1.zip"
+HTML_NAME = "SmartUI_USB_Helper_1.2.html"
+ZIP_NAME = "SmartUI_USB_Helper_1.2.zip"
 
 
 def digest(data):
@@ -18,7 +18,7 @@ def digest(data):
 
 def render():
     html = (SOURCE / "index.html").read_text(encoding="utf-8")
-    for part in ("core", "app"):
+    for part in ("core", "firmware", "app"):
         marker = f"/* SMARTUI_HELPER_{part.upper()} */"
         if html.count(marker) != 1:
             raise ValueError(f"Expected exactly one {part} marker")

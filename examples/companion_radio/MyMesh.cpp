@@ -6,6 +6,7 @@
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 #include "helpers/radiolib/RXPowerSaving.h"
+#include "helpers/radiolib/LoRaConfigValidation.h"
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -491,6 +492,25 @@ bool MyMesh::getCADEnabled() const {
   return false; // hardware CAD before TX (disabled by default, until configurable)
 }
 
+static bool validateCompanionRadioParams(float freq, float bw, uint8_t sf, uint8_t cr) {
+#ifdef WRAPPER_CLASS
+  return radio_driver.validateParams(freq, bw, sf, cr);
+#else
+  return validCompanionLoRaParams(freq, bw, sf, cr);
+#endif
+}
+
+static bool setCompanionRadioParamsChecked(float freq, float bw, uint8_t sf, uint8_t cr) {
+#ifdef WRAPPER_CLASS
+  return radio_driver.setParamsChecked(freq, bw, sf, cr);
+#else
+  // Non-RadioLib transports keep their existing setParams contract.
+  if (!validateCompanionRadioParams(freq, bw, sf, cr)) return false;
+  radio_driver.setParams(freq, bw, sf, cr);
+  return true;
+#endif
+}
+
 static void applyCompanionRxPowerSaving(uint8_t sf, float bw) {
 #ifdef WRAPPER_CLASS
   RxPowerSavingControl* control = &radio_driver;
@@ -781,7 +801,8 @@ int MyMesh::getRecentNetworkStatus(NetworkStatusEntry dest[], int max_num,
   return count;
 }
 
-void MyMesh::noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text) {
+void MyMesh::noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text,
+                            uint8_t channel_idx) {
   recent_chat_head = (recent_chat_head + 1) % RECENT_CHAT_TABLE_SIZE;
   RecentChatEntry* entry = &recent_chat[recent_chat_head];
   entry->recv_timestamp = getRTCClock()->getCurrentTime();
@@ -789,17 +810,35 @@ void MyMesh::noteChannelChat(const char* channel_name, mesh::Packet* pkt, const 
   entry->flags = getRouteStatusFlags(entry->path_len);
   entry->snr_q4 = pkt ? (int8_t)(pkt->getSNR() * 4) : 0;
   entry->rssi = pkt ? last_rx_rssi : 0;
+  entry->channel_idx = 0xFF;
+  memset(entry->channel_identity, 0, sizeof(entry->channel_identity));
+  ChannelDetails channel;
+  if (getChannel(channel_idx, channel)) {
+    entry->channel_idx = channel_idx;
+    static_assert(sizeof(channel.channel.secret) == sizeof(entry->channel_identity),
+                  "Channel history identity must contain the full key");
+    memcpy(entry->channel_identity, channel.channel.secret, sizeof(entry->channel_identity));
+  }
   splitChannelText(channel_name, text, entry->origin, sizeof(entry->origin),
                    entry->text, sizeof(entry->text));
+  if (++recent_chat_revision == 0) ++recent_chat_revision;
 }
 
 int MyMesh::getRecentChannelMessages(RecentChatEntry dest[], int max_num) {
+  return getRecentChannelMessagesForChannel(dest, max_num, nullptr);
+}
+
+int MyMesh::getRecentChannelMessagesForChannel(RecentChatEntry dest[], int max_num,
+                                               const uint8_t secret[PUB_KEY_SIZE]) {
+  if (dest == nullptr || max_num <= 0) return 0;
   if (max_num > RECENT_CHAT_TABLE_SIZE) max_num = RECENT_CHAT_TABLE_SIZE;
   int count = 0;
   for (int offset = 0; offset < RECENT_CHAT_TABLE_SIZE && count < max_num; offset++) {
     int i = recent_chat_head - offset;
     if (i < 0) i += RECENT_CHAT_TABLE_SIZE;
-    if (recent_chat[i].recv_timestamp == 0 || recent_chat[i].text[0] == 0) continue;
+    if (recent_chat[i].text[0] == 0) continue;
+    if (secret && (recent_chat[i].channel_idx == 0xFF ||
+        memcmp(recent_chat[i].channel_identity, secret, PUB_KEY_SIZE) != 0)) continue;
     dest[count++] = recent_chat[i];
   }
   return count;
@@ -1016,7 +1055,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   ChannelDetails channel_details;
   if (getChannel(channel_idx, channel_details)) channel_name = channel_details.name;
   noteTrafficStatus(channel_name, channel_idx, path_len, NETWORK_STATUS_CHANNEL_TRAFFIC);
-  noteChannelChat(channel_name, pkt, text);
+  noteChannelChat(channel_name, pkt, text, channel_idx);
   const char* mention_text = smartui::channelMentionBodyText(text);
   uint8_t ui_flags = textMentionsNodeName(mention_text, _prefs.node_name)
                          ? UI_MSG_FLAG_MENTION
@@ -1423,6 +1462,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
 }
 
 bool MyMesh::begin(bool has_display) {
+  _radio_startup_error = false;
   BaseChatMesh::begin();
 
   const IdentityLoadStatus identity_status = _store->loadMainIdentityStatus(self_id);
@@ -1634,7 +1674,23 @@ bool MyMesh::begin(bool has_display) {
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure Andy's public channel
   _store->loadChannels(this);
 
-  radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  if (!setCompanionRadioParamsChecked(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr)) {
+    // Older firmware could persist a bandwidth/frequency the radio rejected.
+    // Recover using the board's known boot profile, never stale RXPS geometry.
+    if (!setCompanionRadioParamsChecked(LORA_FREQ, LORA_BW, LORA_SF, LORA_CR)) {
+      MESH_DEBUG_PRINTLN("ERROR: unable to apply a safe radio configuration");
+      _radio_startup_error = true;
+      return false;
+    }
+    _prefs.freq = LORA_FREQ;
+    _prefs.bw = LORA_BW;
+    _prefs.sf = LORA_SF;
+    _prefs.cr = LORA_CR;
+    _prefs.setRepeatEn(false);
+    if (!_store->savePrefs(_prefs)) {
+      MESH_DEBUG_PRINTLN("ERROR: safe radio fallback active but not persisted");
+    }
+  }
   radio_driver.setTxPower(_prefs.tx_power_dbm);
   radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
   board.setLoRaFemLnaEnabled(_prefs.radio_fem_rxgain);
@@ -1952,11 +2008,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       ChannelDetails channel;
       bool success = getChannel(channel_idx, channel);
-      if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text,
-                                      len - (size_t)i)) {
+      if (!success) {
+        writeErrFrame(ERR_CODE_NOT_FOUND);
+      } else if (strlen(_prefs.node_name) + 2 > MAX_TEXT_LEN ||
+                 len - (size_t)i > MAX_TEXT_LEN - (strlen(_prefs.node_name) + 2)) {
+        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      } else if (sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text,
+                                 len - (size_t)i)) {
         writeOKFrame();
       } else {
-        writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
+        writeErrFrame(ERR_CODE_TABLE_FULL);
       }
     }
   } else if (cmd_frame[0] == CMD_SEND_CHANNEL_DATA) { // send GroupChannel datagram
@@ -2295,33 +2356,43 @@ void MyMesh::handleCmdFrame(size_t len) {
 
     if (repeat && !isValidClientRepeatFreq(freq)) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
-        bw <= 500000) {
+    } else if (validateCompanionRadioParams((float)freq / 1000.0f,
+                                           (float)bw / 1000.0f, sf, cr)) {
       const uint8_t old_sf = _prefs.sf;
       const uint8_t old_cr = _prefs.cr;
       const float old_freq = _prefs.freq;
       const float old_bw = _prefs.bw;
       const bool old_repeat = _prefs.isRepeatEn();
-      _prefs.sf = sf;
-      _prefs.cr = cr;
-      _prefs.freq = (float)freq / 1000.0;
-      _prefs.bw = (float)bw / 1000.0;
-      _prefs.setRepeatEn(repeat != 0);
-      const bool saved = savePrefs();
-
-      if (saved) {
-        radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-        applyCompanionRxPowerSaving(_prefs.sf, _prefs.bw);
-        MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
-                           (uint32_t)cr);
-        writeOKFrame();
+      if (!setCompanionRadioParamsChecked((float)freq / 1000.0f,
+                                          (float)bw / 1000.0f, sf, cr)) {
+        // A SPI failure may have changed only part of the radio profile.
+        // Restore before reporting failure; the wrapper blocks TX/RX if the
+        // restore also fails. Preferences have not been changed or saved.
+        if (setCompanionRadioParamsChecked(old_freq, old_bw, old_sf, old_cr)) {
+          applyCompanionRxPowerSaving(old_sf, old_bw);
+        }
+        writeErrFrame(ERR_CODE_BAD_STATE);
       } else {
-        _prefs.sf = old_sf;
-        _prefs.cr = old_cr;
-        _prefs.freq = old_freq;
-        _prefs.bw = old_bw;
-        _prefs.setRepeatEn(old_repeat);
-        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+        _prefs.sf = sf;
+        _prefs.cr = cr;
+        _prefs.freq = (float)freq / 1000.0f;
+        _prefs.bw = (float)bw / 1000.0f;
+        _prefs.setRepeatEn(repeat != 0);
+        if (savePrefs()) {
+          applyCompanionRxPowerSaving(_prefs.sf, _prefs.bw);
+          MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
+                             (uint32_t)cr);
+          writeOKFrame();
+        } else {
+          _prefs.sf = old_sf;
+          _prefs.cr = old_cr;
+          _prefs.freq = old_freq;
+          _prefs.bw = old_bw;
+          _prefs.setRepeatEn(old_repeat);
+          const bool restored = setCompanionRadioParamsChecked(old_freq, old_bw, old_sf, old_cr);
+          if (restored) applyCompanionRxPowerSaving(old_sf, old_bw);
+          writeErrFrame(restored ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE);
+        }
       }
     } else {
       MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
@@ -3320,6 +3391,19 @@ bool MyMesh::advert() {
   }
 }
 
+const char* MyMesh::getQuickReplyOverride(uint8_t slot) const {
+  return slot < SMARTUI_QUICK_REPLY_COUNT ? _prefs.quick_replies[slot] : "";
+}
+
+bool MyMesh::setQuickReplyOverride(uint8_t slot, const char* text) {
+  if (slot >= SMARTUI_QUICK_REPLY_COUNT || !smartui::validQuickReply(text) ||
+      storage_recovery_required || _cli_rescue) return false;
+  const NodePrefs before = _prefs;
+  memset(_prefs.quick_replies[slot], 0, sizeof(_prefs.quick_replies[slot]));
+  memcpy(_prefs.quick_replies[slot], text, strlen(text));
+  return commitPrefsOrRollback(before);
+}
+
 bool MyMesh::sendQuickReply(const char* text) {
   if (text == NULL || text[0] == 0) return false;
   ChannelDetails channel;
@@ -3329,7 +3413,7 @@ bool MyMesh::sendQuickReply(const char* text) {
   if (sent) {
     char local_text[160];
     snprintf(local_text, sizeof(local_text), "%s: %s", _prefs.node_name, text);
-    noteChannelChat(channel.name, NULL, local_text);
+    noteChannelChat(channel.name, NULL, local_text, 0);
   }
   return sent;
 }
@@ -3403,7 +3487,7 @@ bool MyMesh::sendQuickReplyToChannelId(uint8_t channel_idx, const char* text) {
   if (sent) {
     char local_text[160];
     snprintf(local_text, sizeof(local_text), "%s: %s", _prefs.node_name, text);
-    noteChannelChat(channel.name, NULL, local_text);
+    noteChannelChat(channel.name, NULL, local_text, channel_idx);
   }
   return sent;
 }

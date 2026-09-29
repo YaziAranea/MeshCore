@@ -501,7 +501,9 @@ bool BaseChatMesh::sendGroupMessage(uint32_t timestamp, mesh::GroupChannel& chan
   size_t prefix_len = ep - (char *) &temp[5];
 
   if (prefix_len > MAX_TEXT_LEN) return false;
-  if (text_len > MAX_TEXT_LEN - prefix_len) text_len = MAX_TEXT_LEN - prefix_len;
+  // Never silently alter a successfully submitted message, particularly by
+  // splitting a multi-byte UTF-8 character at the channel/name byte budget.
+  if (text_len > MAX_TEXT_LEN - prefix_len) return false;
   memcpy(ep, text, text_len);
   ep[text_len] = 0;  // null terminator
 

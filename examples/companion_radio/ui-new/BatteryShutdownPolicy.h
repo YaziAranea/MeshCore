@@ -17,6 +17,14 @@ inline uint16_t batteryShutdownThreshold(bool enabled, uint16_t normal, uint16_t
   return enabled ? normal : floor;
 }
 
+// Only a board's positive external-power signal relaxes the normal cutoff.
+// Unknown/unsupported detection stays on the battery policy; the emergency
+// floor remains enforced even while USB is present.
+inline uint16_t effectiveBatteryShutdownThreshold(uint16_t normal, uint16_t floor,
+                                                  bool external_power_confirmed) {
+  return external_power_confirmed ? floor : normal;
+}
+
 // A zero value is the MainBoard convention for "battery ADC unavailable".
 // Every non-zero reading is real data, including severe undervoltage below
 // 2.5 V.  Invalid samples neither count nor erase earlier valid evidence.

@@ -27,10 +27,10 @@ import package_usb_helper as usb_helper
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.06"
-TAG = "smartui-0.06"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.06_RU.md"
-ARCHIVE_NAME = "SmartUI_0.06_all-boards.zip"
+VERSION = "0.06-test.1"
+TAG = "smartui-0.06-test.1"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.06-test.1_RU.md"
+ARCHIVE_NAME = "SmartUI_0.06-test.1_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -218,7 +218,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI 0.06" in text, "release notes must identify this exact release version")
+    require("SmartUI 0.06-test.1" in text, "release notes must identify this exact release version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:
@@ -241,7 +241,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "powersaving_upstream_commit": "a27e78e4da1389055b6dd16ce473112d25c8a5cd",
             "embedded_source_identity_verified": True,
             "experimental": True, "board_count": 6, "firmware_count": 9,
-            "publication": {"draft": False, "prerelease": False, "make_latest": True},
+            "publication": {"draft": False, "prerelease": False, "make_latest": False},
             "firmware": [record(stage / name, **firmware_metadata(name, commit))
                          for name in sorted(FIRMWARE_NAMES)],
             "files": [record(path) for path in payloads],

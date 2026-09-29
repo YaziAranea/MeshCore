@@ -11,17 +11,46 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "qa_outputs/experimental-settings-flow"
 
 
+def assert_bounded_ui_snapshots(source):
+    """Guard the three nested nRF frames that previously exceeded 4 KiB."""
+    home = source[source.index("class HomeScreen") :]
+    for marker in ("  bool handleInput(char c) override", "  bool handleCompactSettingsInput(char c)",
+                   "  void activateCompactSetting(uint8_t page)"):
+        start = home.index(marker)
+        opening = home.index("{", start)
+        depth, end = 1, opening + 1
+        while depth:
+            depth += (home[end] == "{") - (home[end] == "}")
+            end += 1
+        method = home[start:end]
+        assert not re.search(r"\bNodePrefs\s+\w+\s*(?:=|;|\{)", method), marker
+        assert "CheckedUiSnapshot<NodePrefs>" in method, marker
+        assert 'showAlert("Недостаточно памяти", 1400)' in method, marker
+    print("PASS 3 nested UI methods keep NodePrefs snapshots off the task stack")
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     source = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
+    assert_bounded_ui_snapshots(source)
     start = source.index("  bool handleCompactSettingsInput(char c)")
     end = source.index("\n  }\n#endif", start) + len("\n  }")
     body = source[start:end]
     helper = (ROOT / "examples/companion_radio/ui-new/ConfirmedChoice.h").as_posix()
+    snapshot_helper = (ROOT / "examples/companion_radio/ui-new/CheckedUiSnapshot.h").as_posix()
     code = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <new>
+static bool fail_snapshot_allocation=false;
+static unsigned allocation_attempts=0;
+void* operator new(size_t size,const std::nothrow_t&) noexcept {
+  ++allocation_attempts;
+  return fail_snapshot_allocation ? nullptr : malloc(size);
+}
+void operator delete(void* p) noexcept { free(p); }
+void operator delete(void* p,size_t) noexcept { free(p); }
 #define UI_SMART_B11_EXTRAS 1
 #define UI_ADC_MULTIPLIER_PAGE 1
 #define KEY_PREV 'p'
@@ -40,7 +69,7 @@ struct Mesh {
     return false;
   }
 } the_mesh;
-struct Task { void showAlert(const char*,int) {} void runHardwareTestStep(int) {} } task;
+struct Task { int alerts=0; void showAlert(const char*,int) { ++alerts; } void runHardwareTestStep(int) {} } task;
 struct HomeScreen {
  enum HomePage { SETTINGS, ADC, ADC_RESET, FAVORITE_PICKER, FAVORITE_SLOT_1,
   FAVORITE_SLOT_2,FAVORITE_SLOT_3,CONTROLS_HELP,NOTIFY_PICKER,HARDWARE_TEST,ABOUT };
@@ -63,13 +92,37 @@ struct HomeScreen {
  void activateCompactSetting(uint8_t) { ++activations; }
 '''
     help_count = re.search(r"static constexpr uint8_t CONTROLS_HELP_LINE_COUNT = \d+;", source)[0]
-    code = '#include "' + helper + '"\n' + code + help_count + "\n" + body + "\n};\n"
+    code = '#include "' + helper + '"\n#include "' + snapshot_helper + '"\n' + code + help_count + "\n" + body + "\n};\n"
     code += r'''
 static int checks=0;
 #define CHECK(expr) do { ++checks; if(!(expr)) { fprintf(stderr,"failed line %d: %s\n",__LINE__,#expr); exit(1); } } while(0)
 int main() {
  HomeScreen h;
  the_mesh.prefs=&h.prefs;
+ // The real helper owns an independent copy; null sources never allocate.
+ {
+   const unsigned attempts=allocation_attempts;
+   smartui::CheckedUiSnapshot<NodePrefs> empty(nullptr);
+   CHECK(!empty && empty.get()==nullptr); CHECK(allocation_attempts==attempts);
+   smartui::CheckedUiSnapshot<NodePrefs> snapshot(&h.prefs);
+   CHECK(snapshot && snapshot.get()!=&h.prefs);
+   h.prefs.favorite_setting_1=7; CHECK((*snapshot).favorite_setting_1==1);
+   h.prefs.favorite_setting_1=1;
+   fail_snapshot_allocation=true;
+   smartui::CheckedUiSnapshot<NodePrefs> denied(&h.prefs);
+   CHECK(!denied && denied.get()==nullptr); CHECK(h.prefs.favorite_setting_1==1);
+   fail_snapshot_allocation=false;
+ }
+ // Allocation failure happens before any mutation, save, undo or navigation.
+ h._page=HomeScreen::FAVORITE_PICKER; h._favorite_picker.add(8); h._favorite_picker.begin(8);
+ fail_snapshot_allocation=true; const unsigned allocations_before=allocation_attempts;
+ CHECK(h.handleCompactSettingsInput(KEY_ENTER));
+ CHECK(allocation_attempts==allocations_before+1 && task.alerts==1);
+ CHECK(h.prefs.favorite_setting_1==1 && the_mesh.saves==0 && h.undos==0);
+ CHECK(h._page==HomeScreen::FAVORITE_PICKER);
+ h._page=HomeScreen::ABOUT; const unsigned readonly_before=allocation_attempts;
+ CHECK(h.handleCompactSettingsInput(KEY_ENTER)); CHECK(allocation_attempts==readonly_before);
+ fail_snapshot_allocation=false; h._favorite_picker.reset(); h._page=HomeScreen::SETTINGS;
  h._compact_settings_cursor=2; h._compact_root_cursor=2; h._compact_group_cursors[2]=3;
  h.handleCompactSettingsInput(KEY_ENTER);
  CHECK(h._compact_settings_group==2 && h._compact_settings_cursor==3 && h._compact_settings_depth==1);

@@ -581,9 +581,12 @@ check(
             'scratch = "/prefs.json.tmp"',
             'backup = "/prefs.json.bak"',
             "_prefs.saveSerial(file)",
-            "verification.loadSerial(verify_file)",
+            "std::unique_ptr<NodePrefs> verification(new (std::nothrow) NodePrefs(_prefs));",
+            "if (!verification) return false;",
+            "verification->loadSerial(verify_file)",
+            "memcmp(verification->quick_replies, _prefs.quick_replies,",
             "commitScratch(_fs, target, scratch, backup,",
-            "prefsFileValid(_fs, target, _prefs)",
+            "prefsFileValid(_fs, target, *verification)",
         ),
     )
     and has_all(
@@ -1053,7 +1056,10 @@ check(
     ))
     and "_low_batt_strikes = 0;" in battery_toggle
     and has_all(uitask, (
-        "const uint16_t shutdownThreshold = getLowBatteryShutdownThreshold();",
+        "const uint16_t shutdownThreshold = smartui::effectiveBatteryShutdownThreshold(",
+        "getLowBatteryShutdownThreshold(), LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS,",
+        "_board != NULL && _board->isExternalPowered());",
+        "if (_low_batt_threshold != shutdownThreshold)",
         "const smartui::BatteryReading reading = readSafetyBattery();",
         "_low_batt_strikes = smartui::nextLowBatteryStrikeCount(_low_batt_strikes,",
         "reading, shutdownThreshold, LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT);",
@@ -1068,6 +1074,7 @@ check(
             "if (!reading.valid) return strikes",
             "if (reading.millivolts >= threshold) return 0;",
             "medianBatteryReading",
+            "return external_power_confirmed ? floor : normal;",
         ),
     )
     and has_all(
@@ -1306,16 +1313,19 @@ check(
 
 unread_class = between(uitask, "class MsgPreviewScreen", "void UITask::begin")
 check(
-    "Unread preview is an aggregated direct-sender list",
+    "Unread inbox selects exact stored messages and offers targeted actions",
     has_all(
         unread_class,
         (
             "char sender[62];",
-            "senderWasShownFromNewer",
-            "senderMessageCount",
-            "uniqueDirectSenderCount",
-            "renderUnreadSenders",
-            '"ЛС: %d чел / %d"',
+            "uint32_t preview_id;",
+            "MsgEntry opened_entry = {};",
+            "opened_entry = unread[unreadIndexFromNewest(selectedOffset())];",
+            "removePreviewById(opened_entry.preview_id);",
+            "_task->localMessageRead(opened_entry.generation);",
+            "_task->dismissMessageNotification(opened_entry.generation);",
+            "_task->replyToIncomingMessage(opened_entry.sender_id, opened_entry.sender_id_len, opened_entry.sender)",
+            '"Напомнить 15м"',
             "drawFittedUnreadText",
         ),
     )
@@ -1324,24 +1334,24 @@ check(
     and '"(CH2)' not in unread_class
     and '"(П)' not in unread_class
     and "(void)path_len;" in unread_class,
-    "the screen must show clean companion names, per-sender counts and the latest snippet, not hop prefixes/history",
+    "selection, reply, read and snooze must bind one stored identity, never a shifting list ordinal or the whole inbox",
 )
 
 unread_render = between(unread_class, "int render(DisplayDriver& display) override", "bool handleInput")
 check(
-    "Unread sender list uses the compact font contract",
+    "Unread list and full-message detail use the compact font contract",
     "uiPushCompactSettingsFont(display)" in unread_render,
     "T114 unread must not inherit XXL; use the same compact font guard as other dense lists",
 )
 
 check(
-    "Unread auto-scroll cannot paint over its header",
-    unread_class.count("y >= y_start && y < display.height()") >= 2,
-    "both sender and snippet rows must be clipped at content_y/y_start, not merely at -line_h",
+    "Unread full-message scroll cannot paint over header or action footer",
+    "draw && y >= top && y + line_h <= bottom" in between(unread_class, "int renderDetailText(", "int render(DisplayDriver&"),
+    "body ink must fit completely inside the viewport between immutable sender identity and action rows",
 )
 
 check(
-    "DM synchronization uses stable identity, generations and a no-double-delete debt",
+    "DM synchronization preserves local unread and binds notification state to one generation",
     has_all(
         uitask,
         (
@@ -1350,11 +1360,7 @@ check(
             "generation, sender_id, sender_id_len);",
             "memcmp(a.sender_id, b.sender_id, a.sender_id_len) == 0",
             "snprintf(out, out_len, \"%s #%02X%02X\", entry.sender,",
-            "uint16_t direct_sync_debt = 0;",
-            "if (locally_dismissed) addDirectSyncDebt(1);",
-            "if (locally_dismissed && num_unread > 0) addDirectSyncDebt((uint16_t)num_unread);",
-            "if (num_unread >= MAX_UNREAD_MSGS)",
-            "if (!preview->consumeDirectSyncDebt()) preview->removeOldestPreview(false);",
+            "if (num_unread < MAX_UNREAD_MSGS) num_unread++;",
             "_msgcount = preview->unreadPreviewCount();",
             "should_show_preview = should_show_preview && direct_preview;",
             "void UITask::messageTransferState(uint32_t generation, uint8_t flags,",
@@ -1373,8 +1379,11 @@ check(
         "_ui->messageTransferState(\n                ui_generation, ui_flags,",
         "UIMessageTransferState::queuedToCompanion",
     ))
-    and has_all(mymesh_h, ("uint32_t ui_generation;", "uint8_t ui_flags;")),
-    "identity must survive duplicate names; only the exact transport-accepted generation may suppress its own reminder; local dismiss/clear/eviction still incurs one BLE debt",
+    and has_all(mymesh_h, ("uint32_t ui_generation;", "uint8_t ui_flags;"))
+    and "_ui->directMsgRead(" not in mymesh
+    and "removeOldestPreview" not in between(uitask, "void UITask::directMsgRead(", "void UITask::newMsg(")
+    and "direct_sync_debt" not in unread_class,
+    "identity must survive duplicate names; transport acceptance is not human read; local selected read and eviction never become count-only companion acknowledgements",
 )
 
 night_handler = between(uitask, "void UITask::nightModeHandler", "void UITask::beginImportantNotify")

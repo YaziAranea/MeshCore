@@ -4,13 +4,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReadableStream, WritableStream } = require('node:stream/web');
-const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo } = require('./core.js');
+const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply } = require('./core.js');
 
 const STATUS = 'Mode=BLE companion=idle via=none USB-service=on WiFi-config=no link=down IP=none approval=none';
 const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
 const PASSWORD_PROMPT = "Password input is hidden; enter 8..64 bytes, blank for open WiFi, or 'cancel':";
 const HELP = 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.';
 const HELP_INFO = HELP.replace('Commands: status', 'Commands: info | status');
+const HELP_REPLIES = HELP_INFO.replace('wifi forget | help', 'wifi forget | reply get N | reply set N HEX | help');
 const INFO = 'SmartUI=0.06 core=PS22b17 build=1234abcd upstream=5ad64e00 capabilities=BLE,USB,WiFi board=Heltec V3';
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
@@ -26,6 +27,7 @@ class FakePort {
     this.configured = false;
     this.closed = false;
     this.signals = [];
+    this.replies = Array(9).fill('');
   }
   async open(options) {
     if (this.options.openError) throw this.options.openError;
@@ -42,7 +44,7 @@ class FakePort {
           else if (this.input || this.stage === 'password') this.command(this.input);
           this.input = '';
           this.overflow = false;
-        } else if (this.input.length < 96) this.input += char;
+        } else if (this.input.length < (this.options.replies ? 160 : 96)) this.input += char;
         else this.overflow = true;
       }
       if (this.options.hangWrite && this.options.hangWrite(text)) return new Promise(() => {});
@@ -84,9 +86,22 @@ class FakePort {
       return;
     }
     const command = raw.trim().toLowerCase();
+    const getReply = /^reply get ([1-9])$/.exec(command);
+    const setReply = /^reply set ([1-9]) (-|[0-9a-f]+)$/.exec(command);
+    if (this.options.replies && getReply) {
+      const slot = Number(getReply[1]) - 1;
+      this.reply('Reply=' + (slot + 1) + ' hex=' + encodeReply(this.replies[slot])); return;
+    }
+    if (this.options.replies && setReply) {
+      const slot = Number(setReply[1]) - 1;
+      const value = decodeReply('Reply=' + (slot + 1) + ' hex=' + setReply[2], slot);
+      if (value) { this.replies[slot] = value.text; this.reply('Reply ' + (slot + 1) + ' saved.'); }
+      else this.reply('Invalid quick reply.');
+      return;
+    }
     if (this.options.readOnly && command !== 'status') { this.reply('Connection settings are read-only during storage recovery.'); return; }
     switch (command) {
-      case 'help': this.reply(this.options.info ? HELP_INFO : HELP); break;
+      case 'help': this.reply(this.options.replies ? HELP_REPLIES : this.options.info ? HELP_INFO : HELP); break;
       case 'info': this.reply(this.options.info || "Unknown command. Type 'help'."); break;
       case 'status': this.reply(STATUS.replace('Mode=BLE', 'Mode=' + this.mode).replace('WiFi-config=no', 'WiFi-config=' + (this.configured ? 'yes' : 'no'))); break;
       case 'wifi setup': this.stage = 'ssid'; this.reply(SSID_PROMPT); break;
@@ -362,7 +377,7 @@ for (const stage of ['ssid', 'password', 'testing', 'passed']) {
 
 test('reconnect handles persistent firmware line overflow before issuing commands', async () => {
   const { instance, port } = await connected({ stage: 'ssid', partial: 'x'.repeat(96), overflow: true });
-  assert.equal(port.rawWrites.filter(value => value === '\b'.repeat(96) + 'cancel\n').length, 2);
+  assert.equal(port.rawWrites.filter(value => value === '\b'.repeat(160) + 'cancel\n').length, 2);
   assert.equal(port.stage, 'idle');
   assert.equal(port.password, undefined);
   await instance.disconnect();
@@ -565,13 +580,81 @@ test('lost Save ACK is explicitly uncertain, even if resync succeeds', async () 
   await instance.disconnect();
 });
 
-test('known persistent Forget cleanup failure invalidates old status', async () => {
+test('known persistent Forget cleanup failure refreshes status and keeps retry possible', async () => {
   const { instance } = await connected({ onCommand: (raw, target) => {
     if (raw === 'wifi forget') { target.reply('WiFi cleared in RAM; persistent cleanup failed.'); return false; }
   } });
   await assert.rejects(instance.forgetWifi(), code('FORGET_FAILED'));
-  assert.equal(instance.state.verified, false);
-  assert.equal(instance.state.status, null);
+  assert.equal(instance.state.verified, true);
+  assert.equal(instance.state.status.mode, 'ble');
+  await instance.disconnect();
+});
+
+test('new cleanup failure is recognized and local recovery permits retry while USB framed transport is disabled', async () => {
+  let recovery = true, attempts = 0;
+  const {instance,port} = await connected({onCommand(raw,p) {
+    if (['cancel','wifi cancel'].includes(raw) && recovery) { p.reply('Connection settings are read-only during storage recovery.'); return false; }
+    if (raw === 'status') { p.reply(STATUS.replace('Mode=BLE', recovery ? 'Mode=USB' : 'Mode=BLE') + ' storage=' + (recovery ? 'recovery-required' : 'ok')); return false; }
+    if (raw === 'wifi forget') {
+      if (++attempts === 1) p.reply("WiFi cleared in RAM; persistent cleanup failed. Do not assume credentials were erased. Retry 'wifi forget'.");
+      else {recovery = false; p.reply('WiFi credentials forgotten.');}
+      return false;
+    }
+  }});
+  assert.equal(instance.state.status.recoveryRequired,true);
+  await assert.rejects(instance.setMode('ble'),code('READ_ONLY'));
+  await assert.rejects(instance.forgetWifi(),code('FORGET_FAILED'));
+  assert.equal(instance.state.verified,true);
+  assert.equal((await instance.forgetWifi()).forgotten,true);
+  assert.equal(instance.state.status.readOnly,false);
+  assert.equal(port.commands.filter(line => line === 'wifi forget').length,2);
+  await instance.disconnect();
+});
+
+test('quick replies validate UTF8 and require an explicit new help capability', async () => {
+  assert.equal(encodeReply(''),'-');
+  assert.equal(encodeReply('я'.repeat(32)).length,128);
+  for (const text of ['x'.repeat(65),'я'.repeat(33),'bad\n','\ud800']) assert.throws(() => encodeReply(text),code('INVALID_REPLY'));
+  for (const value of ['00','c080','eda080','f4908080','0a']) assert.equal(decodeReply('Reply=1 hex='+value,0),null);
+  const {instance,port} = await connected({info:INFO});
+  const before = port.commands.length;
+  await assert.rejects(instance.loadQuickReplies(),code('REPLIES_UNAVAILABLE'));
+  await assert.rejects(instance.saveQuickReply(0,'hello'),code('REPLIES_UNAVAILABLE'));
+  assert.equal(port.commands.length,before);
+  await instance.disconnect();
+});
+
+test('quick replies nine slots read, save max UTF8, clear default and verify readback', async () => {
+  const {instance,port,seen} = await connected({info:INFO,replies:true});
+  assert.equal(instance.state.quickRepliesSupported,true);
+  assert.deepEqual(await instance.loadQuickReplies(),Array(9).fill(''));
+  const phrase = 'я'.repeat(32);
+  assert.equal((await instance.saveQuickReply(8,phrase)).text,phrase);
+  assert.equal(port.replies[8],phrase);
+  assert.equal(instance.state.replies[8],phrase);
+  assert.equal(JSON.stringify(seen.events).includes(phrase),false);
+  instance.state.replies[8] = 'cannot modify';
+  assert.equal(instance.state.replies[8],phrase);
+  await instance.saveQuickReply(8,'');
+  assert.equal(port.replies[8],'');
+  assert.equal(port.commands.includes('reply set 9 -'),true);
+  await instance.disconnect();
+  assert.equal(instance.state.quickRepliesSupported,false);
+});
+
+test('quick reply save failure preserves previous value; mismatched readback fails closed', async () => {
+  let fail = true;
+  const {instance,port} = await connected({info:INFO,replies:true,onCommand(raw,p) {
+    if(raw.startsWith('reply set')) {p.reply(fail ? 'Quick reply save failed.' : 'Reply 1 saved.'); return false;}
+  }});
+  await instance.loadQuickReplies();
+  await assert.rejects(instance.saveQuickReply(0,'replacement'),code('REPLY_FAILED'));
+  assert.equal(instance.state.replies[0],'');
+  assert.equal(instance.state.verified,true);
+  fail = false;
+  await assert.rejects(instance.saveQuickReply(0,'replacement'),code('REPLY_UNCERTAIN'));
+  assert.equal(instance.state.verified,false);
+  assert.equal(port.replies[0],'');
   await instance.disconnect();
 });
 

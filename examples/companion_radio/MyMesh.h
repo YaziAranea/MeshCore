@@ -144,6 +144,10 @@ struct RecentChatEntry {
   int8_t rssi;
   char origin[32];
   char text[160];
+  // A channel slot can be reassigned by the app. Keep the immutable channel
+  // key so the filtered history never acquires messages from its old owner.
+  uint8_t channel_idx;
+  uint8_t channel_identity[PUB_KEY_SIZE];
 };
 
 struct LinkTestStatus {
@@ -194,6 +198,7 @@ public:
   void resetLocalAppSession();
   bool isCLIRescue() const { return _cli_rescue; }
   bool isStorageRecoveryRequired() const { return storage_recovery_required; }
+  bool isRadioStartupError() const { return _radio_startup_error; }
 #endif
   bool isPhoneGpsEnabled() const {
 #if UI_PHONE_GPS == 1
@@ -209,6 +214,8 @@ public:
   bool setPhoneGpsFix(int32_t lat, int32_t lon, int32_t alt = 0);
   bool getShareableLocation(double& lat, double& lon, double& alt) const;
   bool sendQuickReply(const char* text);
+  const char* getQuickReplyOverride(uint8_t slot) const;
+  bool setQuickReplyOverride(uint8_t slot, const char* text);
   int getQuickReplyChannelCount();
   int getQuickReplyContactCount();
   bool getQuickReplyChannel(uint16_t list_idx, uint8_t& channel_idx, ChannelDetails& channel);
@@ -226,6 +233,9 @@ public:
   int  getRecentNetworkStatus(NetworkStatusEntry dest[], int max_num,
                               uint32_t max_age_secs = NETWORK_STATUS_MAX_AGE_SECS);
   int  getRecentChannelMessages(RecentChatEntry dest[], int max_num);
+  int  getRecentChannelMessagesForChannel(RecentChatEntry dest[], int max_num,
+                                          const uint8_t secret[PUB_KEY_SIZE]);
+  uint32_t getRecentChannelMessagesRevision() const { return recent_chat_revision; }
   bool startLinkTest();
   void getLinkTestStatus(LinkTestStatus& dest) const;
   unsigned long getChannelBusyTime() const { return channel_busy_ms; }
@@ -373,7 +383,8 @@ private:
   uint8_t getRouteStatusFlags(uint8_t path_len) const;
   void noteNetworkStatus(const ContactInfo& contact, uint8_t path_len);
   void noteTrafficStatus(const char* name, uint8_t slot, uint8_t path_len, uint8_t flags);
-  void noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text);
+  void noteChannelChat(const char* channel_name, mesh::Packet* pkt, const char* text,
+                       uint8_t channel_idx);
   bool textMentionsNodeName(const char* text, const char* node_name);
   void sampleChannelBusy();
   void updateAutoAdvertTimer();
@@ -407,6 +418,7 @@ private:
   uint32_t sign_data_len;
   mesh::storage::DeferredSavePolicy dirty_contacts;
   bool storage_recovery_required;
+  bool _radio_startup_error = false;
   bool storage_recovery_error_pending;
   uint32_t next_ui_message_generation;
 
@@ -446,6 +458,7 @@ private:
   // it in the long-lived mesh object instead of consuming ~1 KB of loop-task stack.
   NetworkStatusEntry mention_status_scratch[NETWORK_STATUS_TABLE_SIZE];
   RecentChatEntry recent_chat[RECENT_CHAT_TABLE_SIZE];
+  uint32_t recent_chat_revision = 0;
   LinkTestStatus link_test;
   int8_t last_rx_snr_q4;
   int8_t last_rx_rssi;

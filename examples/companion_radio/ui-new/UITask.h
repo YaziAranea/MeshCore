@@ -132,6 +132,7 @@ class UITask : public AbstractUITask {
   uint64_t _uptime_accumulated_ms;
   uint32_t _uptime_last_millis;
   uint8_t _low_batt_strikes;
+  uint16_t _low_batt_threshold;
   mutable smartui::BatteryDisplayCache _battery_display;
   uint32_t next_backlight_btn_check = 0;
 #ifdef PIN_STATUS_LED
@@ -214,6 +215,7 @@ class UITask : public AbstractUITask {
   void invalidateBatteryCache();
   smartui::BatteryReading readSafetyBattery() const;
   bool hasActiveComposeSession() const;
+  bool hasActiveInboxSession() const;
   void markDisplayWake(bool reset_to_clock);
   void scheduleDisplayRecover(bool reset_to_clock, unsigned long now);
   void displayRecoverHandler();
@@ -225,6 +227,7 @@ class UITask : public AbstractUITask {
   void connectionApprovalHandler();
 #endif
   void handlePendingPopupWake();
+  void snoozedMessageHandler();
   void extendAutoOff(unsigned long now = 0);
   void stopNotifyOutputs();
   void finishImportantNotify(bool stop_tone, bool clear_pending = true);
@@ -292,6 +295,7 @@ public:
     _uptime_accumulated_ms = 0;
     _uptime_last_millis = 0;
     _low_batt_strikes = 0;
+    _low_batt_threshold = 0;
     _last_activity_ms = 0;
     _display_wake_lock_until = 0;
     _display_recover_until = 0;
@@ -341,6 +345,10 @@ public:
 
   void gotoHomeScreen() { setCurrScreen(home); }
   void gotoHomeFirstScreen();
+  bool replyToIncomingMessage(const uint8_t* public_key, uint8_t key_len, const char* name);
+  void showUnreadMessages();
+  void dismissMessageNotification(uint32_t generation);
+  void localMessageRead(uint32_t generation);
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   const char* getNodeName() const {

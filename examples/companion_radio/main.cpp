@@ -149,6 +149,14 @@ static const char* companionBoardName() {
   return board.getManufacturerName();
 }
 
+static const char* companionQuickReply(uint8_t slot) {
+  return the_mesh.getQuickReplyOverride(slot);
+}
+
+static bool setCompanionQuickReply(uint8_t slot, const char* text) {
+  return the_mesh.setQuickReplyOverride(slot, text);
+}
+
 static bool isCompanionStorageQuarantined() {
   return the_mesh.isStorageRecoveryRequired();
 }
@@ -342,6 +350,15 @@ void setup() {
   }
 
   if (!mesh_started) {
+    // A failed radio profile is not identity corruption. Never offer a
+    // destructive identity reset as the remedy for an SPI/configuration error.
+    if (the_mesh.isRadioStartupError()) {
+      MESH_DEBUG_PRINTLN("RADIO ERROR: cannot apply a supported radio profile");
+#ifdef DISPLAY_CLASS
+      showFatalStorageError(disp, "RADIO ERROR", "CHECK MODULE");
+#endif
+      halt();
+    }
     MESH_DEBUG_PRINTLN("IDENTITY ERROR: restore a valid identity backup or perform an explicit factory reset");
 #ifdef DISPLAY_CLASS
     showFatalStorageError(disp, "IDENTITY ERROR", "RESTORE / RESET");
@@ -420,6 +437,8 @@ void setup() {
   connection_hooks.isCliRescue = isCompanionCliRescue;
   connection_hooks.isStorageQuarantined = isCompanionStorageQuarantined;
   connection_hooks.getBoardName = companionBoardName;
+  connection_hooks.getQuickReply = companionQuickReply;
+  connection_hooks.setQuickReply = setCompanionQuickReply;
   connection_controller.begin(
       store, interface_manager, Serial,
     #if defined(ESP32)

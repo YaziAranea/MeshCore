@@ -2,6 +2,8 @@
 #include "DataStore.h"
 #include <helpers/AdvertDataHelpers.h>
 #include <helpers/StorageTransaction.h>
+#include <memory>
+#include <new>
 
 #if defined(EXTRAFS) || defined(QSPIFLASH)
   #define MAX_BLOBRECS 100
@@ -307,12 +309,13 @@ static bool commitScratch(FILESYSTEM* fs, const char* target,
 }
 
 static bool prefsFileValid(FILESYSTEM* fs, const char* filename,
-                           const NodePrefs& defaults) {
+                           NodePrefs& scratch) {
   if (!fs->exists(filename)) return false;
   File file = openStorageRead(fs, filename);
   if (!file) return false;
-  NodePrefs candidate(defaults);
-  const bool valid = candidate.loadSerial(file);
+  // This is syntax validation only. Reuse the caller's independent verifier,
+  // never live prefs or another ~872-byte stack copy on nRF's 4 KiB loop stack.
+  const bool valid = scratch.loadSerial(file);
   file.close();
   return valid;
 }
@@ -603,6 +606,7 @@ void DataStore::loadPrefs(NodePrefs& prefs) {
     if (prefs_ok) {
       // Parsing is transactional too: malformed/truncated JSON never leaves a
       // half-updated live settings object.
+      candidate.normalizeQuickReplies();
       prefs = candidate;
       break;
     }
@@ -704,6 +708,12 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
   static const char* scratch = "/prefs.json.tmp";
   static const char* backup = "/prefs.json.bak";
 
+  // Settings callers may already retain rollback snapshots. Keep this further
+  // complete parsing copy off the small nRF loop stack. Allocation failure is
+  // explicit and happens before touching any persistent generation.
+  std::unique_ptr<NodePrefs> verification(new (std::nothrow) NodePrefs(_prefs));
+  if (!verification) return false;
+
   if (!prepareScratch(_fs, scratch)) return false;
   File file = openScratch(_fs, scratch);
   if (!file) return false;
@@ -713,13 +723,14 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
 
   // Re-open and parse the exact bytes which will be published.  A short write
   // or syntactically complete-but-unreadable file never replaces good prefs.
-  NodePrefs verification(_prefs);
   File verify_file = openRead(_fs, scratch);
-  success = success && verify_file && verification.loadSerial(verify_file);
+  success = success && verify_file && verification->loadSerial(verify_file);
+  success = success && memcmp(verification->quick_replies, _prefs.quick_replies,
+                              sizeof(_prefs.quick_replies)) == 0;
   if (verify_file) verify_file.close();
   if (success) {
     success = commitScratch(_fs, target, scratch, backup,
-                            prefsFileValid(_fs, target, _prefs));
+                            prefsFileValid(_fs, target, *verification));
   }
   if (!success && _fs->exists(scratch)) _fs->remove(scratch);
   return success;

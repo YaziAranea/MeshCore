@@ -10,13 +10,14 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { chromium } = require('playwright');
 
 const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.1.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.2.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -36,13 +37,14 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
   }
   const mock = window.__serialMock = {
-    requests: 0, commands: [], raw: [], mode: 'BLE', configured: false,
+    requests: 0, commands: [], raw: [], mode: localRecovery ? 'USB' : 'BLE', configured: false,
+    replies, localRecovery, quickReplies: Array(9).fill(''),
     stage: 'idle', manualTest, readOnly, info, closed: false, ssid: null, password: null,
     emit(text) {
       if (this.closed) return;
@@ -72,13 +74,24 @@ function installSerialMock({ supported, readOnly, manualTest, info }) {
         return;
       }
       const command = raw.trim().toLowerCase();
-      if (this.readOnly && command !== 'status') { this.emit('Connection settings are read-only during storage recovery.'); return; }
+      if ((this.readOnly || this.localRecovery) && command !== 'status' && !(this.localRecovery && command === 'wifi forget')) { this.emit('Connection settings are read-only during storage recovery.'); return; }
+      const getReply = /^reply get ([1-9])$/.exec(command);
+      const setReply = /^reply set ([1-9]) (-|[0-9a-f]+)$/.exec(command);
+      if (this.replies && getReply) {
+        const slot=Number(getReply[1])-1;
+        this.emit('Reply='+(slot+1)+' hex='+SmartUiConsole.encodeReply(this.quickReplies[slot])); return;
+      }
+      if (this.replies && setReply) {
+        const slot=Number(setReply[1])-1;
+        this.quickReplies[slot]=SmartUiConsole.decodeReply('Reply='+(slot+1)+' hex='+setReply[2],slot).text;
+        this.emit('Reply '+(slot+1)+' saved.');return;
+      }
       switch (command) {
-        case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.'); break;
+        case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | ' + (this.replies ? 'reply get N | reply set N HEX | ' : '') + 'help\r\nCredential input is not echoed. WiFi is saved only after a passed test.'); break;
         case 'info': this.emit(this.info || "Unknown command. Type 'help'."); break;
         case 'status': {
           const online = this.mode === 'WiFi' && this.configured;
-          this.emit('Mode=' + this.mode + ' companion=idle via=none USB-service=on WiFi-config=' + (this.configured ? 'yes' : 'no') + ' link=' + (online ? 'associated' : 'down') + ' IP=' + (online ? '192.168.1.77' : 'none') + ' approval=none');
+          this.emit('Mode=' + this.mode + ' companion=idle via=none USB-service=on WiFi-config=' + (this.configured ? 'yes' : 'no') + ' link=' + (online ? 'associated' : 'down') + ' IP=' + (online ? '192.168.1.77' : 'none') + ' approval=none storage=' + (this.localRecovery ? 'recovery-required' : 'ok'));
           break;
         }
         case 'wifi setup': this.stage = 'ssid'; this.emit('SSID input is hidden; enter SSID, then Enter:'); break;
@@ -90,7 +103,7 @@ function installSerialMock({ supported, readOnly, manualTest, info }) {
         case 'mode wifi': this.mode = 'WiFi'; this.emit('Mode WiFi saved.'); break;
         case 'mode ble': this.mode = 'BLE'; this.emit('Mode BLE saved.'); break;
         case 'mode usb': this.mode = 'USB'; break; // Firmware closes service TX before an ACK.
-        case 'wifi forget': this.configured = false; this.mode = 'BLE'; this.emit('WiFi credentials forgotten.'); break;
+        case 'wifi forget': this.configured = false; this.mode = 'BLE'; this.localRecovery = false; this.emit('WiFi credentials forgotten.'); break;
         default: this.emit("Unknown command. Type 'help'.");
       }
     },
@@ -127,7 +140,7 @@ async function fixture(options = {}) {
   const network = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery) });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -357,4 +370,68 @@ test('read-only console blocks settings and remains disconnectable', async () =>
     await f.page.locator('#disconnect').click();
     await f.page.waitForFunction(() => !document.getElementById('connect').disabled);
   } finally { await f.close(); }
+});
+
+test('custom phrases require explicit capability, save UTF8 with readback, and clear back to default',async()=>{
+  const f=await fixture({replies:true,info:'SmartUI=0.06-test.1 core=1.17.1 build=12345678 upstream=abcdef01 capabilities=BLE,USB board=Heltec T114'});
+  try {
+    await connect(f.page);
+    assert.equal(await f.page.locator('#reply-0').isDisabled(),true);
+    await f.page.locator('#replies-load').click();
+    await f.page.waitForFunction(()=>!document.getElementById('reply-0').disabled);
+    const phrase='Я на месте';
+    await f.page.locator('#reply-0').fill(phrase);
+    await f.page.locator('#reply-save-0').click();
+    await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('прочитана обратно'));
+    assert.equal(await f.page.evaluate(()=>window.__serialMock.quickReplies[0]),phrase);
+    assert.equal(await f.page.locator('#reply-0').inputValue(),phrase);
+    await f.page.locator('#reply-8').fill('я'.repeat(33));
+    await f.page.locator('#reply-save-8').click();
+    await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('не более 64'));
+    assert.equal(await f.page.evaluate(()=>window.__serialMock.quickReplies[8]),'');
+    await confirm(f.page,'#reply-clear-0',true);
+    await f.page.waitForFunction(()=>document.getElementById('reply-0').value==='');
+    assert.equal(await f.page.evaluate(()=>window.__serialMock.quickReplies[0]),'');
+    for(const width of [320,390,1280]) {await f.page.setViewportSize({width,height:1000});await noOverlap(f.page);}
+    await f.page.screenshot({path:path.join(output,'custom-replies-1280.png'),fullPage:true});
+  } finally {await f.close();}
+});
+
+test('local USB recovery leaves status and safe cleanup action accessible',async()=>{
+  const f=await fixture({localRecovery:true});
+  try {
+    await connect(f.page);
+    assert.equal(await f.page.locator('#refresh').isEnabled(),true);
+    assert.equal(await f.page.locator('#mode-ble').isDisabled(),true);
+    await f.page.locator('summary').filter({hasText:'Служебные события'}).click();
+    assert.equal(await f.page.locator('#forget').isEnabled(),true);
+    await confirm(f.page,'#forget',true);
+    await f.page.waitForFunction(()=>document.getElementById('mode').textContent==='Bluetooth');
+    assert.equal(await f.page.locator('#mode-ble').isEnabled(),true);
+  } finally {await f.close();}
+});
+
+test('firmware preflight stays offline without serial access and displays merged loss warning',async()=>{
+  const f=await fixture({supported:false});
+  try {
+    const commit='12345678'+'a'.repeat(32),version='0.06-test.1';
+    const payload=Buffer.from('V3 SmartUI '+version+'\0SmartUI-source:12345678\0');
+    const end=Math.floor((32+payload.length+16)/16)*16;
+    const raw=Buffer.alloc(0x10000+end+256,0xff),app=Buffer.alloc(end);
+    app[0]=0xe9;app[1]=1;app.writeUInt32LE(payload.length,28);payload.copy(app,32);
+    let checksum=0xef;for(const byte of payload)checksum^=byte;app[end-1]=checksum;
+    raw[0]=0xe9;app.copy(raw,0x10000);
+    const name='V3-test-merged.bin';
+    const manifest={schema_version:2,commit,version,firmware:[{name,bytes:raw.length,sha256:createHash('sha256').update(raw).digest('hex'),board:'Heltec V3 OLED',environment:'Heltec_v3_companion_radio_ble_smartui',source_commit:commit,image_kind:'esp32-fresh-install-merged',flash_offset:'0x00000'}]};
+    await f.page.locator('#firmware-file').setInputFiles({name,mimeType:'application/octet-stream',buffer:raw});
+    await f.page.locator('#firmware-manifest').setInputFiles({name:'RELEASE-MANIFEST.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(manifest))});
+    await f.page.locator('#firmware-board').selectOption('v3');
+    await f.page.locator('#firmware-check').click();
+    await f.page.waitForFunction(()=>document.getElementById('firmware-result').textContent.includes('Проверка файла пройдена'));
+    const result=await f.page.locator('#firmware-result').textContent();
+    assert.match(result,/даже без Erase/);assert.match(result,/не подлинность|а не подлинность/);assert.match(result,/вручную/);
+    await f.page.locator('#firmware-board').selectOption('t114');await f.page.locator('#firmware-check').click();
+    await f.page.waitForFunction(()=>document.getElementById('firmware-result').textContent.includes('другой платы'));
+    assert.equal(await f.page.evaluate(()=>Boolean(window.__serialMock)),false);
+  } finally {await f.close();}
 });

@@ -15,8 +15,8 @@ public:
   explicit ReplayStream(const char* text) : _text(text), _len(strlen(text)) { }
 
   int available() override { return _len - _pos; }
-  int read() override { return _pos < _len ? _text[_pos++] : -1; }
-  int peek() override { return _pos < _len ? _text[_pos] : -1; }
+  int read() override { return _pos < _len ? static_cast<unsigned char>(_text[_pos++]) : -1; }
+  int peek() override { return _pos < _len ? static_cast<unsigned char>(_text[_pos]) : -1; }
 };
 
 class CaptureStream : public Stream {
@@ -54,6 +54,44 @@ public:
 
   const std::string& text() const { return _text; }
 };
+
+TEST(CompanionNodePrefs, QuickRepliesDefaultsCopyAndRoundTrip) {
+  NodePrefs saved;
+  for (const auto& text : saved.quick_replies) EXPECT_EQ(0, text[0]);
+  std::strcpy(saved.quick_replies[0], "Да, понял!");
+  std::strcpy(saved.quick_replies[8], "Quote \" and \\ slash");
+  saved.timezone_offset_minutes = -210;
+  NodePrefs copied(saved), assigned;
+  assigned = copied;
+  saved.quick_replies[0][0] = 0;
+  CaptureStream output;
+  ASSERT_TRUE(assigned.saveSerial(output));
+  EXPECT_NE(std::string::npos, output.text().find("reply_9:"));
+  ReplayStream input(output.text().c_str());
+  NodePrefs loaded;
+  ASSERT_TRUE(loaded.loadSerial(input));
+  loaded.normalizeQuickReplies();
+  EXPECT_STREQ("Да, понял!", loaded.quick_replies[0]);
+  EXPECT_STREQ("Quote \" and \\ slash", loaded.quick_replies[8]);
+  EXPECT_EQ(-210, loaded.timezone_offset_minutes);
+  ReplayStream old("{name:\"old\",smart_ui:{font:1}}");
+  NodePrefs legacy;
+  ASSERT_TRUE(legacy.loadSerial(old));
+  for (const auto& text : legacy.quick_replies) EXPECT_EQ(0, text[0]);
+  EXPECT_EQ(1, legacy.ui_font);
+}
+
+TEST(CompanionNodePrefs, QuickRepliesValidateUtf8LengthAndControls) {
+  EXPECT_TRUE(smartui::validQuickReply(""));
+  EXPECT_TRUE(smartui::validQuickReply(std::string(64,'x').c_str()));
+  EXPECT_FALSE(smartui::validQuickReply(std::string(65,'x').c_str()));
+  EXPECT_TRUE(smartui::validQuickReply("Привет"));
+  for (const char* text : {"\xc0\x80", "\xed\xa0\x80", "\xf4\x90\x80\x80", "\xe2\x80\xa8", "hello\n", "\x80", "\xf0\x9f"}) EXPECT_FALSE(smartui::validQuickReply(text));
+  NodePrefs invalid;
+  std::strcpy(invalid.quick_replies[2], "bad\n");
+  invalid.normalizeQuickReplies();
+  EXPECT_STREQ("", invalid.quick_replies[2]);
+}
 
 TEST(CompanionNodePrefs, SmartUiBuzzerSettingsCreateMigrationMarkerAndRoundTrip) {
   NodePrefs saved;

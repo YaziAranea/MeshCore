@@ -1,5 +1,6 @@
 #include "ConnectionController.h"
 #include <helpers/SmartUiSleepPolicy.h>
+#include <helpers/SmartUiQuickReplies.h>
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 
@@ -159,7 +160,7 @@ ConnectionChangeError ConnectionController::mutationError() const {
 }
 
 bool ConnectionController::consoleEnabled() const {
-  if (!_started || !_console || _config.mode == CompanionMode::USB) return false;
+  if (!_started || !_console || (_config.mode == CompanionMode::USB && !_config_storage_error)) return false;
   return !(_hooks.isCliRescue && _hooks.isCliRescue());
 }
 
@@ -436,7 +437,18 @@ bool ConnectionController::loadConfig() {
   if (!_config.wifi_configured) {
     return persistCleanConfig(_config);
   } else if (choice != mesh::storage::RecoveryCandidate::PRIMARY) {
-    return saveConfig(_config);
+    // The selected .tmp/.bak may be the sole durable credential-bearing copy.
+    // Write the invalid/missing primary directly and preserve the source until
+    // the new anchor is read back; normal saveConfig() consumes its scratch.
+    // NRF FILE_O_WRITE does not necessarily truncate a malformed longer file.
+    if (fs->exists(CONFIG_PATH) && !fs->remove(CONFIG_PATH)) return false;
+    if (!writeConfigFile(CONFIG_PATH, _config)) return false;
+    Config verified;
+    const bool recovered = readConfigFile(CONFIG_PATH, verified) && configsEqual(_config, verified);
+    secureZero(&verified, sizeof(verified));
+    if (!recovered) return false;
+    if (fs->exists(CONFIG_TEMP_PATH)) fs->remove(CONFIG_TEMP_PATH);
+    return true;
   } else if (fs->exists(CONFIG_TEMP_PATH)) {
     fs->remove(CONFIG_TEMP_PATH);
   }
@@ -756,6 +768,9 @@ bool ConnectionController::startWifiSetup() {
 }
 
 void ConnectionController::cancelWifiSetup(bool restore_selected_wifi) {
+  // Helper resynchronization sends cancel even when no wizard is active.
+  // Do not disturb an already-associated network or its companion session.
+  if (_wifi_setup_stage == WifiSetupStage::IDLE) return;
   scrubCandidate();
   _wifi_setup_stage = WifiSetupStage::IDLE;
   _wifi_setup_activity = 0;
@@ -870,8 +885,67 @@ void ConnectionController::serviceConsoleTx() {
 void ConnectionController::printHelp() {
   printConsole(
       "Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | "
-      "wifi status | wifi save | wifi cancel | wifi forget | help\r\n"
+      "wifi status | wifi save | wifi cancel | wifi forget | reply get N | reply set N HEX | help\r\n"
       "Credential input is not echoed. WiFi is saved only after a passed test.\r\n");
+}
+
+void ConnectionController::handleQuickReplyCommand(const char* line) {
+  const bool get = strncmp(line, "reply get ", 10) == 0;
+  const bool set = strncmp(line, "reply set ", 10) == 0;
+  const char* value = line + 10;
+  if ((!get && !set) || value[0] < '1' || value[0] > '9' ||
+      (get ? value[1] != 0 : value[1] != ' ')) {
+    printConsole("Invalid reply command.\r\n");
+    return;
+  }
+  const uint8_t slot = static_cast<uint8_t>(value[0] - '1');
+  if (!_hooks.getQuickReply || !_hooks.setQuickReply) {
+    printConsole("Quick replies unavailable.\r\n");
+    return;
+  }
+  if (get) {
+    const char* text = _hooks.getQuickReply(slot);
+    if (!smartui::validQuickReply(text)) text = "";
+    char response[160];
+    size_t used = static_cast<size_t>(snprintf(response, sizeof(response), "Reply=%u hex=", slot + 1));
+    static const char digits[] = "0123456789abcdef";
+    if (!text[0]) response[used++] = '-';
+    for (size_t i = 0; text[i]; ++i) {
+      const uint8_t byte = static_cast<uint8_t>(text[i]);
+      response[used++] = digits[byte >> 4];
+      response[used++] = digits[byte & 15];
+    }
+    response[used++] = '\r'; response[used++] = '\n'; response[used] = 0;
+    printConsole(response);
+    return;
+  }
+  if (!mutationAllowed() || _wifi_setup_stage != WifiSetupStage::IDLE) {
+    printConsole("Quick reply save failed.\r\n");
+    return;
+  }
+  const char* hex = value + 2;
+  const size_t size = strcmp(hex, "-") == 0 ? 0 : strlen(hex);
+  char text[SMARTUI_QUICK_REPLY_MAX_BYTES + 1] = {};
+  bool valid = size <= SMARTUI_QUICK_REPLY_MAX_BYTES * 2 && size % 2 == 0 && hex[0];
+  for (size_t i = 0; valid && i < size; i += 2) {
+    uint8_t byte = 0;
+    for (unsigned half = 0; half < 2; ++half) {
+      const char c = hex[i + half];
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { valid = false; break; }
+      byte = static_cast<uint8_t>((byte << 4) | (c <= '9' ? c - '0' : c - 'a' + 10));
+    }
+    if (!byte) valid = false;
+    text[i / 2] = static_cast<char>(byte);
+  }
+  valid = valid && smartui::validQuickReply(text);
+  if (!valid) printConsole("Invalid quick reply.\r\n");
+  else if (!_hooks.setQuickReply(slot, text)) printConsole("Quick reply save failed.\r\n");
+  else {
+    char response[32];
+    snprintf(response, sizeof(response), "Reply %u saved.\r\n", slot + 1);
+    printConsole(response);
+  }
+  secureZero(text, sizeof(text));
 }
 
 void ConnectionController::printStatus() {
@@ -953,7 +1027,8 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   const bool read_only_command = strcmp(line, "status") == 0 ||
       strcmp(line, "wifi status") == 0 || strcmp(line, "info") == 0 ||
       strcmp(line, "help") == 0;
-  if ((quarantined || _config_storage_error) && !read_only_command &&
+  const bool reply_read = strncmp(line, "reply get ", 10) == 0;
+  if ((quarantined || _config_storage_error) && !read_only_command && !reply_read &&
       (quarantined || strcmp(line, "wifi forget") != 0)) {
     printConsole("Connection settings are read-only during storage recovery.\r\n");
     return;
@@ -964,6 +1039,8 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
     printInfo();
   } else if (strcmp(line, "help") == 0) {
     printHelp();
+  } else if (strncmp(line, "reply get ", 10) == 0 || strncmp(line, "reply set ", 10) == 0) {
+    handleQuickReplyCommand(line);
   } else if (strcmp(line, "mode ble") == 0) {
     printConsole(setMode(CompanionMode::BLE) ? "Mode BLE saved.\r\n" :
                                               "BLE mode unavailable or save failed.\r\n");

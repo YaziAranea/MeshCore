@@ -82,6 +82,7 @@ void RadioLibWrapper::doResetAGC() {
 }
 
 void RadioLibWrapper::resetAGC() {
+  if (!_config_valid) return;
   // make sure we're not mid-receive or mid-transmit of a packet
   if (isPacketPendingOrReceiving() || state == STATE_TX_WAIT) return;
 
@@ -201,6 +202,7 @@ void RadioLibWrapper::endNoiseFloorCalib(unsigned long now) {
 }
 
 void RadioLibWrapper::loop() {
+  if (!_config_valid) return;
   noiseFloorCalibCheck();
 
   if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
@@ -214,6 +216,7 @@ void RadioLibWrapper::loop() {
 }
 
 void RadioLibWrapper::startRecv() {
+  if (!_config_valid) return;  // a failed configuration rollback needs recovery
   #if defined(USE_LR2021)
   _radio->standby(); // without this LR2021 can throw -706 when calling startReceive after hardware CAD when side detectors are enabled
   #endif
@@ -328,6 +331,7 @@ bool RadioLibWrapper::isInRecvMode() const {
 }
 
 int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
+  if (!_config_valid) return 0;
   int len = 0;
   if (state & STATE_INT_READY) {
     if (isPacketReady()) {
@@ -367,6 +371,7 @@ uint32_t RadioLibWrapper::getEstAirtimeFor(int len_bytes) {
 }
 
 bool RadioLibWrapper::startSendRaw(const uint8_t* bytes, int len) {
+  if (!_config_valid) return false;
   if (_rx_ps_armed) stopReceiveDutyCycle();
   _board->onBeforeTransmit();
   int err = _radio->startTransmit((uint8_t *) bytes, len);
@@ -400,6 +405,7 @@ int16_t RadioLibWrapper::performChannelScan() {
 }
 
 bool RadioLibWrapper::isChannelActive() {
+  if (!_config_valid) return false;
   // int.thresh: RSSI-based interference detection (relative to noise floor)
   if (_threshold != 0 && !(_rx_ps_armed && isChipBusy()) &&
       getCurrentRSSI() > _noise_floor + _threshold) return true;

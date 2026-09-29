@@ -3,6 +3,7 @@
 #include <Mesh.h>
 #include <RadioLib.h>
 #include "RXPowerSaving.h"
+#include "LoRaConfigValidation.h"
 
 #ifdef USE_CC310_HW_CRYPTO
 #include <Adafruit_nRFCrypto.h>
@@ -24,6 +25,7 @@ protected:
   uint16_t _num_floor_samples;
   int32_t _floor_sample_sum;
   uint8_t _preamble_sf;
+  bool _config_valid;
 
   bool _rx_ps_enabled;
   bool _rx_ps_armed;
@@ -72,7 +74,7 @@ protected:
 public:
   RadioLibWrapper(PhysicalLayer& radio, mesh::MainBoard& board)
       : _radio(&radio), _board(&board), _last_rssi(0), _last_snr(0), _last_metrics_valid(false),
-        _preamble_sf(0), _rx_ps_enabled(false), _rx_ps_armed(false),
+        _preamble_sf(0), _config_valid(true), _rx_ps_enabled(false), _rx_ps_armed(false),
         _rx_ps_rx_us(RX_POWERSAVING_DEFAULT_RX_US),
         _rx_ps_sleep_us(RX_POWERSAVING_DEFAULT_SLEEP_US), _rx_ps_eff_rx_us(0),
         _rx_ps_eff_sleep_us(0), _rx_ps_last_error(RADIOLIB_ERR_NONE),
@@ -96,12 +98,24 @@ public:
   bool isRxPowerSavingCalibrationActive() const override { return _nf_calib_active; }
 
   bool isReceiving() override {
+    if (!_config_valid) return false;
     if (isReceivingPacket()) return true;
 
     return isChannelActive();
   }
 
   virtual void setParams(float freq, float bw, uint8_t sf, uint8_t cr) = 0;
+  virtual bool validateParams(float freq, float bw, uint8_t sf, uint8_t cr) const {
+    return validCompanionLoRaParams(freq, bw, sf, cr);
+  }
+  // Existing non-SX1262 wrappers retain their legacy implementation. Radios
+  // with checked application override this without changing that shared API.
+  virtual bool setParamsChecked(float freq, float bw, uint8_t sf, uint8_t cr) {
+    if (!validateParams(freq, bw, sf, cr)) return false;
+    setParams(freq, bw, sf, cr);
+    return true;
+  }
+  bool isConfigValid() const { return _config_valid; }
   uint32_t getRngSeed();
   void setTxPower(int8_t dbm);
 

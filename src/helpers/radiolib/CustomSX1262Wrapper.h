@@ -22,15 +22,33 @@ public:
   CustomSX1262Wrapper(CustomSX1262& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    prepareForRadioConfig();
-    ((CustomSX1262 *)_radio)->setFrequency(freq);
-    ((CustomSX1262 *)_radio)->setSpreadingFactor(sf);
-    ((CustomSX1262 *)_radio)->setBandwidth(bw);
-    ((CustomSX1262 *)_radio)->setCodingRate(cr);
-    updatePreamble(sf);
+    (void)setParamsChecked(freq, bw, sf, cr);
+  }
+
+  bool validateParams(float freq, float bw, uint8_t sf, uint8_t cr) const override {
+    return validSX1262LoRaParams(freq, bw, sf, cr);
+  }
+
+  bool setParamsChecked(float freq, float bw, uint8_t sf, uint8_t cr) override {
+    if (!validateParams(freq, bw, sf, cr)) return false;
+    // A caller can restore the previous parameters after a partial SPI error.
+    // Until a complete application succeeds, never send on an unknown channel.
+    _config_valid = false;
+    idle();
+    if (((CustomSX1262 *)_radio)->setFrequency(freq) != RADIOLIB_ERR_NONE ||
+        ((CustomSX1262 *)_radio)->setSpreadingFactor(sf) != RADIOLIB_ERR_NONE ||
+        ((CustomSX1262 *)_radio)->setBandwidth(bw) != RADIOLIB_ERR_NONE ||
+        ((CustomSX1262 *)_radio)->setCodingRate(cr) != RADIOLIB_ERR_NONE ||
+        _radio->setPreambleLength(preambleLengthForSF(sf)) != RADIOLIB_ERR_NONE) {
+      _radio->standby();
+      return false;
+    }
+    _preamble_sf = sf;
     PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
     ((CustomSX1262 *)_radio)->setPreambleMillis(pm.preambleMillis);
     ((CustomSX1262 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
+    _config_valid = true;
+    return true;
   }
 
   bool isReceivingPacket() override {

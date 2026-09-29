@@ -18,15 +18,18 @@
     .eyebrow { color:var(--accent); letter-spacing:2px; font-size:12px; font-weight:700; margin:0 0 5px; }
     .subtitle,.hint,footer { color:var(--muted); }
     .subtitle { margin:5px 0 0; }
-    .tag { white-space:nowrap; border:1px solid var(--edge); padding:6px 12px; border-radius:30px; color:var(--muted); font-size:13px; }
+    .tag { border:1px solid var(--edge); padding:6px 12px; border-radius:30px; color:var(--muted); font-size:13px; }
     .notice { background:#223242; border-left:3px solid var(--blue); padding:12px 16px; border-radius:5px; margin-bottom:18px; }
     .notice.warning { border-color:var(--warn); background:#332c22; }
     .notice.error { border-color:var(--error); background:#35282d; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
-    .card { padding:24px; background:var(--panel); border:1px solid var(--edge); border-radius:14px; }
+    .card { min-width:0; overflow-wrap:anywhere; padding:24px; background:var(--panel); border:1px solid var(--edge); border-radius:14px; }
     .wide { grid-column:1/-1; }
     .step { display:inline-grid; place-items:center; width:28px; height:28px; margin-right:8px; background:#253848; color:var(--accent); border-radius:8px; font-size:15px; }
-    button,input { font:inherit; }
+    button,input,select { font:inherit; }
+    select { max-width:100%; min-height:44px; color:var(--text); background:#101a27; border:1px solid #60738a; border-radius:8px; padding:8px; }
+    .reply-row { padding:12px 0; border-top:1px solid var(--edge); }
+    #firmware-result { white-space:pre-wrap; overflow-wrap:anywhere; }
     button { min-height:44px; cursor:pointer; border:1px solid var(--edge); border-radius:8px; background:#263546; color:var(--text); padding:9px 16px; font-weight:600; }
     button:hover:not(:disabled) { border-color:var(--blue); background:#31455c; }
     button.primary { background:var(--accent); border-color:var(--accent); color:#102923; }
@@ -39,6 +42,7 @@
     label.field { display:block; font-weight:600; margin:16px 0 6px; }
     input[type="text"],input[type="password"] { width:100%; min-height:46px; border:1px solid #60738a; border-radius:8px; padding:9px 12px; color:var(--text); background:#101a27; }
     input:disabled { opacity:.55; }
+    input[type="file"] { width:100%; min-width:0; }
     input[type="checkbox"] { width:18px; height:18px; margin:0; accent-color:var(--accent); }
     .check { display:flex; gap:9px; align-items:center; margin:11px 0; font-size:14px; }
     .hint { font-size:14px; margin:7px 0 0; }
@@ -69,7 +73,7 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>USB помощник</h1><p class="subtitle">Настройка подключения ноды без команд консоли.</p></div>
-    <span class="tag">Помощник 1.1 · SmartUI 0.06 / 0.05</span>
+    <span class="tag">Помощник 1.2 · SmartUI 0.06-test.1 / 0.06 / 0.05</span>
   </header>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
   <div class="notice"><strong>Перед подключением:</strong> на ноде выберите <strong>Bluetooth или Wi-Fi</strong> в «Настройки → Подключение». Закройте веб-флешер, PuTTY и другие программы, использующие её USB-порт.</div>
@@ -112,6 +116,22 @@
       </form>
       <p id="wifi-hint" class="hint">Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.</p>
     </section>
+    <section class="card wide" aria-labelledby="replies-title">
+      <h2 id="replies-title">Свои быстрые фразы</h2>
+      <p class="hint">9 фраз на ноде, каждая до 64 байт UTF-8. Сначала прочитайте текущие значения. Пустое поле возвращает стандартную фразу. Сохранение — отдельно для каждого слота; адресат выбирается на ноде перед отправкой.</p>
+      <p id="replies-hint" class="hint">Нужна прошивка с поддержкой своих фраз.</p>
+      <div class="buttons"><button id="replies-load" disabled>Прочитать фразы с ноды</button></div>
+      <div id="reply-fields"></div>
+    </section>
+    <section class="card wide" aria-labelledby="firmware-title">
+      <h2 id="firmware-title">Проверить файл прошивки</h2>
+      <p class="hint">Полностью локально: файл не передаётся в интернет, устройство не прошивается. Выберите BIN/UF2 и RELEASE-MANIFEST.json из одного релиза. Можно перетащить оба файла в этот блок.</p>
+      <label class="field" for="firmware-file">Файл BIN / UF2 (до 32 МиБ)</label><input id="firmware-file" type="file" accept=".bin,.uf2">
+      <label class="field" for="firmware-manifest">Манифест релиза (до 2 МиБ)</label><input id="firmware-manifest" type="file" accept=".json">
+      <label class="field" for="firmware-board">Точная плата — если нода не подключена</label><select id="firmware-board"><option value="">По сведениям подключённой ноды</option></select>
+      <div class="buttons"><button id="firmware-check">Проверить файлы</button></div>
+      <p id="firmware-result" role="status" class="hint">SHA-256 проверяет целостность относительно манифеста, не подлинность. Манифест не подписан. MERGED — чистая установка со стиранием identity, контактов и настроек даже без Erase.</p>
+    </section>
     <section class="card wide" aria-labelledby="mode-title">
       <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
@@ -128,6 +148,9 @@
 <dialog id="confirm-dialog" aria-labelledby="confirm-title"><h2 id="confirm-title">Подтвердите действие</h2><p id="confirm-text"></p><div class="buttons"><button id="confirm-no" autofocus>Отмена</button><button id="confirm-yes" class="primary">Продолжить</button></div></dialog>
 <script>
 /* SMARTUI_HELPER_CORE */
+</script>
+<script>
+/* SMARTUI_HELPER_FIRMWARE */
 </script>
 <script>
 /* SMARTUI_HELPER_APP */

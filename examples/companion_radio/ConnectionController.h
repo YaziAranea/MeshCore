@@ -17,6 +17,8 @@ struct ConnectionControllerHooks {
   bool (*isCliRescue)() = nullptr;
   bool (*isStorageQuarantined)() = nullptr;
   const char* (*getBoardName)() = nullptr;
+  const char* (*getQuickReply)(uint8_t slot) = nullptr;
+  bool (*setQuickReply)(uint8_t slot, const char* text) = nullptr;
 };
 
 class ConnectionController {
@@ -38,7 +40,7 @@ public:
 private:
   static const size_t WIFI_SSID_MAX = 32;
   static const size_t WIFI_PASSWORD_MAX = 64;
-  static const size_t CONSOLE_LINE_MAX = 96;
+  static const size_t CONSOLE_LINE_MAX = 160;
   static const size_t CONSOLE_TX_MAX = 512;
 
   enum class WifiSetupStage : uint8_t {
@@ -119,6 +121,7 @@ private:
   void printStatus();
   void printInfo();
   void printHelp();
+  void handleQuickReplyCommand(const char* line);
   void cancelWifiSetup(bool restore_selected_wifi);
   bool startWifiSetup();
   bool saveTestedWifi();
