@@ -1,16 +1,21 @@
 # MeshCore Smart UI — PowerSaving17
 
+> [!NOTE]
+> **На GitHub введена последовательная нумерация: Smart UI 0.01–0.06.**
+> [Таблица соответствия и пояснения](docs/RELEASE_NUMBERING_RU.md) · [Последний по дате выпуск — Smart UI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2).
+> BIN/UF2 не пересобирались: встроенные версии, Git-теги и исторические номера в документации сохранены. USB Helper имеет отдельную нумерацию. Следующая новая прошивка — 0.07.
+
 > [!IMPORTANT]
-> **Эта ветка — отдельный тестовый выпуск `0.06-test.2`.**
-> [Скачать тестовую версию](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2) · [Что изменилось](RELEASE_NOTES_SmartUI_0.06-test.2_RU.md) · [Как пользоваться](docs/TEST_0.06_USER_GUIDE_RU.md).
+> **Эта ветка — Smart UI 0.06 по новой нумерации; экспериментальный выпуск.** Встроенная версия — `0.06-test.2`.
+> [Скачать Smart UI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2) · [Что изменилось](RELEASE_NOTES_SmartUI_0.06-test.2_RU.md) · [Как пользоваться](docs/TEST_0.06_USER_GUIDE_RU.md).
 > Убраны «Избранное» настроек и «Отменить изменение»; параметры звука собраны в «Звук и вибро». Возможности test.1 сохранены. Исправление зависаний T096 в этот выпуск не входит; аппаратная стабильность не подтверждена.
 
 > [!WARNING]
-> **Базовый выпуск — `SmartUI 0.06`: обновление PowerSaving и исправления по аудиту.**
+> **Базовый выпуск — Smart UI 0.04 по новой нумерации** (встроенная версия `0.06`): обновление PowerSaving и исправления по аудиту.
 > [Скачать прошивку](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06)
 > · [Что изменилось и какой файл выбрать](RELEASE_NOTES_SmartUI_0.06_RU.md).
 > Базовый выпуск сохранён отдельно. Метка GitHub Latest сама по себе не подтверждает аппаратную стабильность.
-> [SmartUI 0.05](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05) сохранён для отката.
+> [Smart UI 0.03](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05) (встроенная версия `0.05`) сохранён для отката.
 
 Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для шести плат:
 
