@@ -673,6 +673,34 @@ jobs:
           esac
 
           if [[ -n "$release_id" ]]; then
+            # Historical releases may have been renumbered without rebuilding
+            # their firmware. Never let an old publish workflow overwrite that
+            # curated bundle or restore its former public names.
+            manifest_asset_id="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?per_page=100" \
+              --jq '.[] | select(.name == "RELEASE-MANIFEST.json") | .id')"
+            if [[ -n "$manifest_asset_id" ]]; then
+              [[ "$manifest_asset_id" =~ ^[0-9]+$ ]] ||
+                { echo 'Ambiguous release manifest assets; refusing publication'; exit 1; }
+              existing_manifest="$(mktemp)"
+              trap 'rm -f "$release_json" "$existing_manifest"' EXIT
+              gh api -H 'Accept: application/octet-stream' \
+                "repos/${GITHUB_REPOSITORY}/releases/assets/${manifest_asset_id}" \
+                > "$existing_manifest"
+              python - "$existing_manifest" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              manifest = json.load(stream)
+          if not isinstance(manifest, dict):
+              raise SystemExit("Invalid existing release manifest; refusing publication")
+          if manifest.get("release_version") not in (None, ""):
+              raise SystemExit("This release was renumbered; refusing to overwrite its assets or metadata")
+          PY
+              rm -f "$existing_manifest"
+              trap 'rm -f "$release_json"' EXIT
+            fi
             # Hide a same-page hotfix while replacing assets. An interrupted
             # upload remains a recoverable draft, never a mixed public bundle.
             if [[ -n "$update_tag_from" ]]; then

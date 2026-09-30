@@ -1,11 +1,16 @@
 # MeshCore Smart UI — PowerSaving17
 
+> [!NOTE]
+> **На GitHub введена последовательная нумерация: Smart UI 0.01–0.06.**
+> [Таблица соответствия и пояснения](docs/RELEASE_NUMBERING_RU.md) · [Последний по дате выпуск — Smart UI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2).
+> BIN/UF2 не пересобирались: встроенные версии, Git-теги и исторические номера в документации сохранены. USB Helper имеет отдельную нумерацию. Следующая новая прошивка — 0.07.
+
 > [!WARNING]
-> **Текущая версия — `SmartUI 0.06`: обновление PowerSaving и исправления по аудиту.**
+> **Код этой ветки — базовый Smart UI 0.04 по новой нумерации** (встроенная версия `0.06`): обновление PowerSaving и исправления по аудиту.
 > [Скачать прошивку](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06)
 > · [Что изменилось и какой файл выбрать](RELEASE_NOTES_SmartUI_0.06_RU.md).
-> Выпуск отмечен Latest как текущая версия, не как подтверждение аппаратной стабильности.
-> [SmartUI 0.05](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05) сохранён для отката.
+> Последние выпуски доступны по ссылке выше. Метка Latest сама по себе не подтверждает аппаратную стабильность.
+> [Smart UI 0.03](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05) сохранён для отката.
 
 Неофициальная русскоязычная прошивка MeshCore Companion с компактным экранным интерфейсом для шести плат:
 
@@ -18,9 +23,9 @@
 
 В 0.06 исправлены восстановление настроек подключения, гонка BLE-очередей nRF52, устаревший GPS FIX и потеря ввода при idle/уведомлениях. Готовые ответы проходят выбор адресата; в «Сервис» появилась страница «О прошивке», USB-помощник обновлён до 1.1. Постоянных черновиков нет. [Исправления и границы проверки](docs/AUDIT_FIXES_0.06_RU.md). Старые иллюстрации ниже показывают сохранённые элементы UI; это симуляции, не аппаратная проверка 0.06.
 
-[⬇ Скачать SmartUI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06) · [Как выбрать файл](RELEASE_NOTES_SmartUI_0.06_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать базовую Smart UI 0.04](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06) · [Как выбрать файл](RELEASE_NOTES_SmartUI_0.06_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
-**Выбор подключения, добавленный в 0.05, сохранён.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль или USB-помощник 1.1. Первое Wi-Fi/TCP-приложение принимается автоматически, порт **5000**. Отдельного TCP-пароля/TLS нет: только доверенная локальная сеть, без проброса порта в Интернет. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.06_RU.md). [Внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.06`; архив — `SmartUI_0.06_all-boards.zip`.
+**Выбор подключения, добавленный в 0.05, сохранён.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль или USB-помощник 1.1. Первое Wi-Fi/TCP-приложение принимается автоматически, порт **5000**. Отдельного TCP-пароля/TLS нет: только доверенная локальная сеть, без проброса порта в Интернет. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.06_RU.md). [Внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.06`; архив — `SmartUI_0.04_all-boards.zip`.
 
 > [!WARNING]
 > **Все ESP32 merged в 0.06 содержат пустое подготовленное хранилище.**
@@ -86,7 +91,7 @@
 
 ## Быстрый старт
 
-Используйте [Release SmartUI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06). Для отката сохранён [SmartUI 0.05](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05). Проверка сборок и симуляции не означает испытание каждого экземпляра платы.
+Используйте [Базовая Smart UI 0.04](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06). Для отката сохранён [Smart UI 0.03](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.05). Проверка сборок и симуляции не означает испытание каждого экземпляра платы.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Скачайте контрольные суммы из того же выпуска: `SHA256SUMS.txt` для трёх UF2 и `SHA256SUMS-ESP32.txt` для всех шести BIN. В общем ZIP находятся те же файлы и `RELEASE-MANIFEST.json`.
