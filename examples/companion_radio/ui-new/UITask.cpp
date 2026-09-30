@@ -4480,21 +4480,13 @@ class HomeScreen : public UIScreen {
 
 #if UI_COMPACT_SETTINGS_MENU == 1
   static const uint8_t COMPACT_SETTINGS_GROUP_COUNT =
-#if UI_SMART_B11_EXTRAS == 1
-    7
-#else
     6
-#endif
 #if UI_SOUND_SETTINGS_GROUP == 0
     - 1
 #endif
     ;
 
   const char* compactSettingsGroupName(uint8_t group) const {
-#if UI_SMART_B11_EXTRAS == 1
-    if (group == 0) return "Избранное";
-    group--;
-#endif
 #if UI_SOUND_SETTINGS_GROUP == 0
     if (group >= 1) group++;
 #endif
@@ -4636,6 +4628,16 @@ class HomeScreen : public UIScreen {
 #endif
       HomePage::ALERT_SOUND,
       HomePage::ALERT_VOLUME,
+#if UI_TONE_8BIT_PAGE == 1
+      HomePage::ALERT_TONE_STYLE,
+#endif
+#if UI_TONE_RESONANCE_PAGE == 1
+      HomePage::ALERT_TONE_RESONANCE,
+#endif
+      HomePage::ALERT_TONE_PIN,
+#if UI_TONE_BRIDGE_PAGE == 1
+      HomePage::ALERT_TONE_BRIDGE,
+#endif
 #endif
       HomePage::ALERT_VIBE_PIN,
     };
@@ -4685,10 +4687,6 @@ class HomeScreen : public UIScreen {
 #if UI_SMART_B12_TONE_LIST != 1
       HomePage::SMART_PROFILE,
 #endif
-      HomePage::FAVORITE_SLOT_1,
-      HomePage::FAVORITE_SLOT_2,
-      HomePage::FAVORITE_SLOT_3,
-      HomePage::UNDO_SETTING,
       HomePage::DEVICE_STATUS,
       HomePage::CONTROLS_HELP,
 #if UI_SMART_B12_TONE_LIST != 1
@@ -4697,18 +4695,6 @@ class HomeScreen : public UIScreen {
 #endif
     };
     static const uint8_t advanced_pages[] = {
-#ifdef PIN_MSG_TONE
-#if UI_TONE_8BIT_PAGE == 1
-      HomePage::ALERT_TONE_STYLE,
-#endif
-#if UI_TONE_RESONANCE_PAGE == 1
-      HomePage::ALERT_TONE_RESONANCE,
-#endif
-      HomePage::ALERT_TONE_PIN,
-#if UI_TONE_BRIDGE_PAGE == 1
-      HomePage::ALERT_TONE_BRIDGE,
-#endif
-#endif
 #ifdef PIN_MSG_ALERT
       HomePage::ALERT_LED,
 #endif
@@ -4722,13 +4708,6 @@ class HomeScreen : public UIScreen {
 #endif
     };
 
-#if UI_SMART_B11_EXTRAS == 1
-    if (group == 0) {
-      count = 0;
-      return NULL;
-    }
-    group--;
-#endif
 #if UI_SOUND_SETTINGS_GROUP == 0
     if (group >= 1) group++;
 #endif
@@ -4758,9 +4737,6 @@ class HomeScreen : public UIScreen {
   }
 
   uint8_t compactSettingsItemCount(uint8_t group) const {
-#if UI_SMART_B11_EXTRAS == 1
-    if (group == 0) return 3;
-#endif
     uint8_t raw_count = 0;
     const uint8_t* pages = compactSettingsRawPages(group, raw_count);
     uint8_t count = 0;
@@ -4771,12 +4747,6 @@ class HomeScreen : public UIScreen {
   }
 
   uint8_t compactSettingsPageAt(uint8_t group, uint8_t index) const {
-#if UI_SMART_B11_EXTRAS == 1
-    if (group == 0) {
-      if (index >= 3) return HomePage::SETTINGS;
-      return resolvedFavoritePageAt(index);
-    }
-#endif
     uint8_t raw_count = 0;
     const uint8_t* pages = compactSettingsRawPages(group, raw_count);
     uint8_t visible = 0;
@@ -5117,13 +5087,6 @@ class HomeScreen : public UIScreen {
 
   void compactSettingsGroupSummary(uint8_t group, char* out, size_t out_len) const {
     if (out_len == 0) return;
-#if UI_SMART_B11_EXTRAS == 1
-    if (group == 0) {
-      snprintf(out, out_len, "3 пункта");
-      return;
-    }
-    group--;
-#endif
 #if UI_SOUND_SETTINGS_GROUP == 0
     if (group >= 1) group++;
 #endif
@@ -6556,17 +6519,19 @@ class HomeScreen : public UIScreen {
     if (page == HomePage::LOW_BATT_SHUTDOWN) return true;
 #endif
 #if UI_SMART_B11_EXTRAS == 1
-    if (page == HomePage::FAVORITE_SLOT_1 ||
-        page == HomePage::FAVORITE_SLOT_2 ||
-        page == HomePage::FAVORITE_SLOT_3 ||
-        page == HomePage::UNDO_SETTING ||
-        page == HomePage::DEVICE_STATUS ||
-        page == HomePage::ABOUT ||
-        page == HomePage::HARDWARE_TEST
-        || page == HomePage::CONTROLS_HELP
+    // Keep the persisted favorite fields for upgrade compatibility, but the
+    // retired shortcuts and UI undo action are not navigable in either menu.
+    // Save-failure rollback and each editor's Back/Cancel remain independent.
+    if (page == HomePage::FAVORITE_SLOT_1 || page == HomePage::FAVORITE_SLOT_2 ||
+        page == HomePage::FAVORITE_SLOT_3 || page == HomePage::UNDO_SETTING
 #if UI_COMPACT_SETTINGS_MENU == 1
         || page == HomePage::FAVORITE_PICKER
 #endif
+       ) return false;
+    if (page == HomePage::DEVICE_STATUS ||
+        page == HomePage::ABOUT ||
+        page == HomePage::HARDWARE_TEST
+        || page == HomePage::CONTROLS_HELP
 #if UI_SMART_B12_TONE_LIST == 1 && defined(PIN_MSG_TONE)
         || page == HomePage::TONE_PICKER
 #else
@@ -6579,6 +6544,12 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
+#if UI_SMART_B11_EXTRAS == 1
+    // Retired settings must stay hidden from the main carousel too: pages
+    // that are not settings would otherwise be treated as normal home pages.
+    if (page == HomePage::FAVORITE_SLOT_1 || page == HomePage::FAVORITE_SLOT_2 ||
+        page == HomePage::FAVORITE_SLOT_3 || page == HomePage::UNDO_SETTING) return false;
+#endif
 #if UI_COMPACT_SETTINGS_MENU != 1
     // These auxiliary screens are entered only by the compact-menu actions.
 #if UI_ADC_MULTIPLIER_PAGE == 1

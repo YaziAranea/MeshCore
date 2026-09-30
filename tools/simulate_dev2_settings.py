@@ -33,7 +33,7 @@ HEADER_TITLES = ("", "Настройки", "Система", "Выход зву�
                  "Резонанс", "Громкость", "Управление", "Сброс ADC", "Избранное 1",
                  "Шрифт", "Тема", "Мелодия", "Часовой пояс", "Дополнительно",
                  "Радио и GPS", "Уведомления", "Защита АКБ", "Подключение",
-                 "Смена режима", "Wi-Fi клиент", "Режим")
+                 "Смена режима", "Wi-Fi клиент", "Режим", "Звук и вибро")
 HEADER_ACTIONS = ("", "Открыть", "Закрыть", "Назад", "Изменить", "Выполн.",
                   "Выбрать", "Отмена", "Сбросить", "Подтв.")
 _HEADER_LAYOUTS = {}
@@ -230,6 +230,14 @@ def source_contract():
         assert token in block, f"renderNotifyPicker changed; update geometry model: {token}"
     assert "display.setUiFont(0);" in UI.split("static uint8_t uiPushCompactSettingsFont", 1)[1].split("static void uiPopFont", 1)[0]
     assert "int value_width = display.width() > 140 ? 66 : 50;" in UI
+    menus = UI.split('const uint8_t* compactSettingsRawPages(', 1)[1].split('uint8_t compactSettingsItemCount(', 1)[0]
+    assert 'HomePage::FAVORITE_SLOT_' not in menus and 'HomePage::UNDO_SETTING' not in menus
+    sound = menus.split('sound_pages[] = {', 1)[1].split('};', 1)[0]
+    advanced = menus.split('advanced_pages[] = {', 1)[1].split('};', 1)[0]
+    for page in ('ALERT_SOUND', 'ALERT_VOLUME', 'ALERT_TONE_STYLE', 'ALERT_TONE_RESONANCE',
+                 'ALERT_TONE_PIN', 'ALERT_TONE_BRIDGE', 'ALERT_VIBE_PIN'):
+        assert 'HomePage::' + page in sound
+        assert 'HomePage::' + page not in advanced
     return hashlib.sha256(block.encode()).hexdigest()
 
 
@@ -329,12 +337,13 @@ def docs_sheet(scenes, output):
     scale = 3 if scenes[0][1].image.width <= 160 else 2
     screen_w, screen_h = scenes[0][1].image.size
     tile_w, tile_h, gap, label_h = screen_w * scale, screen_h * scale, 14, 32
-    rows = (len(scenes) + 1) // 2
-    image = Image.new("RGB", (tile_w * 2 + gap, (tile_h + label_h) * rows + gap * (rows - 1)), (13, 17, 22))
+    columns = min(2, len(scenes))
+    rows = (len(scenes) + columns - 1) // columns
+    image = Image.new("RGB", (tile_w * columns + gap * (columns - 1), (tile_h + label_h) * rows + gap * (rows - 1)), (13, 17, 22))
     draw = ImageDraw.Draw(image)
     for index, (label, frame) in enumerate(scenes):
-        x = (index % 2) * (tile_w + gap)
-        y = (index // 2) * (tile_h + label_h + gap)
+        x = (index % columns) * (tile_w + gap)
+        y = (index // columns) * (tile_h + label_h + gap)
         draw.text((x + 3, y + 5), label, font=label_font(13), fill=(225, 235, 240))
         image.paste(frame.image.resize((tile_w, tile_h), Image.Resampling.NEAREST), (x, y + label_h))
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -371,8 +380,8 @@ def help_labels():
 
 
 def root_menu(profile,cursor=0):
-    labels=["Избранное","Уведомления","Звук и вибро","Экран",
-            "Радио" if profile.board in ("OLED","Wireless Paper","Heltec V3") else "Радио и GPS",
+    labels=["Уведомления","Звук и вибро","Экран",
+            "Радио" if profile.board in ("V4.3","Wireless Paper","Heltec V3") else "Радио и GPS",
             "Система","Дополнительно","Закрыть"]
     if profile.board in ("Wireless Paper","V4.3","Heltec V3"): labels.remove("Звук и вибро")
     frame=SettingsFrame(profile,"Настройки",True)
@@ -394,6 +403,60 @@ def root_menu(profile,cursor=0):
             assert_tags_do_not_overlap(frame,f"root{row}",f"open{row}")
     if len(labels)>visible: scrollbar(frame,row_y,row_h,visible,len(labels),start)
     return frame
+
+
+def setting_group(profile, title, rows, cursor=0):
+    """Same label/value lanes as renderCompactSettings, with actual glyph ink."""
+    entries = rows + [("Назад", "")]
+    cursor = min(cursor, len(entries)-1)
+    frame = SettingsFrame(profile, title, True)
+    action = "Назад" if cursor == len(entries)-1 else "Открыть"
+    if title == "Звук и вибро" and cursor < len(rows):
+        label = rows[cursor][0]
+        if label in ("Стиль звука", "Тип зуммера") or (
+                label == "Громкость" and profile.board in ("T096", "T114")):
+            action = "Изменить"
+    elif title == "Система" and cursor < len(rows) and rows[cursor][0] in ("LED платы", "Защита АКБ"):
+        action = "Изменить"
+    heading(frame, title, action)
+    row_y, row_h, visible, start = geometry(profile, len(entries), cursor)
+    w = profile.logical_w
+    value_width = 66 if w > 140 else 50
+    for row, index in enumerate(range(start, min(start+visible, len(entries)))):
+        y = row_y + row * row_h
+        selected = index == cursor
+        if selected:
+            frame.rect(0, y, w-(3 if len(entries)>visible else 0), row_h, "yellow")
+        color = "dark" if selected else "light"
+        label, value = entries[index]
+        marker = index < len(rows) and not value
+        marker_w = frame.font.width(">")+4 if marker else 0
+        value_x = w-value_width
+        label_width = value_x-5 if value else w-3-marker_w-5
+        frame.text(3, y, label, color, max_w=label_width, tag=f"label{row}")
+        frame.assert_element_inside(f"label{row}", (3,y,label_width,row_h))
+        if value:
+            frame.text(value_x,y,value,"dark" if selected else "green",
+                       max_w=value_width-1,tag=f"value{row}")
+            frame.assert_element_inside(f"value{row}",(value_x,y,value_width-1,row_h))
+            assert_tags_do_not_overlap(frame,f"label{row}",f"value{row}")
+        if marker:
+            frame.text(w-5,y,">",color,right=True,max_w=frame.font.width(">"),tag=f"marker{row}")
+            assert_tags_do_not_overlap(frame,f"label{row}",f"marker{row}")
+    if len(entries)>visible:
+        scrollbar(frame,row_y,row_h,visible,len(entries),start)
+    return frame
+
+
+def sound_rows_for(profile):
+    # The OLED profile here represents ProMicro, without optional tone style /
+    # resonance / bridge pages. ESP boards omit this entire group.
+    if profile.board == "OLED":
+        return [("Мелодия", "Классика"), ("Громкость", "10/10"),
+                ("Выход звука", "ШТАТН."), ("Вибрация", "ВЫКЛ")]
+    return [("Мелодия", "Классика"), ("Громкость", "МАКС"), ("Стиль звука", "ОБЫЧН"),
+            ("Резонанс", "3000 Гц"), ("Выход звука", "ШТАТН."),
+            ("Тип зуммера", "ОБЫЧН"), ("Вибрация", "ВЫКЛ")]
 
 
 def docs_previews(configurations):
@@ -442,6 +505,8 @@ def main(no_docs=False):
         "Громкость": [f"{x}/10" for x in range(1, 11)],
     }
     checks, failures = 0, []
+    system_rows = [("Подключение", "BLE"), ("Часовой пояс", "UTC+06"), ("LED платы", "ВКЛ"),
+                   ("Защита АКБ", "3.2 В"), ("Состояние", ""), ("Управление", "")]
     for profile in configurations:
         for cursor in range(8):
             frame=root_menu(profile,cursor)
@@ -466,14 +531,17 @@ def main(no_docs=False):
             frame=auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],cursor,"Сбросить" if cursor else "Отмена")
             checks+=1
             failures.extend(f"{profile.board}/{profile.profile}/ADC reset: {x}" for x in frame.violations)
-        choices=["Шрифт","Bluetooth","Защита АКБ","Калибр. АКБ","Отмена"]
-        for cursor in range(len(choices)):
-            frame=auxiliary(profile,"Избранное 1",choices,cursor,"Выбрать",active=2)
-            checks+=1
-            failures.extend(f"{profile.board}/{profile.profile}/favorites: {x}" for x in frame.violations)
-    for board in ("T096", "T114", "OLED", "V4.3", "Wireless Paper"):
-        profile = next(p for p in configurations if p.board == ("OLED" if board=="V4.3" else board))
-        if board=="V4.3": profile=replace(profile,board="V4.3")
+        groups = [("Система", system_rows)]
+        if profile.board not in ("Wireless Paper", "V4.3", "Heltec V3"):
+            groups.append(("Звук и вибро", sound_rows_for(profile)))
+        for title, rows in groups:
+            for cursor in range(len(rows)+1):
+                frame=setting_group(profile,title,rows,cursor)
+                checks+=1
+                failures.extend(f"{profile.board}/{profile.profile}/{title}: {x}" for x in frame.violations)
+    for board in ("T096", "T114", "OLED", "V4.3", "Heltec V3", "Wireless Paper"):
+        profile = next(p for p in configurations if p.board == ("OLED" if board in ("V4.3", "Heltec V3") else board))
+        if board in ("V4.3", "Heltec V3"): profile=replace(profile,board=board)
         scenes = []
         for title in ("Выход звука", "Резонанс", "Громкость"):
             labels = lists[title]
@@ -483,15 +551,25 @@ def main(no_docs=False):
         make_matrix(scenes, OUT / f"{board.replace(' ', '_')}.png", columns=2)
         aux_scenes=[("Настройки: группы",root_menu(profile)),
                     ("Настройки: закрыть",root_menu(profile,7)),
-                    ("Избранное: пример доступных функций",auxiliary(profile,"Избранное 1",choices,1,"Выбрать",active=2)),
+                    ("Система: без избранного и отмены",setting_group(profile,"Система",system_rows,4)),
                     ("ADC: сначала отмена",auxiliary(profile,"Сброс ADC",["Отмена","Заводской коэф."],0,"Отмена")),
                     ("Управление",auxiliary(profile,"Управление",help_labels(),0,"Назад")),
                     ("Управление: CLI",auxiliary(profile,"Управление",help_labels(),6,"Назад")),
                     ("Управление: LED",auxiliary(profile,"Управление",help_labels(),7,"Назад")),
                     ("Управление: LED выключен",auxiliary(profile,"Управление",help_labels(),8,"Назад"))]
         docs_sheet(aux_scenes, OUT / f"experimental-{board.lower().replace(' ','-')}-settings.png")
+        if board not in ("V4.3", "Wireless Paper", "Heltec V3"):
+            sound_rows = sound_rows_for(profile)
+            sound_scenes = [(f"Звук и вибро: пункт {cursor+1}", setting_group(profile,"Звук и вибро",sound_rows,cursor))
+                            for cursor in sorted({0, min(3,len(sound_rows)-1), len(sound_rows)-1, len(sound_rows)})]
+            sound_name = f"menu-cleanup-{board.lower()}-sound.png"
+            docs_sheet(sound_scenes, OUT / sound_name)
+            if not no_docs:
+                docs_sheet(sound_scenes, ROOT / "docs/assets/ui" / sound_name)
         if not no_docs:
             docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")
+            docs_sheet([("Настройки: группы", root_menu(profile))],
+                       ROOT/"docs/assets/ui"/f"menu-cleanup-{board.lower().replace(' ','-')}-root.png")
     report = {
         "kind": "source-bound geometry model; real glyph tables; not full firmware/hardware execution",
         "renderNotifyPicker_sha256": fingerprint, "profiles": len(configurations),

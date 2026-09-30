@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish SmartUI 0.06-test.1 after all six-board checks pass
+        description: Publish SmartUI 0.06-test.2 after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -42,15 +42,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.06-test.1.uf2
+            uf2_name: T096_UI_0.06-test.2.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.06-test.1.uf2
+            uf2_name: T114_UI_0.06-test.2.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.06-test.1.uf2
+            uf2_name: ProMicro_RA62_UI_0.06-test.2.uf2
 
     steps:
       - name: Check out source
@@ -158,15 +158,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.06-test.1
+            stem: Heltec_V3_UI_0.06-test.2
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.06-test.1
+            stem: Heltec_V4.3_UI_0.06-test.2
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.06-test.1
+            stem: Paper_UI_0.06-test.2
 
     steps:
       - name: Check out source
@@ -515,7 +515,9 @@ jobs:
         run: python tools/test_quick_target_flow.py
 
       - name: Exercise the actual settings navigation and confirmations
-        run: python tools/test_settings_flow.py
+        run: |
+          python tools/test_settings_flow.py
+          python tools/test_compact_menu_cleanup.py
 
       - name: Check offline reminder timing and two-play nRF melody series
         run: python tools/test_important_notify_v4.py
@@ -577,12 +579,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-experimental-release:
-    name: Publish SmartUI 0.06-test.1
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.06-test.1'
+    name: Publish SmartUI 0.06-test.2
+    if: github.repository == 'YaziAranea/MeshCore' && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.06-test.2'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-experimental-release-smartui-0.06-test.1
+      group: publish-experimental-release-smartui-0.06-test.2
       cancel-in-progress: false
     permissions:
       contents: write
@@ -601,13 +603,14 @@ jobs:
           name: smartui-experimental-release
           path: release
 
-      - name: Create or resume the SmartUI 0.06-test.1 release page
+      - name: Create or resume the SmartUI 0.06-test.2 release page
         shell: bash
         run: |
           set -euo pipefail
-          tag="smartui-0.06-test.1"
-          title="SmartUI 0.06-test.1"
-          notes="release/RELEASE_NOTES_SmartUI_0.06-test.1_RU.md"
+          tag="smartui-0.06-test.2"
+          title="SmartUI 0.06-test.2"
+          notes="release/RELEASE_NOTES_SmartUI_0.06-test.2_RU.md"
+          latest_before="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.
@@ -706,7 +709,7 @@ jobs:
 
           # New releases remain drafts until all 16 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
-          # This test release must not replace the stable Latest release.
+          # Preserve whichever release is currently Latest; do not assume its tag.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
           python - "$release_json" <<'PY'
           import hashlib
@@ -752,4 +755,5 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             --jq 'if .draft == false and .prerelease == false then .html_url else error("Release is not public") end'
           latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          test "$latest_tag" = "$latest_before"
           test "$latest_tag" != "$tag"

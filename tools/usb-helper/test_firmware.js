@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
 const {verify,PROFILES} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
-const VERSION = '0.06-test.1';
+const VERSION = '0.06-test.2';
 const sha = data => createHash('sha256').update(data).digest('hex');
 
 function application(profile, source = COMMIT.slice(0,8), appendedHash = true) {

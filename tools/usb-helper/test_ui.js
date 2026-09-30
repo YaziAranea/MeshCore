@@ -373,7 +373,7 @@ test('read-only console blocks settings and remains disconnectable', async () =>
 });
 
 test('custom phrases require explicit capability, save UTF8 with readback, and clear back to default',async()=>{
-  const f=await fixture({replies:true,info:'SmartUI=0.06-test.1 core=1.17.1 build=12345678 upstream=abcdef01 capabilities=BLE,USB board=Heltec T114'});
+  const f=await fixture({replies:true,info:'SmartUI=0.06-test.2 core=1.17.1 build=12345678 upstream=abcdef01 capabilities=BLE,USB board=Heltec T114'});
   try {
     await connect(f.page);
     assert.equal(await f.page.locator('#reply-0').isDisabled(),true);
@@ -414,7 +414,7 @@ test('local USB recovery leaves status and safe cleanup action accessible',async
 test('firmware preflight stays offline without serial access and displays merged loss warning',async()=>{
   const f=await fixture({supported:false});
   try {
-    const commit='12345678'+'a'.repeat(32),version='0.06-test.1';
+    const commit='12345678'+'a'.repeat(32),version='0.06-test.2';
     const payload=Buffer.from('V3 SmartUI '+version+'\0SmartUI-source:12345678\0');
     const end=Math.floor((32+payload.length+16)/16)*16;
     const raw=Buffer.alloc(0x10000+end+256,0xff),app=Buffer.alloc(end);

@@ -27,10 +27,10 @@ import package_usb_helper as usb_helper
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.06-test.1"
-TAG = "smartui-0.06-test.1"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.06-test.1_RU.md"
-ARCHIVE_NAME = "SmartUI_0.06-test.1_all-boards.zip"
+VERSION = "0.06-test.2"
+TAG = "smartui-0.06-test.2"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.06-test.2_RU.md"
+ARCHIVE_NAME = "SmartUI_0.06-test.2_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
@@ -218,7 +218,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require("SmartUI 0.06-test.1" in text, "release notes must identify this exact release version")
+    require("SmartUI 0.06-test.2" in text, "release notes must identify this exact release version")
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:

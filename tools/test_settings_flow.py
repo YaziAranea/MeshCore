@@ -73,7 +73,7 @@ struct Task { int alerts=0; void showAlert(const char*,int) { ++alerts; } void r
 struct HomeScreen {
  enum HomePage { SETTINGS, ADC, ADC_RESET, FAVORITE_PICKER, FAVORITE_SLOT_1,
   FAVORITE_SLOT_2,FAVORITE_SLOT_3,CONTROLS_HELP,NOTIFY_PICKER,HARDWARE_TEST,ABOUT };
- static constexpr uint8_t COMPACT_SETTINGS_GROUP_COUNT=7;
+ static constexpr uint8_t COMPACT_SETTINGS_GROUP_COUNT=6;
  bool _settings_open=true, _adc_edit=false, _adc_reset_confirm=false;
  uint8_t _page=SETTINGS, _compact_settings_depth=0,_compact_settings_cursor=0;
  uint8_t _compact_root_cursor=0,_compact_settings_group=0,_compact_group_cursors[8]={};
@@ -168,7 +168,7 @@ int main() {
    CHECK(h._compact_settings_depth==menu_depth && h._compact_settings_group==menu_group && h._compact_settings_cursor==menu_cursor);
  }
  CHECK(the_mesh.saves==saves_before_about && h.activations==activations_before_about);
- h._compact_settings_depth=0; h._compact_settings_cursor=7;
+ h._compact_settings_depth=0; h._compact_settings_cursor=6;
  h.handleCompactSettingsInput(KEY_ENTER); CHECK(!h._settings_open && h._compact_settings_cursor==2);
  CHECK(!h.handleCompactSettingsInput(KEY_NEXT));
  printf("PASS %d actual compact-menu C++ flow checks\n", checks);
