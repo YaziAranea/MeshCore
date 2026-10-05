@@ -27,10 +27,10 @@ import package_usb_helper as usb_helper
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.08"
-TAG = "smartui-0.08"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.08_RU.md"
-ARCHIVE_NAME = "SmartUI_0.08_all-boards.zip"
+VERSION = "0.09"
+TAG = "smartui-0.09"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.09_RU.md"
+ARCHIVE_NAME = "SmartUI_0.09_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 DISTRIBUTION = "public"
 PUBLICATION = {

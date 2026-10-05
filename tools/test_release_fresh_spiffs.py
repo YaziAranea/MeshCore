@@ -105,9 +105,9 @@ def main() -> None:
             passed += 1
             print(f"[PASS] {pair.stem}: exact-layout canonical empty SPIFFS; pure update")
 
-        paper, paper_layout = fixtures["Paper_UI_0.08"]
+        paper, paper_layout = fixtures["Paper_UI_0.09"]
         try:
-            inspect_prepared_spiffs(paper, LAYOUTS["Heltec_V4.3_UI_0.08"])
+            inspect_prepared_spiffs(paper, LAYOUTS["Heltec_V4.3_UI_0.09"])
         except ValueError as error:
             assert "layout mismatch" in str(error)
         else:
@@ -150,7 +150,7 @@ def main() -> None:
         passed += 1
         print(f"[PASS] {name}: prepared-storage and safe-recovery gates enabled")
 
-    assert (VERSION, TAG) == ("0.08", "smartui-0.08")
+    assert (VERSION, TAG) == ("0.09", "smartui-0.09")
     for pair in EXPECTED:
         fresh = firmware_metadata(f"{pair.stem}-merged.bin", "0" * 40)["storage"]
         update = firmware_metadata(f"{pair.stem}-update.bin", "0" * 40)["storage"]
@@ -164,7 +164,7 @@ def main() -> None:
         assert fresh["factory_spiffs_layout"] == update["factory_spiffs_layout"]
         assert fresh["factory_spiffs_sha256"] == FACTORY_SPIFFS_SHA256[pair.stem]
     passed += 1
-    print("[PASS] 0.08 manifest marks merged clean-only and update state-preserving")
+    print("[PASS] 0.09 manifest marks merged clean-only and update state-preserving")
 
     print(f"Fresh-install storage regression: {passed} passed.")
     print("Real pinned mkspiffs host mount; synthetic ESP containers, not hardware boot tests.")

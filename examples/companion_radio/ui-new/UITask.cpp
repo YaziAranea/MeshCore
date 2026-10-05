@@ -3727,6 +3727,9 @@ class HomeScreen : public UIScreen {
 #endif
     LINK_TEST,
     BLUETOOTH,
+#if UI_PERIODIC_AGC_RESET_PAGE
+    AGC_RESET,
+#endif
     MSG_POPUP,
     IMPORTANT_NOTIFY,
 #if UI_OFFLINE_DM_LED_PAGE == 1 && defined(PIN_MSG_ALERT)
@@ -4674,6 +4677,9 @@ class HomeScreen : public UIScreen {
     };
     static const uint8_t system_pages[] = {
       HomePage::BLUETOOTH,
+#if UI_PERIODIC_AGC_RESET_PAGE
+      HomePage::AGC_RESET,
+#endif
 #if UI_TIMEZONE_PAGE == 1
       HomePage::TIMEZONE,
 #endif
@@ -4760,6 +4766,9 @@ class HomeScreen : public UIScreen {
 
   const char* compactSettingsLabel(uint8_t page) const {
     switch (page) {
+#if UI_PERIODIC_AGC_RESET_PAGE
+      case HomePage::AGC_RESET: return "AGC-сброс";
+#endif
       case HomePage::ALERTS: return "Оповещения";
       case HomePage::IMPORTANT_NOTIFY: return "ЛС / упомин.";
       case HomePage::MSG_POPUP: return "Всплывающие";
@@ -4977,6 +4986,11 @@ class HomeScreen : public UIScreen {
       case HomePage::RADIO:
         snprintf(out, out_len, "%.3f", _node_prefs->freq);
         break;
+#if UI_PERIODIC_AGC_RESET_PAGE
+      case HomePage::AGC_RESET:
+        snprintf(out, out_len, "%s", _task->isPeriodicAgcResetEnabled() ? "ВКЛ" : "ВЫКЛ");
+        break;
+#endif
 #if UI_AUTO_ADVERT_PAGE == 1
       case HomePage::ADVERT_TIMER:
         snprintf(out, out_len, "%s", autoAdvertLabel());
@@ -5178,6 +5192,9 @@ class HomeScreen : public UIScreen {
       case HomePage::BLUETOOTH:
 #endif
       case HomePage::MSG_POPUP:
+#if UI_PERIODIC_AGC_RESET_PAGE
+      case HomePage::AGC_RESET:
+#endif
 #if UI_BOARD_LEDS_PAGE == 1
       case HomePage::BOARD_LEDS:
 #endif
@@ -5847,6 +5864,14 @@ class HomeScreen : public UIScreen {
   }
 
   void activateCompactSetting(uint8_t page) {
+#if UI_PERIODIC_AGC_RESET_PAGE
+    // AGC owns a small, checked transaction. The retired Undo UI does not
+    // justify another complete preferences allocation while saving it.
+    if (page == HomePage::AGC_RESET) {
+      _task->togglePeriodicAgcReset();
+      return;
+    }
+#endif
 #if UI_SMART_B11_EXTRAS == 1
     const bool track_undo = compactSettingMutatesPrefs(page);
     smartui::CheckedUiSnapshot<NodePrefs> before(track_undo ? _node_prefs : nullptr);
@@ -6475,6 +6500,9 @@ class HomeScreen : public UIScreen {
     if (page == HomePage::LINK_TEST) return true;
 #endif
     if (page == HomePage::BLUETOOTH) return true;
+#if UI_PERIODIC_AGC_RESET_PAGE
+    if (page == HomePage::AGC_RESET) return _task->supportsPeriodicAgcReset();
+#endif
     if (page == HomePage::MSG_POPUP) return true;
 #if UI_NOTIFICATION_SETTINGS == 1
     if (page == HomePage::IMPORTANT_NOTIFY) return true;
@@ -6544,6 +6572,9 @@ class HomeScreen : public UIScreen {
   }
 
   bool isPageVisibleInCurrentMenu(uint8_t page) const {
+#if UI_PERIODIC_AGC_RESET_PAGE
+    if (page == HomePage::AGC_RESET && !_task->supportsPeriodicAgcReset()) return false;
+#endif
 #if UI_SMART_B11_EXTRAS == 1
     // Retired settings must stay hidden from the main carousel too: pages
     // that are not settings would otherwise be treated as normal home pages.
@@ -6816,6 +6847,10 @@ class HomeScreen : public UIScreen {
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     } else if (page == HomePage::LOW_BATT_SHUTDOWN) {
       _task->showAlert("Защита АКБ", 800);
+#endif
+#if UI_PERIODIC_AGC_RESET_PAGE
+    } else if (page == HomePage::AGC_RESET) {
+      _task->showAlert("AGC-сброс: каждые 60 с", 1000);
 #endif
     }
   }
@@ -9945,6 +9980,13 @@ public:
       display.print(PRESS_LABEL);
 #endif
 #endif
+#if UI_PERIODIC_AGC_RESET_PAGE
+    } else if (_page == HomePage::AGC_RESET) {
+      char status_line[32];
+      snprintf(status_line, sizeof(status_line), "Статус: %s",
+          _task->isPeriodicAgcResetEnabled() ? "ВКЛ" : "ВЫКЛ");
+      drawOledCompactMenuPage(display, "AGC-сброс", status_line, "Каждые 60 с", PRESS_LABEL);
+#endif
     }
 #if UI_COMPACT_SETTINGS_MENU == 1
     else if (
@@ -10447,6 +10489,12 @@ public:
 #if UI_LOW_BATTERY_SHUTDOWN_PAGE == 1 && defined(AUTO_SHUTDOWN_MILLIVOLTS)
     if (c == KEY_ENTER && _settings_open && _page == HomePage::LOW_BATT_SHUTDOWN) {
       _task->toggleLowBatteryShutdown();
+      return true;
+    }
+#endif
+#if UI_PERIODIC_AGC_RESET_PAGE
+    if (c == KEY_ENTER && _settings_open && _page == HomePage::AGC_RESET) {
+      _task->togglePeriodicAgcReset();
       return true;
     }
 #endif
@@ -11481,6 +11529,34 @@ bool UITask::isLowBatteryShutdownEnabled() const {
 #else
   return false;
 #endif
+}
+
+bool UITask::supportsPeriodicAgcReset() const {
+  return the_mesh.supportsPeriodicAgcReset();
+}
+
+bool UITask::isPeriodicAgcResetEnabled() const {
+  return supportsPeriodicAgcReset() && _node_prefs != NULL && _node_prefs->agc_reset_enabled != 0;
+}
+
+bool UITask::togglePeriodicAgcReset() {
+  if (_node_prefs == NULL || !supportsPeriodicAgcReset()) return false;
+  const uint8_t before = _node_prefs->agc_reset_enabled;
+  const double before_latitude = _node_prefs->node_lat;
+  const double before_longitude = _node_prefs->node_lon;
+  _node_prefs->agc_reset_enabled = before ? 0 : 1;
+  // The background radio scheduler observes the committed flag. Changing this
+  // setting must not reset AGC, enter standby or restart RX synchronously.
+  if (!the_mesh.savePrefs()) {
+    _node_prefs->agc_reset_enabled = before;
+    _node_prefs->node_lat = before_latitude;
+    _node_prefs->node_lon = before_longitude;
+    showAlert(the_mesh.getPrefsSaveErrorText(), 1800);
+    return false;
+  }
+  showAlert(isPeriodicAgcResetEnabled() ? "AGC: ВКЛ, 60 с" : "AGC: ВЫКЛ", 1100);
+  _next_refresh = 0;
+  return true;
 }
 
 uint16_t UITask::getLowBatteryShutdownThreshold() const {

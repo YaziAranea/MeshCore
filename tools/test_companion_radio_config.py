@@ -108,6 +108,8 @@ struct TestRadio : RxPowerSavingControl {
   uint32_t applied_rx=0, applied_sleep=0;
   unsigned config_calls=0, rxps_calls=0, legacy_calls=0, receive_calls=0;
   void idle() { _radio->standby(); }
+  bool agcOwnsHardware() const { return false; }
+  void abortAgcMaintenanceForRadioChange() {}
   void stopReceiveDutyCycle() { _rx_ps_armed=false; }
   int startReceiveMode() { ++receive_calls;return 0; }
   void startRecv() {

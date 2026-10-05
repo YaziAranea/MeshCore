@@ -458,6 +458,29 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
+test('0.09 retains verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+  for (const {version,maximum,named} of [
+    {version:'0.09',maximum:30,named:true},
+    {version:'0.10',maximum:30,named:false},
+    {version:'0.09',maximum:29,named:false},
+  ]) {
+    const info=DEVICE_INFO.replace('SmartUI=0.08','SmartUI='+version);
+    const f=await fixture({settings:true,info,settingsCaps:{melody_max:maximum}});
+    try {
+      await connect(f.page);
+      assert.equal(await f.page.locator('#info-firmware').textContent(),version);
+      assert.equal(await f.page.locator('#setting-melody option').count(),maximum+1);
+      assert.equal(await f.page.locator('#setting-melody option[value="0"]').textContent(),named?'0 · Пульс':'Мелодия 0');
+      assert.equal(await f.page.locator('#setting-melody option[value="4"]').textContent(),named?'4 · Канон':'Мелодия 4');
+      await f.page.locator('#setting-melody').selectOption('4');
+      await f.page.locator('#save-melody').click();
+      await f.page.waitForFunction(()=>window.__serialMock.commands.at(-1)==='settings get' && !document.getElementById('setting-melody').disabled);
+      assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.melody),4);
+      assert.match(await f.page.locator('#saved-melody').textContent(),named?/4 · Канон · Прочитано/:/Мелодия 4 · Прочитано/);
+    } finally {await f.close();}
+  }
+});
+
 test('headless settings save explicit fields with readback; ADC calculation and reset require confirmation',async()=>{
   const f=await fixture({settings:true,info:DEVICE_INFO,replies:true});
   try {

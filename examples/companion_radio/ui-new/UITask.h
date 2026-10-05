@@ -35,6 +35,10 @@
   #define UI_PHONE_GPS 0
 #endif
 
+#ifndef UI_PERIODIC_AGC_RESET_PAGE
+  #define UI_PERIODIC_AGC_RESET_PAGE 1
+#endif
+
 #ifndef SMARTUI_CONNECTION_SELECTOR
   #define SMARTUI_CONNECTION_SELECTOR 0
 #endif
@@ -428,6 +432,9 @@ public:
   bool isLowBatteryShutdownEnabled() const;
   uint16_t getLowBatteryShutdownThreshold() const;
   void toggleLowBatteryShutdown();
+  bool supportsPeriodicAgcReset() const;
+  bool isPeriodicAgcResetEnabled() const;
+  bool togglePeriodicAgcReset();
   const char* getUiFontName() const;
   const char* getUiThemeName() const;
   const char* getUiFontChoiceName(uint8_t choice) const;

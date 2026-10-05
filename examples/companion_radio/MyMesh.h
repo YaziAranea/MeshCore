@@ -37,6 +37,7 @@
 #include <helpers/DeferredSaveResponseGate.h>
 #include <helpers/OfflineQueueSync.h>
 #include <helpers/PrefsTransaction.h>
+#include <helpers/PeriodicAgcPolicy.h>
 #if __has_include(<helpers/BoardLedControl.h>)
   #include <helpers/BoardLedControl.h>
 #else
@@ -189,6 +190,7 @@ public:
   bool advert();
   uint16_t getAutoAdvertIntervalMins() const;
   bool cycleAutoAdvertInterval();
+  bool supportsPeriodicAgcReset() const;
   void applyUiPrefsRuntime();
   bool commitPrefsOrRollback(const NodePrefs& before);
   // One bounded persistence attempt.  Callers decide whether a failed manual
@@ -257,6 +259,7 @@ protected:
   void sendFloodScoped(const mesh::GroupChannel& channel, mesh::Packet* pkt, uint32_t delay_millis=0) override;
 
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
+  void logTx(mesh::Packet* packet, int len) override;
   bool isAutoAddEnabled() const override;
   bool shouldAutoAddContactType(uint8_t type) const override;
   bool shouldOverwriteWhenFull() const override;
@@ -308,6 +311,22 @@ public:
     _prefs.node_lat = isPhoneGpsEnabled() ? 0.0 : sensors.node_lat;
     _prefs.node_lon = isPhoneGpsEnabled() ? 0.0 : sensors.node_lon;
     return _store->savePrefs(_prefs);
+  }
+
+  const char* getPrefsSaveErrorText() const {
+    // Short enough for the smallest display; codes identify the failed step,
+    // not an unproven diagnosis such as "flash full" or "corrupt memory".
+    switch (_store->getPrefsSaveError()) {
+      case PrefsSaveError::NO_MEMORY: return "Нет RAM";
+      case PrefsSaveError::SCRATCH_REMOVE: return "Запись: F1";
+      case PrefsSaveError::SCRATCH_OPEN: return "Запись: F2";
+      case PrefsSaveError::WRITE: return "Запись: F3";
+      case PrefsSaveError::VERIFY_OPEN: return "Чтение: F4";
+      case PrefsSaveError::VERIFY_PARSE: return "Проверка: F5";
+      case PrefsSaveError::VERIFY_CONTENT: return "Проверка: F6";
+      case PrefsSaveError::COMMIT: return "Запись: F7";
+      default: return "Не сохранено";
+    }
   }
 
   bool areBoardLedsEnabled() const { return _prefs.board_leds_enabled != 0; }
@@ -389,6 +408,8 @@ private:
   bool textMentionsNodeName(const char* text, const char* node_name);
   void sampleChannelBusy();
   void updateAutoAdvertTimer();
+  void servicePeriodicAgcReset(bool allow_start);
+  smartui::PeriodicAgcPolicy periodic_agc;
 
   // helpers, short-cuts
   bool saveChannels() { return _store->saveChannels(this); }

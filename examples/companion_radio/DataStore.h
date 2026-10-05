@@ -20,11 +20,24 @@ enum StorageFormatFailure : uint8_t {
   STORAGE_FORMAT_PLATFORM_STATE_FAILED = 1 << 2
 };
 
+enum class PrefsSaveError : uint8_t {
+  NONE = 0,
+  NO_MEMORY,
+  SCRATCH_REMOVE,
+  SCRATCH_OPEN,
+  WRITE,
+  VERIFY_OPEN,
+  VERIFY_PARSE,
+  VERIFY_CONTENT,
+  COMMIT,
+};
+
 class DataStore {
   FILESYSTEM* _fs;
   FILESYSTEM* _fsExtra;
   mesh::RTCClock* _clock;
   IdentityStore identity_store;
+  PrefsSaveError _prefs_save_error = PrefsSaveError::NONE;
 
   bool loadPrefsInt(const char *filename, NodePrefs& prefs);
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
@@ -43,6 +56,7 @@ public:
   bool saveMainIdentity(const mesh::LocalIdentity &identity);
   void loadPrefs(NodePrefs& prefs);
   bool savePrefs(NodePrefs& prefs);
+  PrefsSaveError getPrefsSaveError() const { return _prefs_save_error; }
   void loadContacts(DataStoreHost* host);
   bool saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c) = NULL);
   void loadChannels(DataStoreHost* host);

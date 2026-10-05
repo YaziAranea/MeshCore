@@ -3,13 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-0.08
+      - smartui-0.09
       # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.08 as Latest after all six-board checks pass
+        description: Publish public SmartUI 0.09 as Latest after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -41,15 +41,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.08.uf2
+            uf2_name: T096_UI_0.09.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.08.uf2
+            uf2_name: T114_UI_0.09.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.08.uf2
+            uf2_name: ProMicro_RA62_UI_0.09.uf2
 
     steps:
       - name: Check out source
@@ -87,6 +87,10 @@ jobs:
           mkdir -p firmware
           pio run -e "${{ matrix.environment }}" -t create_uf2
           test -s "${UF2_FILE_PATH}"
+
+      - name: Reproduce low-space prefs retry with the pinned LittleFS
+        if: matrix.artifact_id == 't096-fem'
+        run: python tools/test_littlefs_prefs_capacity.py
 
       - name: Verify flash-cache LED interception in the linked firmware
         run: |
@@ -157,15 +161,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.08
+            stem: Heltec_V3_UI_0.09
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.08
+            stem: Heltec_V4.3_UI_0.09
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.08
+            stem: Paper_UI_0.09
 
     steps:
       - name: Check out source
@@ -539,6 +543,9 @@ jobs:
         run: |
           python tools/test_settings_flow.py
           python tools/test_compact_menu_cleanup.py
+          python tools/test_periodic_agc_ui.py
+          python tools/test_periodic_agc.py
+          python tools/test_agc_maintenance.py
 
       - name: Check offline reminder timing and two-play nRF melody series
         run: python tools/test_important_notify_v4.py
@@ -600,12 +607,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-public-release:
-    name: Publish SmartUI 0.08
-    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.08'
+    name: Publish SmartUI 0.09
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.09'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-public-release-smartui-0.08
+      group: publish-public-release-smartui-0.09
       cancel-in-progress: false
     permissions:
       contents: write
@@ -624,7 +631,7 @@ jobs:
           name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.08 release page
+      - name: Create or resume the SmartUI 0.09 release page
         shell: bash
         run: |
           set -euo pipefail
@@ -636,9 +643,9 @@ jobs:
           }
           # Recheck live visibility before any tag, release or asset mutation.
           check_public_target
-          tag="smartui-0.08"
-          title="Smart UI 0.08"
-          notes="release/RELEASE_NOTES_SmartUI_0.08_RU.md"
+          tag="smartui-0.09"
+          title="Smart UI 0.09"
+          notes="release/RELEASE_NOTES_SmartUI_0.09_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.

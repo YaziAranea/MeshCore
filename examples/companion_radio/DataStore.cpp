@@ -474,7 +474,8 @@ static bool isPrefsKeyChar(char c) {
 // ConfigSerializer emits a compact JSON-like object with unquoted keys.  Scan
 // only root-level keys and ignore quoted values, so a node name containing the
 // text "smart_ui" cannot suppress the legacy migration.
-static bool prefsHasRootKey(File& file, const char* wanted) {
+static bool prefsHasRootKey(File& file, const char* wanted,
+                            const char* first_child = nullptr) {
   int depth = 0;
   bool in_string = false;
   bool escaped = false;
@@ -525,7 +526,28 @@ static bool prefsHasRootKey(File& file, const char* wanted) {
 
     if (c == ':' && key_len > 0) {
       key[key_len] = 0;
-      if (strcmp(key, wanted) == 0) return true;
+      if (strcmp(key, wanted) == 0) {
+        if (first_child == nullptr) return true;
+        // The caller already syntax-checked the file. For conservative
+        // backup reclamation, additionally require the known first member of
+        // a section, rejecting empty objects and unfamiliar layouts.
+        auto nextNonSpace = [&file]() {
+          int value;
+          do { value = file.read(); }
+          while (value == ' ' || value == '\t' || value == '\r' || value == '\n');
+          return value;
+        };
+        if (nextNonSpace() != '{') return false;
+        int value = nextNonSpace();
+        for (const char* member = first_child; *member; ++member) {
+          if (value != *member) return false;
+          value = file.read();
+        }
+        while (value == ' ' || value == '\t' || value == '\r' || value == '\n') {
+          value = file.read();
+        }
+        return value == ':';
+      }
     }
     key_len = 0;
   }
@@ -703,6 +725,31 @@ bool DataStore::loadPrefsInt(const char *filename, NodePrefs& _prefs) {
   return false;
 }
 
+static bool prefsPrimaryAllowsBackupReclaim(FILESYSTEM* fs, const char* target,
+                                            NodePrefs& verification) {
+  if (!prefsFileValid(fs, target, verification)) return false;
+  File file = openStorageRead(fs, target);
+  if (!file) return false;
+  // A syntactically valid but empty/root-incomplete object must not justify
+  // removing the recovery copy. Require pre-AGC SmartUI's root fields and the
+  // known leading member of each section, in addition to full-file parsing.
+  // Old stock layouts without smart_ui keep their backup and fail safely.
+  static const char* const required[][2] = {
+    {"name", nullptr}, {"lat", nullptr}, {"lon", nullptr},
+    {"radio", "freq"}, {"gps", "en"}, {"repeat", "disable"},
+    {"comp", "auto_max"}, {"smart_ui", "adc"}
+  };
+  bool complete = true;
+  for (const auto& key : required) {
+    if (!file.seek(0) || !prefsHasRootKey(file, key[0], key[1])) {
+      complete = false;
+      break;
+    }
+  }
+  file.close();
+  return complete;
+}
+
 bool DataStore::savePrefs(NodePrefs& _prefs) {
   static const char* target = "/prefs.json";
   static const char* scratch = "/prefs.json.tmp";
@@ -712,28 +759,64 @@ bool DataStore::savePrefs(NodePrefs& _prefs) {
   // complete parsing copy off the small nRF loop stack. Allocation failure is
   // explicit and happens before touching any persistent generation.
   std::unique_ptr<NodePrefs> verification(new (std::nothrow) NodePrefs(_prefs));
-  if (!verification) return false;
-
-  if (!prepareScratch(_fs, scratch)) return false;
-  File file = openScratch(_fs, scratch);
-  if (!file) return false;
-  bool success = _prefs.saveSerial(file);
-  file.flush();
-  file.close();
-
-  // Re-open and parse the exact bytes which will be published.  A short write
-  // or syntactically complete-but-unreadable file never replaces good prefs.
-  File verify_file = openRead(_fs, scratch);
-  success = success && verify_file && verification->loadSerial(verify_file);
-  success = success && memcmp(verification->quick_replies, _prefs.quick_replies,
-                              sizeof(_prefs.quick_replies)) == 0;
-  if (verify_file) verify_file.close();
-  if (success) {
-    success = commitScratch(_fs, target, scratch, backup,
-                            prefsFileValid(_fs, target, *verification));
+  _prefs_save_error = PrefsSaveError::NONE;
+  if (!verification) {
+    _prefs_save_error = PrefsSaveError::NO_MEMORY;
+    return false;
   }
-  if (!success && _fs->exists(scratch)) _fs->remove(scratch);
-  return success;
+
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    *verification = _prefs;
+    _prefs_save_error = PrefsSaveError::NONE;
+    if (!prepareScratch(_fs, scratch)) {
+      _prefs_save_error = PrefsSaveError::SCRATCH_REMOVE;
+      return false;
+    }
+    File file = openScratch(_fs, scratch);
+    if (!file) {
+      _prefs_save_error = PrefsSaveError::SCRATCH_OPEN;
+    } else {
+      const bool written = _prefs.saveSerial(file);
+      file.flush();
+      file.close();
+      if (!written) _prefs_save_error = PrefsSaveError::WRITE;
+    }
+
+    // Check the persisted scratch bytes, including delayed flush failures.
+    if (_prefs_save_error == PrefsSaveError::NONE) {
+      File verify_file = openRead(_fs, scratch);
+      if (!verify_file) {
+        _prefs_save_error = PrefsSaveError::VERIFY_OPEN;
+      } else {
+        if (!verification->loadSerial(verify_file)) {
+          _prefs_save_error = PrefsSaveError::VERIFY_PARSE;
+        } else if (memcmp(verification->quick_replies, _prefs.quick_replies,
+                           sizeof(_prefs.quick_replies)) != 0) {
+          _prefs_save_error = PrefsSaveError::VERIFY_CONTENT;
+        }
+        verify_file.close();
+      }
+    }
+    if (_prefs_save_error == PrefsSaveError::NONE) {
+      if (commitScratch(_fs, target, scratch, backup,
+                        prefsFileValid(_fs, target, *verification))) return true;
+      _prefs_save_error = PrefsSaveError::COMMIT;
+    }
+
+    // No formatting and no cleanup of unrelated data. On a tight InternalFS,
+    // three prefs generations may not fit. Close/clean the failed scratch,
+    // validate the complete primary, then reclaim ONLY its older backup and
+    // retry once. A bad/missing primary keeps the backup untouched.
+    if (_fs->exists(scratch) && !_fs->remove(scratch)) return false;
+    const bool capacity_failure = _prefs_save_error == PrefsSaveError::SCRATCH_OPEN ||
+        _prefs_save_error == PrefsSaveError::WRITE ||
+        _prefs_save_error == PrefsSaveError::VERIFY_OPEN ||
+        _prefs_save_error == PrefsSaveError::VERIFY_PARSE;
+    if (attempt != 0 || !capacity_failure || !_fs->exists(backup) ||
+        !prefsPrimaryAllowsBackupReclaim(_fs, target, *verification) ||
+        !_fs->remove(backup)) return false;
+  }
+  return false;
 }
 
 void DataStore::loadContacts(DataStoreHost* host) {

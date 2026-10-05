@@ -118,6 +118,7 @@ public:
   uint8_t gps_source = GPS_SOURCE_HW;
   int16_t timezone_offset_minutes = 360;  // UTC+06:00 compatibility default
   uint8_t powersaving_enabled = 1; // Companion power-saving policy; not a new user preference.
+  uint8_t agc_reset_enabled = 0; // Optional periodic SX126x AGC reset; existing devices stay OFF.
   char quick_replies[SMARTUI_QUICK_REPLY_COUNT][SMARTUI_QUICK_REPLY_MAX_BYTES + 1] = {};
 
 private:
@@ -244,6 +245,7 @@ private:
       def("night_quiet", _parent->night_quiet_active);
       def("gps_source", _parent->gps_source);
       def("tz_min", _parent->timezone_offset_minutes);
+      def("agc_reset", _parent->agc_reset_enabled);
       for (uint8_t slot = 0; slot < SMARTUI_QUICK_REPLY_COUNT; ++slot) {
         char key[] = "reply_1";
         key[6] = static_cast<char>('1' + slot);
@@ -324,6 +326,7 @@ private:
     night_quiet_active = other.night_quiet_active;
     gps_source = other.gps_source;
     timezone_offset_minutes = other.timezone_offset_minutes;
+    agc_reset_enabled = other.agc_reset_enabled;
     memcpy(quick_replies, other.quick_replies, sizeof(quick_replies));
     repeat.disable_fwd = other.repeat.disable_fwd;
   }

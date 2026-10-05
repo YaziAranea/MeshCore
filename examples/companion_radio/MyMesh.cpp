@@ -1587,6 +1587,8 @@ bool MyMesh::begin(bool has_display) {
   _prefs.ui_theme = constrain(_prefs.ui_theme, 0, 6);
   _prefs.unread_led_enabled = constrain(_prefs.unread_led_enabled, 0, 1);
   _prefs.msg_popup_enabled = constrain(_prefs.msg_popup_enabled, 0, 1);
+  // Unknown/corrupt values must not opt a user into radio maintenance.
+  if (_prefs.agc_reset_enabled != 1) _prefs.agc_reset_enabled = 0;
   _prefs.notifications_muted = constrain(_prefs.notifications_muted, 0, 1);
   _prefs.night_quiet_active = constrain(_prefs.night_quiet_active, 0, 1);
   if (_prefs.night_prompt_day > 100000UL) _prefs.night_prompt_day = 0;
@@ -3321,7 +3323,61 @@ void MyMesh::checkSerialInterface() {
   }
 }
 
+bool MyMesh::supportsPeriodicAgcReset() const {
+#if defined(USE_SX1262) && defined(WRAPPER_CLASS)
+  return radio_driver.supportsAgcMaintenance();
+#else
+  return false;
+#endif
+}
+
+void MyMesh::logTx(mesh::Packet* packet, int len) {
+  // This hook runs after actual TX completion, not when a message is merely
+  // queued. Protect long routes and replies even after a TX-budget delay.
+  const uint32_t airtime = _radio->getEstAirtimeFor(MAX_TRANS_UNIT);
+  uint32_t reply_ms = packet->isRouteFlood()
+      ? calcFloodTimeoutMillisFor(airtime)
+      : calcDirectTimeoutMillisFor(airtime, packet->path_len);
+  // Trace routes live in the payload; sendDirect() clears their path_len.
+  // Do not mask the hop count to six bits here: a 64-hop trace is not zero hops.
+  if (packet->getPayloadType() == PAYLOAD_TYPE_TRACE && packet->payload_len >= 9) {
+    const uint8_t hash_size = 1U << (packet->payload[8] & 3U);
+    const uint32_t trace_hops = (packet->payload_len - 9U) / hash_size;
+    const uint32_t trace_reply_ms = SEND_TIMEOUT_BASE_MILLIS +
+        ((airtime * DIRECT_SEND_PERHOP_FACTOR + DIRECT_SEND_PERHOP_EXTRA_MILLIS) *
+         (trace_hops + 1U));
+    if (trace_reply_ms > reply_ms) reply_ms = trace_reply_ms;
+  }
+  if (reply_ms < 5000U) reply_ms = 5000U;
+  periodic_agc.deferForReply(static_cast<uint32_t>(_ms->getMillis()), reply_ms);
+  (void)len;
+}
+
+void MyMesh::servicePeriodicAgcReset(bool allow_start) {
+#if defined(USE_SX1262) && defined(WRAPPER_CLASS)
+  const uint32_t now = static_cast<uint32_t>(_ms->getMillis());
+  const bool enabled = _prefs.agc_reset_enabled == 1 &&
+      supportsPeriodicAgcReset() && !storage_recovery_required && !_cli_rescue;
+  periodic_agc.setEnabled(enabled, now);
+  if (!enabled) {
+    radio_driver.cancelAgcMaintenance();
+    return;
+  }
+  if (!allow_start || radio_driver.isAgcMaintenanceActive()) return;
+  const bool traffic_pending = _mgr->getOutboundTotal() > 0 ||
+      link_test.active || !radio_driver.isInRecvMode();
+  if (periodic_agc.ready(now, traffic_pending) &&
+      radio_driver.requestAgcMaintenance()) {
+    periodic_agc.attempted(now);
+  }
+#else
+  (void)allow_start;
+#endif
+}
+
 void MyMesh::loop() {
+  // Observe an OFF toggle before the driver's next maintenance step.
+  servicePeriodicAgcReset(false);
 #if SMARTUI_CONNECTION_SELECTOR
   if (_serial) {
     const uint32_t generation = _serial->sessionGeneration();
@@ -3380,6 +3436,8 @@ void MyMesh::loop() {
     if (!advert()) MESH_DEBUG_PRINTLN("ERROR: auto advert failed");
     updateAutoAdvertTimer();
   }
+
+  servicePeriodicAgcReset(true);
 
 #ifdef DISPLAY_CLASS
   if (_ui) _ui->setHasConnection(_serial->isConnected());

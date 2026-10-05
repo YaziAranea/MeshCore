@@ -234,6 +234,11 @@ def source_contract():
     assert 'HomePage::FAVORITE_SLOT_' not in menus and 'HomePage::UNDO_SETTING' not in menus
     sound = menus.split('sound_pages[] = {', 1)[1].split('};', 1)[0]
     advanced = menus.split('advanced_pages[] = {', 1)[1].split('};', 1)[0]
+    system = menus.split('system_pages[] = {', 1)[1].split('};', 1)[0]
+    assert system.index('HomePage::BLUETOOTH') < system.index('HomePage::AGC_RESET') < system.index('HomePage::TIMEZONE')
+    assert 'case HomePage::AGC_RESET: return "AGC-сброс";' in UI
+    assert '_task->isPeriodicAgcResetEnabled() ? "ВКЛ" : "ВЫКЛ"' in UI
+    assert 'if (page == HomePage::AGC_RESET) return _task->supportsPeriodicAgcReset();' in UI
     for page in ('ALERT_SOUND', 'ALERT_VOLUME', 'ALERT_TONE_STYLE', 'ALERT_TONE_RESONANCE',
                  'ALERT_TONE_PIN', 'ALERT_TONE_BRIDGE', 'ALERT_VIBE_PIN'):
         assert 'HomePage::' + page in sound
@@ -416,7 +421,7 @@ def setting_group(profile, title, rows, cursor=0):
         if label in ("Стиль звука", "Тип зуммера") or (
                 label == "Громкость" and profile.board in ("T096", "T114")):
             action = "Изменить"
-    elif title == "Система" and cursor < len(rows) and rows[cursor][0] in ("LED платы", "Защита АКБ"):
+    elif title == "Система" and cursor < len(rows) and rows[cursor][0] in ("LED платы", "Защита АКБ", "AGC-сброс"):
         action = "Изменить"
     heading(frame, title, action)
     row_y, row_h, visible, start = geometry(profile, len(entries), cursor)
@@ -433,11 +438,15 @@ def setting_group(profile, title, rows, cursor=0):
         marker_w = frame.font.width(">")+4 if marker else 0
         value_x = w-value_width
         label_width = value_x-5 if value else w-3-marker_w-5
-        frame.text(3, y, label, color, max_w=label_width, tag=f"label{row}")
+        shown_label = frame.text(3, y, label, color, max_w=label_width, tag=f"label{row}")
+        if label == "AGC-сброс" and shown_label != label:
+            frame.violations.append(f"AGC label truncated: {shown_label}")
         frame.assert_element_inside(f"label{row}", (3,y,label_width,row_h))
         if value:
-            frame.text(value_x,y,value,"dark" if selected else "green",
-                       max_w=value_width-1,tag=f"value{row}")
+            shown_value = frame.text(value_x,y,value,"dark" if selected else "green",
+                                     max_w=value_width-1,tag=f"value{row}")
+            if label == "AGC-сброс" and shown_value != value:
+                frame.violations.append(f"AGC value truncated: {value} -> {shown_value}")
             frame.assert_element_inside(f"value{row}",(value_x,y,value_width-1,row_h))
             assert_tags_do_not_overlap(frame,f"label{row}",f"value{row}")
         if marker:
@@ -445,6 +454,28 @@ def setting_group(profile, title, rows, cursor=0):
             assert_tags_do_not_overlap(frame,f"label{row}",f"marker{row}")
     if len(entries)>visible:
         scrollbar(frame,row_y,row_h,visible,len(entries),start)
+    return frame
+
+
+def system_rows_for(agc_enabled=False, agc_supported=True):
+    rows = [("Подключение", "BLE")]
+    if agc_supported:
+        rows.append(("AGC-сброс", "ВКЛ" if agc_enabled else "ВЫКЛ"))
+    return rows + [("Часовой пояс", "UTC+06"), ("LED платы", "ВКЛ"),
+                   ("Защита АКБ", "3.2 В"), ("Состояние", ""), ("Управление", "")]
+
+
+def agc_settings(profile, enabled):
+    rows = system_rows_for(agc_enabled=enabled)
+    cursor = next(index for index, row in enumerate(rows) if row[0] == "AGC-сброс")
+    frame = setting_group(profile, "Система", rows, cursor)
+    _, _, _, start = geometry(profile, len(rows)+1, cursor)
+    selected_row = cursor-start
+    selected = {element.tag: element.shown for element in frame.elements}
+    assert selected.get(f"label{selected_row}") == "AGC-сброс", f"{profile.board}/{profile.profile}: AGC row not visible"
+    assert selected.get(f"value{selected_row}") == ("ВКЛ" if enabled else "ВЫКЛ")
+    assert frame.facts["header"]["action"] == "Изменить"
+    frame.facts.update(agc_enabled=enabled, agc_supported=True)
     return frame
 
 
@@ -505,8 +536,8 @@ def main(no_docs=False):
         "Громкость": [f"{x}/10" for x in range(1, 11)],
     }
     checks, failures = 0, []
-    system_rows = [("Подключение", "BLE"), ("Часовой пояс", "UTC+06"), ("LED платы", "ВКЛ"),
-                   ("Защита АКБ", "3.2 В"), ("Состояние", ""), ("Управление", "")]
+    system_rows = system_rows_for()
+    agc_checks = 0
     for profile in configurations:
         for cursor in range(8):
             frame=root_menu(profile,cursor)
@@ -523,6 +554,16 @@ def main(no_docs=False):
             frame = battery(profile, enabled)
             checks += 1
             failures.extend(f"{profile.board}/{profile.profile}/battery: {x}" for x in frame.violations)
+            frame = agc_settings(profile, enabled)
+            checks += 1
+            agc_checks += 1
+            failures.extend(f"{profile.board}/{profile.profile}/AGC/{enabled}: {x}" for x in frame.violations)
+        unsupported_rows = system_rows_for(agc_supported=False)
+        assert all(label != "AGC-сброс" for label, _ in unsupported_rows)
+        frame = setting_group(profile, "Система", unsupported_rows, len(unsupported_rows)-1)
+        checks += 1
+        agc_checks += 1
+        failures.extend(f"{profile.board}/{profile.profile}/AGC unsupported: {x}" for x in frame.violations)
         for cursor in range(8):
             frame=auxiliary(profile,"Управление",help_labels(),cursor,"Назад")
             checks+=1
@@ -542,6 +583,15 @@ def main(no_docs=False):
     for board in ("T096", "T114", "OLED", "V4.3", "Heltec V3", "Wireless Paper"):
         profile = next(p for p in configurations if p.board == ("OLED" if board in ("V4.3", "Heltec V3") else board))
         if board in ("V4.3", "Heltec V3"): profile=replace(profile,board=board)
+        agc_profiles = [p for p in configurations if p.board == ("OLED" if board in ("V4.3", "Heltec V3") else board)]
+        agc_scenes = []
+        for candidate in agc_profiles:
+            if board in ("V4.3", "Heltec V3"): candidate = replace(candidate, board=board)
+            for enabled in (False, True):
+                label = f"{candidate.profile}: AGC " + ("ВКЛ" if enabled else "ВЫКЛ")
+                agc_scenes.append((label, agc_settings(candidate, enabled)))
+        agc_board_name = "promicro" if board == "OLED" else board.lower().replace(" ", "-")
+        docs_sheet(agc_scenes, OUT / f"agc-{agc_board_name}.png")
         scenes = []
         for title in ("Выход звука", "Резонанс", "Громкость"):
             labels = lists[title]
@@ -575,6 +625,8 @@ def main(no_docs=False):
         "renderNotifyPicker_sha256": fingerprint, "profiles": len(configurations),
         "renderSettingsHeader_actual_cpp": header_proof,
         "checks": checks, "failures": failures,
+        "agc_checks": agc_checks,
+        "agc_scope": "all compact font profiles: OFF/ON selected row, full label/value ink, lanes, header action; unsupported row omitted by model, not runtime capability execution",
         "coverage": "all list cursors including Cancel, active marker, 32-item GPIO stress, resonance, volume, both battery values",
         "t114": "forced bitmap font0: real 24px line; logical128x64 -> physical240x135; Y_OFFSET=1",
         "pins": "layout samples/stress only, not a whitelist or wiring recommendation",

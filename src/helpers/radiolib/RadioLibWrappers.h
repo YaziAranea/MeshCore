@@ -4,6 +4,7 @@
 #include <RadioLib.h>
 #include "RXPowerSaving.h"
 #include "LoRaConfigValidation.h"
+#include "AgcMaintenance.h"
 
 #ifdef USE_CC310_HW_CRYPTO
 #include <Adafruit_nRFCrypto.h>
@@ -41,6 +42,24 @@ protected:
   unsigned long _nf_last_calib;
   unsigned long _nf_calib_deadline;
   unsigned long _nf_sample_from;
+
+  AgcMaintenanceStep _agc_step = AgcMaintenanceStep::Idle;
+  AgcMaintenanceStatus _agc_status = {false, 0, 0, 0, 0, 0};
+  uint32_t _agc_started = 0, _agc_step_at = 0, _agc_sample_at = 0;
+  uint16_t _agc_samples = 0, _agc_sample_attempts = 0;
+  int32_t _agc_sum = 0;
+  uint8_t _agc_gain = 0, _agc_patch = 0;
+  bool _agc_gain_valid = false, _agc_touched = false, _agc_cancelled = false;
+  bool _agc_restoring = false, _agc_restore_pending = false;
+
+  virtual int16_t agcHardwareStep(AgcMaintenanceStep, int16_t&) { return RADIOLIB_ERR_UNSUPPORTED; }
+  void serviceAgcMaintenance();
+  void finishAgcMaintenance(bool preserve_rx = false);
+  void abortAgcMaintenanceForRadioChange();
+  bool agcOwnsHardware() const {
+    return _agc_status.active && _agc_step != AgcMaintenanceStep::Sampling &&
+           _agc_step != AgcMaintenanceStep::ReadGain && _agc_step != AgcMaintenanceStep::Suspend;
+  }
 
   void idle();
   void startRecv();
@@ -95,10 +114,16 @@ public:
   virtual bool supportsRxPowerSaving() const { return false; }
   bool setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) override;
   RxPowerSavingStatus getRxPowerSavingStatus() const override;
-  bool isRxPowerSavingCalibrationActive() const override { return _nf_calib_active; }
+  bool isRxPowerSavingCalibrationActive() const override { return _nf_calib_active || _agc_status.active; }
+  virtual bool supportsAgcMaintenance() const { return false; }
+  bool requestAgcMaintenance();
+  void cancelAgcMaintenance();
+  bool isAgcMaintenanceActive() const { return _agc_status.active; }
+  AgcMaintenanceStatus getAgcMaintenanceStatus() const { return _agc_status; }
 
   bool isReceiving() override {
     if (!_config_valid) return false;
+    if (_agc_status.active) return true; // Dispatcher retains queued TX until maintenance completes.
     if (isReceivingPacket()) return true;
 
     return isChannelActive();
@@ -122,7 +147,7 @@ public:
   virtual float getCurrentRSSI() =0;
   virtual uint8_t getSpreadingFactor() const { return LORA_SF; }
   static uint16_t preambleLengthForSF(uint8_t sf) { return sf <= 8 ? 32 : 16; }
-  void updatePreamble(uint8_t sf) { _preamble_sf = sf; _radio->setPreambleLength(preambleLengthForSF(sf)); }
+  void updatePreamble(uint8_t sf) { prepareForRadioConfig(); _preamble_sf = sf; _radio->setPreambleLength(preambleLengthForSF(sf)); }
   PacketMillis calcMaxPacketMillis(uint8_t sf, float bw, uint8_t cr, uint8_t preambleSymbols);
   virtual int16_t performChannelScan();
 

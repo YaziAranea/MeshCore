@@ -19,6 +19,29 @@
 
 static volatile uint8_t state = STATE_IDLE;
 
+#if defined(ESP32)
+static portMUX_TYPE radio_state_mux = portMUX_INITIALIZER_UNLOCKED;
+#endif
+
+static void setStatePreservingIRQ(uint8_t next) {
+  #if defined(ESP32)
+  portENTER_CRITICAL(&radio_state_mux);
+  #elif defined(NRF52_PLATFORM)
+  const uint32_t saved_primask = __get_PRIMASK();
+  __disable_irq();
+  #else
+  noInterrupts();
+  #endif
+  if ((state & ~STATE_INT_READY) != STATE_TX_WAIT) state = next | (state & STATE_INT_READY);
+  #if defined(ESP32)
+  portEXIT_CRITICAL(&radio_state_mux);
+  #elif defined(NRF52_PLATFORM)
+  __set_PRIMASK(saved_primask);
+  #else
+  interrupts();
+  #endif
+}
+
 // this function is called when a complete packet
 // is transmitted by the module
 static
@@ -26,8 +49,14 @@ static
   ICACHE_RAM_ATTR
 #endif
 void setFlag(void) {
+  #if defined(ESP32)
+  portENTER_CRITICAL_ISR(&radio_state_mux);
+  #endif
   // we sent a packet, set the flag
   state |= STATE_INT_READY;
+  #if defined(ESP32)
+  portEXIT_CRITICAL_ISR(&radio_state_mux);
+  #endif
 }
 
 void RadioLibWrapper::begin() {
@@ -59,12 +88,14 @@ void RadioLibWrapper::setTxPower(int8_t dbm) {
 }
 
 void RadioLibWrapper::idle() {
+  abortAgcMaintenanceForRadioChange();
   if (_rx_ps_armed) stopReceiveDutyCycle();
   _radio->standby();
   state = STATE_IDLE;   // need another startReceive()
 }
 
 void RadioLibWrapper::powerOff() {
+  abortAgcMaintenanceForRadioChange();
   if (_rx_ps_armed) stopReceiveDutyCycle();
   _radio->sleep();
 }
@@ -83,6 +114,7 @@ void RadioLibWrapper::doResetAGC() {
 
 void RadioLibWrapper::resetAGC() {
   if (!_config_valid) return;
+  if (_agc_status.active) return;
   // make sure we're not mid-receive or mid-transmit of a packet
   if (isPacketPendingOrReceiving() || state == STATE_TX_WAIT) return;
 
@@ -163,11 +195,7 @@ bool RadioLibWrapper::publishNoiseFloor() {
 // A plain `state = STATE_IDLE` loses that flag (and with it, a received
 // packet) when setFlag() fires between the test and the store.
 void RadioLibWrapper::requestRestartRecv() {
-  noInterrupts();
-  if ((state & ~STATE_INT_READY) != STATE_TX_WAIT) {
-    state &= STATE_INT_READY;   // STATE_IDLE, but keep a pending interrupt
-  }
-  interrupts();
+  setStatePreservingIRQ(STATE_IDLE);
 }
 
 bool RadioLibWrapper::isPacketPendingOrReceiving() {
@@ -203,6 +231,14 @@ void RadioLibWrapper::endNoiseFloorCalib(unsigned long now) {
 
 void RadioLibWrapper::loop() {
   if (!_config_valid) return;
+  if (_agc_status.active) {
+    serviceAgcMaintenance();
+    return;
+  }
+  if (_agc_restore_pending && !isPacketPendingOrReceiving()) {
+    _agc_restore_pending = false;
+    requestRestartRecv();
+  }
   noiseFloorCalibCheck();
 
   if (state == STATE_RX && _num_floor_samples < NUM_NOISE_FLOOR_SAMPLES) {
@@ -217,6 +253,7 @@ void RadioLibWrapper::loop() {
 
 void RadioLibWrapper::startRecv() {
   if (!_config_valid) return;  // a failed configuration rollback needs recovery
+  if (agcOwnsHardware()) return;
   #if defined(USE_LR2021)
   _radio->standby(); // without this LR2021 can throw -706 when calling startReceive after hardware CAD when side detectors are enabled
   #endif
@@ -296,6 +333,7 @@ bool RadioLibWrapper::isPacketReady() {
 }
 
 void RadioLibWrapper::prepareForRadioConfig() {
+  abortAgcMaintenanceForRadioChange();
   if (!_rx_ps_armed) return;
 
   stopReceiveDutyCycle();
@@ -305,6 +343,8 @@ void RadioLibWrapper::prepareForRadioConfig() {
 bool RadioLibWrapper::setRxPowerSaving(bool enabled, uint32_t rx_us, uint32_t sleep_us) {
   if (!isValidRxPowerSavingPeriod(rx_us) || !isValidRxPowerSavingPeriod(sleep_us)) return false;
   if (enabled && !supportsRxPowerSaving()) return false;
+
+  abortAgcMaintenanceForRadioChange();
 
   _rx_ps_enabled = enabled;
   _rx_ps_rx_us = rx_us;
@@ -332,8 +372,19 @@ bool RadioLibWrapper::isInRecvMode() const {
 
 int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
   if (!_config_valid) return 0;
+  if (_agc_status.active) {
+    if (agcOwnsHardware()) return 0;
+    // Complete maintenance before readData()/startReceive clears a late IRQ.
+    if (state & STATE_INT_READY) {
+      _agc_cancelled = true;
+      finishAgcMaintenance(true);
+    } else if (_agc_step != AgcMaintenanceStep::Sampling) {
+      return 0;
+    }
+  }
   int len = 0;
   if (state & STATE_INT_READY) {
+    if (_agc_status.active) finishAgcMaintenance(true);
     if (isPacketReady()) {
       if (_rx_ps_armed) stopReceiveDutyCycle();
       len = _radio->getPacketLength();
@@ -360,7 +411,7 @@ int RadioLibWrapper::recvRaw(uint8_t* bytes, int sz) {
     #endif
   }
 
-  if (state != STATE_RX) {
+  if ((state & ~STATE_INT_READY) != STATE_RX) {
     startRecv();
   }
   return len;
@@ -372,6 +423,9 @@ uint32_t RadioLibWrapper::getEstAirtimeFor(int len_bytes) {
 
 bool RadioLibWrapper::startSendRaw(const uint8_t* bytes, int len) {
   if (!_config_valid) return false;
+  // Normal Dispatcher TX waits on isReceiving(). A direct/forced send still
+  // restores the frontend instead of losing the already-dequeued packet.
+  abortAgcMaintenanceForRadioChange();
   if (_rx_ps_armed) stopReceiveDutyCycle();
   _board->onBeforeTransmit();
   int err = _radio->startTransmit((uint8_t *) bytes, len);
@@ -406,6 +460,7 @@ int16_t RadioLibWrapper::performChannelScan() {
 
 bool RadioLibWrapper::isChannelActive() {
   if (!_config_valid) return false;
+  if (_agc_status.active) return true;
   // int.thresh: RSSI-based interference detection (relative to noise floor)
   if (_threshold != 0 && !(_rx_ps_armed && isChipBusy()) &&
       getCurrentRSSI() > _noise_floor + _threshold) return true;
@@ -427,11 +482,231 @@ bool RadioLibWrapper::isChannelActive() {
 
 float RadioLibWrapper::getLastRSSI() const {
   if (_last_metrics_valid) return _last_rssi;
-  return _rx_ps_armed ? 0 : _radio->getRSSI();
+  return (_rx_ps_armed || agcOwnsHardware()) ? 0 : _radio->getRSSI();
 }
 float RadioLibWrapper::getLastSNR() const {
   if (_last_metrics_valid) return _last_snr;
-  return _rx_ps_armed ? 0 : _radio->getSNR();
+  return (_rx_ps_armed || agcOwnsHardware()) ? 0 : _radio->getSNR();
+}
+
+bool RadioLibWrapper::requestAgcMaintenance() {
+  if (!supportsAgcMaintenance() || !_config_valid || _agc_status.active ||
+      _nf_calib_active || state != STATE_RX || _agc_restore_pending) return false;
+  // No SPI in the request path. The first service steps check actual RX flags
+  // again before taking the radio out of receive mode.
+  _agc_status.active = true;
+  _agc_status.last_error = RADIOLIB_ERR_NONE;
+  ++_agc_status.attempts;
+  _agc_step = AgcMaintenanceStep::ReadGain;
+  _agc_started = millis();
+  _agc_samples = _agc_sample_attempts = 0;
+  _agc_sum = 0;
+  _agc_gain_valid = _agc_touched = _agc_cancelled = _agc_restoring = false;
+  return true;
+}
+
+void RadioLibWrapper::finishAgcMaintenance(bool preserve_rx) {
+  if (!_agc_status.active) return;
+  if (_agc_status.last_error != RADIOLIB_ERR_NONE) ++_agc_status.failures;
+  else if (_agc_cancelled) ++_agc_status.cancellations;
+  else ++_agc_status.completed;
+  _agc_status.active = false;
+  _agc_step = AgcMaintenanceStep::Idle;
+  _nf_last_calib = millis();
+  // If a frame interrupted sampling, defer the return to RXPS until it has
+  // finished. No clearing IRQ, standby, or RX restart here.
+  _agc_restore_pending = preserve_rx && _agc_touched;
+}
+
+void RadioLibWrapper::cancelAgcMaintenance() {
+  if (!_agc_status.active || _agc_cancelled) return;
+  _agc_cancelled = true;
+  if (!_agc_touched) { finishAgcMaintenance(); return; }
+  if (_agc_step == AgcMaintenanceStep::Sampling) {
+    finishAgcMaintenance(true);
+    return;
+  }
+  _agc_restoring = true;
+  _agc_step = AgcMaintenanceStep::RecoveryWake;
+}
+
+void RadioLibWrapper::abortAgcMaintenanceForRadioChange() {
+  _agc_restore_pending = false;
+  if (!_agc_status.active) return;
+  _agc_cancelled = true;
+  if (_agc_touched && _agc_step != AgcMaintenanceStep::Sampling) {
+    // A deliberate config/power/TX change cannot leave a warm-sleeping chip
+    // behind. No loops/retries: each checked step has a local SPI timeout.
+    const AgcMaintenanceStep restore[] = {AgcMaintenanceStep::RecoveryWake,
+      AgcMaintenanceStep::Image, AgcMaintenanceStep::Dio2, AgcMaintenanceStep::WriteGain,
+      AgcMaintenanceStep::ReadPatch, AgcMaintenanceStep::WritePatch};
+    int16_t value = 0;
+    for (auto step : restore) {
+      int16_t error = agcHardwareStep(step, value);
+      if (error != RADIOLIB_ERR_NONE && _agc_status.last_error == RADIOLIB_ERR_NONE)
+        _agc_status.last_error = error;
+      if (error != RADIOLIB_ERR_NONE && step == AgcMaintenanceStep::ReadPatch) break;
+    }
+  }
+  finishAgcMaintenance();
+  requestRestartRecv();
+}
+
+void RadioLibWrapper::serviceAgcMaintenance() {
+  if (!_agc_status.active) return;
+  const uint32_t now = millis();
+  int16_t value = 0, error = RADIOLIB_ERR_NONE;
+  if (_agc_step == AgcMaintenanceStep::Sleep && (state & STATE_INT_READY)) {
+    _agc_cancelled = true;
+    finishAgcMaintenance(true);
+    return;
+  }
+  if (!_agc_restoring && now - _agc_started >= AGC_MAINTENANCE_DEADLINE_MS) {
+    _agc_status.last_error = AGC_MAINTENANCE_TIMEOUT;
+    if (!_agc_touched) { finishAgcMaintenance(); return; }
+    if (_agc_step == AgcMaintenanceStep::Sampling) { finishAgcMaintenance(true); return; }
+    _agc_restoring = true;
+    _agc_step = AgcMaintenanceStep::RecoveryWake;
+  }
+
+  // Probe right before the disruptive transition, not just at scheduling.
+  if (_agc_step == AgcMaintenanceStep::ReadGain || _agc_step == AgcMaintenanceStep::Suspend ||
+      _agc_step == AgcMaintenanceStep::Sampling) {
+    if (state & STATE_INT_READY) {
+      _agc_cancelled = _agc_step != AgcMaintenanceStep::Sampling;
+      finishAgcMaintenance(true);
+      return;
+    }
+    error = agcHardwareStep(AgcMaintenanceStep::Probe, value);
+    if (error == AGC_MAINTENANCE_DEFER) return;
+    if (error == RADIOLIB_ERR_NONE && value != 0) {
+      if (value & AGC_MAINTENANCE_RX_READY) setFlag();
+      _agc_cancelled = _agc_step != AgcMaintenanceStep::Sampling;
+      finishAgcMaintenance(true);
+      return;
+    }
+    if (error != RADIOLIB_ERR_NONE) {
+      _agc_status.last_error = error;
+      finishAgcMaintenance(_agc_touched);
+      return;
+    }
+  }
+
+  if (_agc_step == AgcMaintenanceStep::WaitCalibration) {
+    if (now - _agc_step_at < 5) return;
+    if (isChipBusy()) {
+      if (now - _agc_step_at < 50) return;
+      error = AGC_MAINTENANCE_TIMEOUT;
+    }
+  }
+  if (_agc_step == AgcMaintenanceStep::Sampling) {
+    if (now - _agc_step_at < NF_CALIB_SETTLE_MS || now == _agc_sample_at) return;
+    if (now - _agc_step_at >= AGC_MAINTENANCE_SAMPLE_MS ||
+        _agc_sample_attempts >= NF_CALIB_MAX_SAMPLE_ATTEMPTS) {
+      _agc_step = AgcMaintenanceStep::RestoreRx;
+      return;
+    }
+    _agc_sample_at = now;
+    ++_agc_sample_attempts;
+    error = agcHardwareStep(AgcMaintenanceStep::Sample, value);
+    if (error == RADIOLIB_ERR_NONE && value < 0 && value >= -140) {
+      _agc_sum += value;
+      if (++_agc_samples >= NUM_NOISE_FLOOR_SAMPLES) {
+        _noise_floor = _agc_sum / NUM_NOISE_FLOOR_SAMPLES;
+        if (_noise_floor < -120) _noise_floor = -120;
+        _num_floor_samples = NUM_NOISE_FLOOR_SAMPLES;
+        _floor_sample_sum = 0;
+        _agc_step = AgcMaintenanceStep::RestoreRx;
+      }
+    }
+    if (error != RADIOLIB_ERR_NONE) {
+      _agc_status.last_error = error;
+      finishAgcMaintenance(true);
+    }
+    return;
+  }
+  if (_agc_step == AgcMaintenanceStep::RestoreRx) {
+    if (state & STATE_INT_READY) { finishAgcMaintenance(true); return; }
+    error = agcHardwareStep(AgcMaintenanceStep::Probe, value);
+    if (error == AGC_MAINTENANCE_DEFER || (error == RADIOLIB_ERR_NONE && value)) {
+      if (error == RADIOLIB_ERR_NONE && (value & AGC_MAINTENANCE_RX_READY)) setFlag();
+      finishAgcMaintenance(true);
+      return;
+    }
+    if (error != RADIOLIB_ERR_NONE) {
+      _agc_status.last_error = error;
+      finishAgcMaintenance(true);
+      return;
+    }
+  }
+  const AgcMaintenanceStep step = _agc_step;
+  if (step == AgcMaintenanceStep::Suspend) _agc_touched = true;
+  if (error == RADIOLIB_ERR_NONE) error = agcHardwareStep(step, value);
+  if (step == AgcMaintenanceStep::Suspend) {
+    if (error != RADIOLIB_ERR_NONE) _agc_status.last_error = error;
+    _rx_ps_armed = false;
+    _rx_ps_eff_rx_us = _rx_ps_eff_sleep_us = 0;
+    // A late RX_DONE remains readable; never erase it to force maintenance.
+    if (state & STATE_INT_READY) { _agc_cancelled = true; finishAgcMaintenance(true); return; }
+    if (error == RADIOLIB_ERR_NONE) {
+      // Standby has stopped new RF reception. Catch RX_DONE latched just
+      // before standby, including when the MCU ISR has not run yet.
+      error = agcHardwareStep(AgcMaintenanceStep::Probe, value);
+      if (error == RADIOLIB_ERR_NONE && value) {
+        _agc_cancelled = true;
+        if (value & AGC_MAINTENANCE_RX_READY) {
+          setFlag();
+          finishAgcMaintenance(true);
+        } else {
+          // A preamble arriving in the final standby race has no complete
+          // payload to preserve. Resume RX; do not wait on stale HEADER bits.
+          setStatePreservingIRQ(STATE_IDLE);
+          _agc_restoring = true;
+          _agc_step = AgcMaintenanceStep::StartRx;
+        }
+        return;
+      }
+    }
+    setStatePreservingIRQ(STATE_IDLE);
+  }
+  if (error != RADIOLIB_ERR_NONE) {
+    if (_agc_status.last_error == RADIOLIB_ERR_NONE) _agc_status.last_error = error;
+    if (!_agc_touched) { finishAgcMaintenance(); return; }
+    if (!_agc_restoring) {
+      _agc_restoring = true;
+      _agc_step = AgcMaintenanceStep::RecoveryWake;
+      return;
+    }
+    // Restoration is best effort, once per step. Never repeat an SPI failure
+    // indefinitely, nor write a patch register whose read failed.
+    if (step == AgcMaintenanceStep::ReadPatch) { _agc_step = AgcMaintenanceStep::StartRx; return; }
+  }
+  switch (step) {
+    case AgcMaintenanceStep::ReadGain: _agc_gain_valid = true; _agc_step = AgcMaintenanceStep::Suspend; break;
+    case AgcMaintenanceStep::Suspend: _agc_step = AgcMaintenanceStep::Sleep; break;
+    case AgcMaintenanceStep::Sleep: _agc_step = AgcMaintenanceStep::Wake; break;
+    case AgcMaintenanceStep::Wake: _agc_step = AgcMaintenanceStep::Calibrate; break;
+    case AgcMaintenanceStep::Calibrate: _agc_step_at = millis(); _agc_step = AgcMaintenanceStep::WaitCalibration; break;
+    case AgcMaintenanceStep::WaitCalibration: _agc_step = AgcMaintenanceStep::Image; break;
+    case AgcMaintenanceStep::RecoveryWake: _agc_step = AgcMaintenanceStep::Image; break;
+    case AgcMaintenanceStep::Image: _agc_step = AgcMaintenanceStep::Dio2; break;
+    case AgcMaintenanceStep::Dio2: _agc_step = AgcMaintenanceStep::WriteGain; break;
+    case AgcMaintenanceStep::WriteGain: _agc_step = AgcMaintenanceStep::ReadPatch; break;
+    case AgcMaintenanceStep::ReadPatch: _agc_step = AgcMaintenanceStep::WritePatch; break;
+    case AgcMaintenanceStep::WritePatch: _agc_step = AgcMaintenanceStep::StartRx; break;
+    case AgcMaintenanceStep::StartRx:
+      if (error != RADIOLIB_ERR_NONE) { requestRestartRecv(); finishAgcMaintenance(); break; }
+      setStatePreservingIRQ(STATE_RX);
+      _agc_step_at = millis();
+      _agc_step = _agc_restoring ? AgcMaintenanceStep::RestoreRx : AgcMaintenanceStep::Sampling;
+      break;
+    case AgcMaintenanceStep::RestoreRx:
+      if (error == RADIOLIB_ERR_NONE) setStatePreservingIRQ(STATE_RX);
+      else requestRestartRecv();
+      finishAgcMaintenance();
+      break;
+    default: break;
+  }
 }
 
 // Approximate SNR threshold per SF for successful reception (based on Semtech datasheets)
