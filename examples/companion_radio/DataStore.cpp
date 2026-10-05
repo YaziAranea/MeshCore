@@ -786,7 +786,7 @@ bool DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
     uint32_t idx = 0;
     uint32_t records_written = 0;
     ContactInfo c;
-    uint8_t unused = 0;
+    uint8_t record[CONTACT_RECORD_SIZE];
     bool success = true;
 
     while (host->getContactForSave(idx, c)) {
@@ -794,18 +794,21 @@ bool DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
         idx++;  // advance to next contact
         continue;
       }
-      success = (file.write(c.id.pub_key, 32) == 32);
-      success = success && (file.write((uint8_t *)&c.name, 32) == 32);
-      success = success && (file.write(&c.type, 1) == 1);
-      success = success && (file.write(&c.flags, 1) == 1);
-      success = success && (file.write(&unused, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.sync_since, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.out_path_len, 1) == 1);
-      success = success && (file.write((uint8_t *)&c.last_advert_timestamp, 4) == 4);
-      success = success && (file.write(c.out_path, 64) == 64);
-      success = success && (file.write((uint8_t *)&c.lastmod, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lat, 4) == 4);
-      success = success && (file.write((uint8_t *)&c.gps_lon, 4) == 4);
+      // Preserve the contacts3 wire layout exactly, without struct padding.
+      // One filesystem write per record avoids twelve small writes on flash.
+      memcpy(record, c.id.pub_key, 32);
+      memcpy(record + 32, c.name, 32);
+      record[64] = c.type;
+      record[65] = c.flags;
+      record[66] = 0;  // legacy reserved byte
+      memcpy(record + 67, &c.sync_since, 4);
+      record[71] = c.out_path_len;
+      memcpy(record + 72, &c.last_advert_timestamp, 4);
+      memcpy(record + 76, c.out_path, 64);
+      memcpy(record + 140, &c.lastmod, 4);
+      memcpy(record + 144, &c.gps_lat, 4);
+      memcpy(record + 148, &c.gps_lon, 4);
+      success = file.write(record, sizeof(record)) == sizeof(record);
 
       if (!success) break; // write failed
 

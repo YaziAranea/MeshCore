@@ -87,6 +87,7 @@ public:
   bool connected = false;
   uint32_t generation = 0;
   unsigned writes = 0;
+  bool pending_tx = false;
 
   void enable() override { enabled = true; }
   void disable() override { enabled = false; connected = false; }
@@ -95,6 +96,7 @@ public:
   uint32_t sessionGeneration() const override { return generation; }
   bool isReadBusy() const override { return false; }
   bool isWriteBusy() const override { return false; }
+  bool hasPendingTx() const override { return pending_tx; }
   size_t writeFrame(const uint8_t*, size_t len) override {
     ++writes;
     return connected ? len : 0;
@@ -121,6 +123,9 @@ void testExclusiveManagerEpochs() {
   assert(manager.addInterface(InterfaceType::USB, &usb));
   manager.enable();
   assert(ble.enabled && !usb.enabled);
+  assert(!manager.hasPendingTx());
+  ble.pending_tx = true;
+  assert(manager.hasPendingTx() && !manager.isWriteBusy());
 
   const uint8_t payload[] = {7};
   assert(manager.writeFrame(payload, sizeof(payload)) == sizeof(payload));
@@ -130,6 +135,11 @@ void testExclusiveManagerEpochs() {
   assert(manager.selectExclusive(InterfaceType::USB));
   assert(!ble.enabled && usb.enabled);
   assert(manager.sessionGeneration() != before_switch);
+  assert(!manager.hasPendingTx());  // Ignore queued data on the inactive BLE.
+  usb.pending_tx = true;
+  assert(manager.hasPendingTx());
+  manager.disable(); assert(!manager.hasPendingTx());
+  manager.enable(); usb.pending_tx = false;
 
   const uint32_t before_epoch = manager.sessionGeneration();
   usb.generation += 2;  // disconnect+reconnect between manager polls
@@ -170,10 +180,16 @@ void testUsbLeaseAndBackpressure() {
   assert(manager.sessionGeneration() == established_generation);
 
   const uint8_t reply[] = {42, 43, 44, 45};
+  assert(!manager.hasPendingTx());
+  stream.write_capacity = 0;
   assert(manager.writeFrame(reply, sizeof(reply)) == sizeof(reply));
+  assert(manager.hasPendingTx() && !manager.isWriteBusy());
+  manager.loop(); assert(manager.hasPendingTx());
+  stream.write_capacity = 64;
   for (int i = 0; i < 8; ++i) manager.loop();
   const std::vector<uint8_t> expected = {'>', 4, 0, 42, 43, 44, 45};
   assert(stream.output == expected);
+  assert(!manager.hasPendingTx());
 
   g_mock_millis = SMARTUI_SERIAL_SESSION_LEASE_MS;
   assert(!manager.isConnected());
@@ -217,8 +233,13 @@ void testUsbHardDisconnectAndParserTimeout() {
   stream.append(framed({22, 1}));
   assert(usb.checkRecvFrame(out) == 2);
   const uint32_t connected_generation = usb.sessionGeneration();
+  stream.write_capacity = 0;
+  const uint8_t reply[] = {0};
+  assert(usb.writeFrame(reply, sizeof(reply)) == sizeof(reply));
+  assert(usb.hasPendingTx());
   link_up = false;
   assert(!usb.isConnected());
+  assert(!usb.hasPendingTx());
   assert(usb.sessionGeneration() != connected_generation);
   assert(!usb.hasEstablishedSession());
 
@@ -372,6 +393,7 @@ void testWifiApprovalIsolationAndNonblockingTx() {
   g_mock_send_would_block = true;
   const uint8_t response[] = {8, 9, 10, 11};
   assert(wifi.writeFrame(response, sizeof(response)) == sizeof(response));
+  assert(wifi.hasPendingTx() && !wifi.isWriteBusy());
   for (int i = 0; i < 4; ++i) wifi.loop();
   assert(first->tx.empty());
 
@@ -380,6 +402,7 @@ void testWifiApprovalIsolationAndNonblockingTx() {
   for (int i = 0; i < 8; ++i) wifi.loop();
   const std::vector<uint8_t> expected = {'>', 4, 0, 8, 9, 10, 11};
   assert(first->tx == expected);
+  assert(!wifi.hasPendingTx());
 
   const auto takeover = wifiPeer(13, IPAddress(192, 168, 4, 4));
   g_mock_wifi_accept_queue.emplace_back(takeover);
@@ -388,8 +411,13 @@ void testWifiApprovalIsolationAndNonblockingTx() {
   assert(wifi.isConnected());
 
   const uint32_t active_generation = wifi.sessionGeneration();
+  g_mock_send_would_block = true;
+  assert(wifi.writeFrame(response, sizeof(response)) == sizeof(response));
+  assert(wifi.hasPendingTx());
   first->connected = false;
   wifi.loop();
+  assert(!wifi.hasPendingTx());
+  g_mock_send_would_block = false;
   assert(!wifi.isConnected());
   assert(wifi.sessionGeneration() != active_generation);
 

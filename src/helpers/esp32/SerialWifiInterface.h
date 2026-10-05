@@ -102,6 +102,13 @@ public:
   void loop() override;
   bool isReadBusy() const override;
   bool isWriteBusy() const override;
+  bool hasPendingTx() const override {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    return _tx_queue_len > 0;
+#else
+    return send_queue_len > 0;
+#endif
+  }
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
 

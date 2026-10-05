@@ -503,3 +503,8 @@ bool SerialBLEInterface::isWriteBusy() const {
   TransportLock lock;
   return send_queue.size() >= (FRAME_QUEUE_SIZE * 2 / 3);
 }
+
+bool SerialBLEInterface::hasPendingTx() const {
+  TransportLock lock;
+  return send_queue.size() > 0;
+}

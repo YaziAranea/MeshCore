@@ -255,6 +255,11 @@ bool SerialBLEInterface::isWriteBusy() const {
       (uint32_t)BLE_WRITE_MIN_INTERVAL);
 }
 
+bool SerialBLEInterface::hasPendingTx() const {
+  // This queue is owned by the main loop, like writeFrame/checkRecvFrame.
+  return send_queue_len > 0;
+}
+
 size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   if (!_isEnabled) return 0;

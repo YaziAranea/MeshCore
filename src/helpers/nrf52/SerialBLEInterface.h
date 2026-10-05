@@ -81,6 +81,7 @@ public:
 #endif
   bool isReadBusy() const override;
   bool isWriteBusy() const override;
+  bool hasPendingTx() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
 };

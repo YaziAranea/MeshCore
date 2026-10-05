@@ -12,8 +12,9 @@
 | Smart UI 0.04 | 0.06 | [smartui-0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06) |
 | Smart UI 0.05 | 0.06-test.1 | [smartui-0.06-test.1](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.1) |
 | Smart UI 0.06 | 0.06-test.2 | [smartui-0.06-test.2](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2) |
+| Smart UI 0.07 | 0.07 | [smartui-0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07) |
 
-Последний по дате выпуск — [Smart UI 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2). Следующая новая версия прошивки получит номер **0.07**.
+Текущий публичный выпуск — [Smart UI 0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07). Это новая сборка: её встроенная версия также **0.07**. Описанное ниже переименование без пересборки относится только к прежним выпускам 0.01–0.06.
 
 ## Что изменилось
 

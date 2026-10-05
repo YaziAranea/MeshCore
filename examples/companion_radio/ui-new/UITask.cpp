@@ -8232,6 +8232,10 @@ public:
     }
 #endif
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
+      // Consume this request once. If storage cannot flush, shutdown returns
+      // with an alert and requires a new confirmation instead of retrying on
+      // every UI poll while the button remains released.
+      _shutdown_init = false;
       _task->shutdown();
     }
   }
@@ -14232,6 +14236,28 @@ void UITask::handlePendingPopupWake() {
   }
 }
 
+#if defined(HELTEC_WIRELESS_PAPER)
+static void uiRenderPaperShutdownFrame(DisplayDriver& display) {
+  // E-paper retains this frame without power. Do not leave the ordinary idle
+  // clock behind: a stopped clock is indistinguishable from a sleeping node.
+  const uint8_t saved_font = display.getUiFont();
+  display.setUiFont(0);
+  display.setTextSize(2);
+  display.setBold(false);
+  display.setColor(DisplayDriver::LIGHT);
+  const int icon_size = 32;
+  const int gap = 12;
+  const int top = (display.height() - icon_size - gap -
+                   display.getTextInkHeight()) / 2;
+  display.drawXbm((display.width() - icon_size) / 2, top,
+                  power_icon, icon_size, icon_size);
+  display.drawTextCentered(display.width() / 2, top + icon_size + gap,
+                           "Выключено");
+  display.setTextSize(1);
+  display.setUiFont(saved_font);
+}
+#endif
+
 /*
   hardware-agnostic pre-shutdown activity should be done here
 */
@@ -14271,7 +14297,19 @@ void UITask::shutdown(bool restart, bool preserve_eink_frame, bool emergency) {
   if (restart) {
     _board->reboot();
   } else {
-#if UI_EINK_IDLE_SCREENSAVER
+#if defined(HELTEC_WIRELESS_PAPER)
+    if (!preserve_eink_frame && _display != NULL) {
+      if (!_display->isOn()) _display->turnOn();
+      // Initialization and frame refresh retain the driver's bounded BUSY
+      // budgets. A broken panel must not prevent the actual power transition.
+      if (_display->isOn()) {
+        _display->startFrame();
+        uiRenderPaperShutdownFrame(*_display);
+        _display->endFrame();
+        delay(150);
+      }
+    }
+#elif UI_EINK_IDLE_SCREENSAVER
     if (!preserve_eink_frame && _display != NULL && idle_saver != NULL) {
       if (!_display->isOn()) {
         _display->turnOn();

@@ -34,6 +34,7 @@
 #include <helpers/ArduinoHelpers.h>
 #include <helpers/BaseSerialInterface.h>
 #include <helpers/DeferredSavePolicy.h>
+#include <helpers/DeferredSaveResponseGate.h>
 #include <helpers/OfflineQueueSync.h>
 #include <helpers/PrefsTransaction.h>
 #if __has_include(<helpers/BoardLedControl.h>)
@@ -417,6 +418,7 @@ private:
   uint8_t *sign_data;
   uint32_t sign_data_len;
   mesh::storage::DeferredSavePolicy dirty_contacts;
+  mesh::storage::DeferredSaveResponseGate contacts_save_response_gate;
   bool storage_recovery_required;
   bool _radio_startup_error = false;
   bool storage_recovery_error_pending;

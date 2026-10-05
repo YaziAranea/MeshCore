@@ -22,6 +22,9 @@ public:
 
   virtual bool isReadBusy() const = 0;
   virtual bool isWriteBusy() const = 0;
+  // Pending application TX bytes, not proof of peer delivery. Transports with
+  // an output queue override this; the fallback preserves legacy subclasses.
+  virtual bool hasPendingTx() const { return isWriteBusy(); }
   virtual size_t writeFrame(const uint8_t src[], size_t len) = 0;
   virtual size_t checkRecvFrame(uint8_t dest[]) = 0;
 };

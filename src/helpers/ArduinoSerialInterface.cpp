@@ -167,6 +167,14 @@ bool ArduinoSerialInterface::isWriteBusy() const {
 #endif
 }
 
+bool ArduinoSerialInterface::hasPendingTx() const {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  return _tx_queue_len > 0;
+#else
+  return false;  // Legacy writes pass directly to the serial driver.
+#endif
+}
+
 size_t ArduinoSerialInterface::writeFrame(const uint8_t src[], size_t len) {
   if (len > MAX_FRAME_SIZE) {
     // frame is too big!

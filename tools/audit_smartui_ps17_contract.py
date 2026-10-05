@@ -281,8 +281,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.06" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.06 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.07" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.07 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -1492,7 +1492,7 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.06")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.07")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(

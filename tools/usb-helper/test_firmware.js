@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
 const {verify,PROFILES} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
-const VERSION = '0.06-test.2';
+const VERSION = '0.07';
 const sha = data => createHash('sha256').update(data).digest('hex');
 
 function application(profile, source = COMMIT.slice(0,8), appendedHash = true) {
@@ -72,7 +72,7 @@ test('reject wrong board, unknown model, hash mismatch, duplicate records and ho
 });
 test('reject dirty source, wrong source and mismatched embedded board/version',async()=>{
   for(const source of ['12345678+dirty','ffffffff','unknown']) await assert.rejects(verify(fixture('v3',false,source).args()),/source marker/);
-  const f=fixture();f.manifest.version='0.07';await assert.rejects(verify(f.args()),/платы\/версии/);
+  const f=fixture();f.manifest.version=VERSION+'-mismatch';await assert.rejects(verify(f.args()),/платы\/версии/);
 });
 test('reject BIN structural corruption and update with trailing filesystem bytes even with matching file hash',async()=>{
   for(const change of [f=>f.bytes[0]=0,f=>f.bytes[1]=17,f=>f.bytes.writeUInt32LE(0xffffffff,28),f=>f.bytes[32]^=1,f=>f.bytes[f.bytes.length-1]^=1,f=>{f.bytes=Buffer.concat([f.bytes,Buffer.alloc(16)]);}]) {

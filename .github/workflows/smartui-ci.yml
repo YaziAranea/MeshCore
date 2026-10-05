@@ -3,14 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-ps17.2-dev
-      - smartui-2.1-experimental.3
-      # Experimental publication is explicitly dispatched and gated below.
+      - smartui-0.07
+      # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish SmartUI 0.06-test.2 after all six-board checks pass
+        description: Publish public SmartUI 0.07 as Latest after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -42,15 +41,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.06-test.2.uf2
+            uf2_name: T096_UI_0.07.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.06-test.2.uf2
+            uf2_name: T114_UI_0.07.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.06-test.2.uf2
+            uf2_name: ProMicro_RA62_UI_0.07.uf2
 
     steps:
       - name: Check out source
@@ -158,15 +157,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.06-test.2
+            stem: Heltec_V3_UI_0.07
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.06-test.2
+            stem: Heltec_V4.3_UI_0.07
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.06-test.2
+            stem: Paper_UI_0.07
 
     steps:
       - name: Check out source
@@ -338,6 +337,7 @@ jobs:
         run: |
           chmod +x validation-support/mkspiffs
           python tools/test_release_source_guard.py
+          python tools/test_public_release_policy.py
           python tools/package_smartui_release.py release \
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \
@@ -345,7 +345,7 @@ jobs:
       - name: Upload the complete sixteen-asset release
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: smartui-experimental-release
+          name: smartui-public-release
           path: release/*
           if-no-files-found: error
           retention-days: 30
@@ -460,6 +460,12 @@ jobs:
       - name: Check SmartUI contract
         run: python tools/audit_smartui_ps17_contract.py
 
+      - name: Check contact persistence and route-reset acknowledgement
+        run: python tools/test_contact_persistence.py
+
+      - name: Check Wireless Paper shutdown frame
+        run: python tools/test_paper_shutdown_v007.py
+
       - name: Check bounded Paper display waits and retry semantics
         run: python tools/test_e213_timeout_policy.py
 
@@ -567,7 +573,7 @@ jobs:
           retention-days: 14
 
   release-gate:
-    name: Required experimental release gate
+    name: Required public release gate
     needs:
       - package-release
       - build-display-compatibility
@@ -578,13 +584,13 @@ jobs:
       - name: Confirm every required job succeeded
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
-  publish-experimental-release:
-    name: Publish SmartUI 0.06-test.2
-    if: github.repository == 'YaziAranea/MeshCore' && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.06-test.2'
+  publish-public-release:
+    name: Publish SmartUI 0.07
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.07'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-experimental-release-smartui-0.06-test.2
+      group: publish-public-release-smartui-0.07
       cancel-in-progress: false
     permissions:
       contents: write
@@ -600,17 +606,24 @@ jobs:
       - name: Download the single fully validated release bundle
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          name: smartui-experimental-release
+          name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.06-test.2 release page
+      - name: Create or resume the SmartUI 0.07 release page
         shell: bash
         run: |
           set -euo pipefail
-          tag="smartui-0.06-test.2"
-          title="SmartUI 0.06-test.2"
-          notes="release/RELEASE_NOTES_SmartUI_0.06-test.2_RU.md"
-          latest_before="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          check_public_target() {
+            test "$GITHUB_REPOSITORY" = 'YaziAranea/MeshCore' ||
+              { echo 'Publication is restricted to the public repository'; exit 1; }
+            gh api "repos/${GITHUB_REPOSITORY}" --jq \
+              'if .full_name == "YaziAranea/MeshCore" and .private == false and .visibility == "public" then .full_name else error("Refusing to publish outside the public repository") end'
+          }
+          # Recheck live visibility before any tag, release or asset mutation.
+          check_public_target
+          tag="smartui-0.07"
+          title="Smart UI 0.07"
+          notes="release/RELEASE_NOTES_SmartUI_0.07_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.
@@ -737,7 +750,7 @@ jobs:
 
           # New releases remain drafts until all 16 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
-          # Preserve whichever release is currently Latest; do not assume its tag.
+          # This public release becomes Latest only after the complete bundle passes.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
           python - "$release_json" <<'PY'
           import hashlib
@@ -771,17 +784,17 @@ jobs:
           final_tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --jq '.object.sha')"
           test "$final_tag_sha" = "$GITHUB_SHA" || { echo 'Release source does not match validated firmware'; exit 1; }
 
+          check_public_target
           gh release edit "$tag" \
             --title "$title" \
             --notes-file "$notes" \
             --prerelease=false \
             --draft=false \
-            --latest=false \
+            --latest=true \
             --verify-tag \
             --repo "$GITHUB_REPOSITORY"
 
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
             --jq 'if .draft == false and .prerelease == false then .html_url else error("Release is not public") end'
           latest_tag="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
-          test "$latest_tag" = "$latest_before"
-          test "$latest_tag" != "$tag"
+          test "$latest_tag" = "$tag"

@@ -144,6 +144,18 @@ static void disarm() {target_point = 0; preempt = {}; assert(!pending);}
 
 int main() {
   uint8_t out[MAX_FRAME_SIZE] = {};
+  // Even a single queued response is pending below the busy watermark.
+  {
+    resetHarness(); SerialBLEInterface pending_tx; connect(pending_tx);
+    const uint8_t reply = 0;
+    assert(!pending_tx.hasPendingTx());
+    assert(pending_tx.writeFrame(&reply, 1) == 1);
+    assert(pending_tx.hasPendingTx() && !pending_tx.isWriteBusy());
+    pending_tx.checkRecvFrame(out);
+    assert(!pending_tx.hasPendingTx());
+    assert(pending_tx.writeFrame(&reply, 1) == 1);
+    pending_tx.disable(); assert(!pending_tx.hasPendingTx());
+  }
   // Every real pop mutation: payload copy, head advance and length decrement.
   // Old A/B slots remain in storage; arriving C must never become stale B.
   for(unsigned point = 1; point <= 3; ++point) {
@@ -267,7 +279,7 @@ def main():
         ("bool", "isAdvertising"), ("void", "enable"), ("void", "disconnect"),
         ("void", "disable"), ("size_t", "writeFrame"), ("size_t", "checkRecvFrame"),
         ("void", "onBleUartRX"), ("bool", "isEnabled"), ("bool", "isConnected"),
-        ("bool", "isReadBusy"), ("bool", "isWriteBusy"),
+        ("bool", "isReadBusy"), ("bool", "isWriteBusy"), ("bool", "hasPendingTx"),
     ]
     methods = "\n".join(function(source, f"{kind} SerialBLEInterface::{name}(") for kind, name in names)
     methods += "\n#if SMARTUI_CONNECTION_SELECTOR\n"

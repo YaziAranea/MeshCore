@@ -335,6 +335,21 @@ public:
 #endif
   }
 
+  bool hasPendingTx() const override {
+    if (!_enabled) return false;
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    const RegisteredInterface* iface = selectedInterface();
+    return iface && iface->instance->isEnabled() &&
+           iface->instance->hasPendingTx();
+#else
+    for (const auto& iface : _interfaces) {
+      if (iface.instance && iface.instance->isEnabled() &&
+          iface.instance->hasPendingTx()) return true;
+    }
+    return false;
+#endif
+  }
+
   size_t writeFrame(const uint8_t src[], size_t len) override {
     // don't write when disabled or nothing provided
     if(!_enabled || len == 0){

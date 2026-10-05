@@ -289,6 +289,7 @@ bool MyMesh::textMentionsNodeName(const char* text, const char* node_name) {
 #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
 #define LAZY_CONTACTS_WRITE_DELAY       5000
 #define MAX_DIRTY_CONTACTS_AGE          30000
+#define CONTACTS_RESPONSE_DRAIN_LIMIT   1000
 
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 
@@ -477,6 +478,7 @@ uint32_t MyMesh::nextUiMessageGeneration() {
 }
 
 void MyMesh::scheduleContactsSave() {
+  if (!dirty_contacts.pending()) contacts_save_response_gate.clear();
   dirty_contacts.schedule((uint32_t)_ms->getMillis(),
                           (uint32_t)LAZY_CONTACTS_WRITE_DELAY);
 }
@@ -2190,15 +2192,14 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key = &cmd_frame[1];
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
-      const uint8_t previous_path_len = recipient->out_path_len;
       recipient->out_path_len = OUT_PATH_UNKNOWN;
       // recipient->lastmod = ??   shouldn't be needed, app already has this version of contact
-      if (saveContacts()) {
-        writeOKFrame();
-      } else {
-        recipient->out_path_len = previous_path_len;
-        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
-      }
+      // The reset is effective in RAM now. Do not hold up the response while
+      // rewriting all contacts; persistence is batched with other route changes.
+      // OK acknowledges the live reset, not a durable filesystem commit.
+      scheduleContactsSave();
+      contacts_save_response_gate.request(_serial ? _serial->sessionGeneration() : 0);
+      writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // unknown contact
     }
@@ -3062,7 +3063,10 @@ static bool save_filter(const ContactInfo& c) {
 
 bool MyMesh::saveContacts() {
   const bool saved = _store->saveContacts(this, save_filter);
-  if (saved) dirty_contacts.clear();
+  if (saved) {
+    dirty_contacts.clear();
+    contacts_save_response_gate.clear();
+  }
   return saved;
 }
 
@@ -3341,12 +3345,17 @@ void MyMesh::loop() {
 
   // A future deadline is not immediate work and must not prevent idle sleep.
   const uint32_t storage_now = (uint32_t)_ms->getMillis();
-  if (dirty_contacts.due(storage_now, (uint32_t)MAX_DIRTY_CONTACTS_AGE)) {
+  if (dirty_contacts.due(storage_now, (uint32_t)MAX_DIRTY_CONTACTS_AGE) &&
+      contacts_save_response_gate.allowsSave(
+          storage_now, _serial && _serial->hasPendingTx(),
+          _serial ? _serial->sessionGeneration() : 0,
+          (uint32_t)CONTACTS_RESPONSE_DRAIN_LIMIT)) {
     if (saveContacts()) {
       dirty_contacts.clear();
     } else {
       MESH_DEBUG_PRINTLN("ERROR: contacts save failed; retry scheduled");
-      dirty_contacts.retryFrom(storage_now,
+      // A slow failed write must not consume its own retry delay.
+      dirty_contacts.retryFrom((uint32_t)_ms->getMillis(),
                                (uint32_t)LAZY_CONTACTS_WRITE_DELAY);
     }
   }
@@ -3519,7 +3528,12 @@ bool MyMesh::hasPendingWork() const {
   const RxPowerSavingControl* rxps_control = &radio_driver;
   calibration_active = rxps_control->isRxPowerSavingCalibrationActive();
 #endif
+  const uint32_t storage_now = (uint32_t)_ms->getMillis();
   const bool storage_due = dirty_contacts.due(
-      (uint32_t)_ms->getMillis(), (uint32_t)MAX_DIRTY_CONTACTS_AGE);
+      storage_now, (uint32_t)MAX_DIRTY_CONTACTS_AGE) &&
+      !contacts_save_response_gate.waiting(
+          storage_now, _serial && _serial->hasPendingTx(),
+          _serial ? _serial->sessionGeneration() : 0,
+          (uint32_t)CONTACTS_RESPONSE_DRAIN_LIMIT);
   return _mgr->getOutboundTotal() > 0 || storage_due || calibration_active;
 }
