@@ -202,6 +202,7 @@ class UITask : public AbstractUITask {
   uint8_t _important_notify_tone_burst_step;
   uint8_t _important_notify_vibe_burst_step;
   unsigned long _night_prompt_expires;
+  uint32_t _night_save_retry_at;
   bool _night_prompt_active;
   bool _night_prompt_yes;
   bool _storage_recovery_active;
@@ -241,6 +242,7 @@ class UITask : public AbstractUITask {
   void clearImportantNotify();
   void importantNotifyHandler();
   void nightModeHandler();
+  bool persistNightPrefs(uint8_t before_quiet, uint8_t before_muted, uint32_t before_day);
   bool handleNightPromptInput(char c);
   void renderNightPrompt(DisplayDriver& display);
   void closeNightPrompt(bool enable_quiet, bool timed_out = false);
@@ -326,6 +328,7 @@ public:
     _important_notify_tone_burst_step = 0;
     _important_notify_vibe_burst_step = 0;
     _night_prompt_expires = 0;
+    _night_save_retry_at = 0;
     _night_prompt_active = false;
     _night_prompt_yes = true;
     _storage_recovery_active = false;
@@ -451,6 +454,7 @@ public:
   const char* getSmartProfileName() const;
   void cycleSmartProfile();
   void applyImportedPrefs() override;
+  void applyDeviceSettingsRuntime(bool battery_changed);
   const char* getHardwareTestStepName(uint8_t step) const;
   void runHardwareTestStep(uint8_t step);
 

@@ -19,6 +19,10 @@ struct ConnectionControllerHooks {
   const char* (*getBoardName)() = nullptr;
   const char* (*getQuickReply)(uint8_t slot) = nullptr;
   bool (*setQuickReply)(uint8_t slot, const char* text) = nullptr;
+  // The service returns one bounded ASCII line without CR/LF. It must enforce
+  // allow_mutation for every persistent change and notification test.
+  bool (*handleDeviceSettings)(const char* command, char* reply,
+                               size_t capacity, bool allow_mutation) = nullptr;
 };
 
 class ConnectionController {
@@ -92,6 +96,8 @@ private:
   bool _console_line_overflow = false;
   bool _console_swallow_lf = false;
   char _console_tx[CONSOLE_TX_MAX] = {};
+  // Keep the full settings snapshot off the small nRF52 main-task stack.
+  char _settings_response[480] = {};
   uint16_t _console_tx_head = 0;
   uint16_t _console_tx_len = 0;
 
@@ -122,6 +128,7 @@ private:
   void printInfo();
   void printHelp();
   void handleQuickReplyCommand(const char* line);
+  void handleDeviceSettingsCommand(const char* line);
   void cancelWifiSetup(bool restore_selected_wifi);
   bool startWifiSetup();
   bool saveTestedWifi();

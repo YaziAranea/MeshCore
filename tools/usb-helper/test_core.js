@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReadableStream, WritableStream } = require('node:stream/web');
-const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply } = require('./core.js');
+const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, measuredMilliVolts } = require('./core.js');
 
 const STATUS = 'Mode=BLE companion=idle via=none USB-service=on WiFi-config=no link=down IP=none approval=none';
 const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
@@ -13,6 +13,9 @@ const HELP = 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | 
 const HELP_INFO = HELP.replace('Commands: status', 'Commands: info | status');
 const HELP_REPLIES = HELP_INFO.replace('wifi forget | help', 'wifi forget | reply get N | reply set N HEX | help');
 const INFO = 'SmartUI=0.06 core=PS22b17 build=1234abcd upstream=5ad64e00 capabilities=BLE,USB,WiFi board=Heltec V3';
+const SETTINGS_CAPS = {v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125};
+const SETTINGS = {battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0};
+const wireRecord=(kind,values)=>'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 class FakePort {
@@ -28,6 +31,8 @@ class FakePort {
     this.closed = false;
     this.signals = [];
     this.replies = Array(9).fill('');
+    this.settingsCaps={...SETTINGS_CAPS,...options.settingsCaps};
+    this.settingsState={...SETTINGS,...options.settingsState};
   }
   async open(options) {
     if (this.options.openError) throw this.options.openError;
@@ -86,6 +91,25 @@ class FakePort {
       return;
     }
     const command = raw.trim().toLowerCase();
+    if (this.options.settings && command.startsWith('settings ')) {
+      if (command==='settings caps') this.reply(wireRecord('caps',this.settingsCaps));
+      else if (command==='settings get') this.reply(wireRecord('get',this.settingsState));
+      else if (command.startsWith('settings set ')) {
+        const [, ,key,value]=command.split(' '); this.settingsState[key]=Number(value);
+        this.settingsState.shutdown_mv=this.settingsState.battery_protection ? 3200 : 2700;
+        this.reply('OK settings set key='+key+' value='+value);
+      } else if (command.startsWith('settings adc preview ')) {
+        const measured=Number(command.split(' ').at(-1));
+        this.adcPreview={token:7,sampled_mv:this.settingsState.battery_mv,measured_mv:measured,multiplier:Number((this.settingsState.adc_multiplier*measured/this.settingsState.battery_mv).toFixed(6))};
+        this.reply(wireRecord('adc_preview',this.adcPreview));
+      } else if (command==='settings adc apply 7' && this.adcPreview) {
+        this.settingsState.adc_multiplier=this.adcPreview.multiplier;this.reply('OK settings adc_apply');
+      } else if (command==='settings adc reset') {
+        this.settingsState.adc_multiplier=this.settingsState.adc_default;this.reply('OK settings adc_reset');
+      } else if (command==='settings test') this.reply('OK settings test');
+      else this.reply('ERR settings invalid');
+      return;
+    }
     const getReply = /^reply get ([1-9])$/.exec(command);
     const setReply = /^reply set ([1-9]) (-|[0-9a-f]+)$/.exec(command);
     if (this.options.replies && getReply) {
@@ -101,8 +125,8 @@ class FakePort {
     }
     if (this.options.readOnly && command !== 'status') { this.reply('Connection settings are read-only during storage recovery.'); return; }
     switch (command) {
-      case 'help': this.reply(this.options.replies ? HELP_REPLIES : this.options.info ? HELP_INFO : HELP); break;
-      case 'info': this.reply(this.options.info || "Unknown command. Type 'help'."); break;
+      case 'help': this.reply((this.options.replies ? HELP_REPLIES : this.options.info || this.options.settings ? HELP_INFO : HELP).replace('Credential input',this.options.settings ? 'Settings protocol: 1\r\nCredential input' : 'Credential input')); break;
+      case 'info': this.reply(this.options.info || (this.options.settings ? INFO.replace('SmartUI=0.06','SmartUI=0.08') : "Unknown command. Type 'help'.")); break;
       case 'status': this.reply(STATUS.replace('Mode=BLE', 'Mode=' + this.mode).replace('WiFi-config=no', 'WiFi-config=' + (this.configured ? 'yes' : 'no'))); break;
       case 'wifi setup': this.stage = 'ssid'; this.reply(SSID_PROMPT); break;
       case 'wifi cancel': this.stage = 'idle'; this.reply('WiFi setup cancelled.'); break;
@@ -685,4 +709,151 @@ test('disconnect aborts a stuck write even after its response already matched', 
   await instance.connect(new FakePort());
   assert.equal(instance.state.verified, true);
   await instance.disconnect();
+});
+
+test('settings parsers reject unknown, duplicated, inconsistent and hostile fields',()=>{
+  const capsLine=wireRecord('caps',SETTINGS_CAPS),caps=parseSettingsCaps(capsLine);
+  assert.deepEqual(caps,SETTINGS_CAPS);
+  assert.deepEqual(parseDeviceSettings(wireRecord('get',SETTINGS),caps),SETTINGS);
+  for (const line of [capsLine+' x=1',capsLine.replace('sound=1','sound=2'),capsLine.replace('v=1','v=2'),capsLine.replace('sound=1','adc=1'),capsLine.replace('adc_min=3.675','adc_min=NaN'),capsLine.replace('adc_max=6.125','adc_max=2'),'<img>',capsLine+'\n']) assert.equal(parseSettingsCaps(line),null);
+  for (const changed of [{volume:11},{melody:31},{gps:2},{shutdown_mv:2700},{adc_multiplier:100},{battery_mv:65536}]) assert.equal(parseDeviceSettings(wireRecord('get',{...SETTINGS,...changed}),caps),null);
+  assert.equal(parseAdcPreview(wireRecord('adc_preview',{token:0,sampled_mv:3800,measured_mv:3800,multiplier:4.9}),caps,3800),null);
+  assert.equal(parseAdcPreview(wireRecord('adc_preview',{token:1,sampled_mv:3800,measured_mv:3900,multiplier:4.9}),caps,3800),null);
+  assert.equal(measuredMilliVolts(' 3,825 '),3825);
+  assert.equal(measuredMilliVolts('4.5'),4500);
+  for (const value of ['2.499','4,501','3e0','3800','3.8000','3,8\nsettings set muted 1','NaN',3.8]) assert.throws(()=>measuredMilliVolts(value),code('ADC_INPUT'));
+});
+
+test('settings are explicitly advertised, automatically read and never probed on old help',async()=>{
+  const legacy=await connected({info:INFO});
+  assert.equal(legacy.instance.state.settingsSupported,false);
+  assert.equal(legacy.port.commands.some(c=>c.startsWith('settings')),false);
+  await assert.rejects(legacy.instance.loadDeviceSettings(),code('SETTINGS_UNAVAILABLE'));
+  await legacy.instance.disconnect();
+  const f=await connected({settings:true,fragment:1});
+  assert.deepEqual(f.port.commands.slice(-2),['settings caps','settings get']);
+  assert.deepEqual(f.instance.state.deviceSettings,SETTINGS);
+  const copy=f.instance.state;copy.settingsCaps.adc=0;copy.deviceSettings.volume=1;
+  assert.equal(f.instance.state.settingsCaps.adc,1);assert.equal(f.instance.state.deviceSettings.volume,10);
+  await f.instance.disconnect();
+});
+
+test('every supported setting requires matched ACK then current readback',async()=>{
+  const f=await connected({settings:true,settingsCaps:{gps:1,vibration:1}});
+  for (const [key,value] of Object.entries({sound_quiet:1,volume:4,melody:8,board_led:0,unread_led:0,vibration:1,gps:1,battery_protection:0,muted:1})) {
+    const result=await f.instance.saveDeviceSetting(key,value);
+    assert.equal(result[key],value);
+    assert.deepEqual(f.port.commands.slice(-2),['settings set '+key+' '+value,'settings get']);
+  }
+  assert.equal(f.instance.state.deviceSettings.shutdown_mv,2700);
+  await f.instance.testDeviceNotification();assert.equal(f.port.commands.at(-1),'settings test');
+  await f.instance.disconnect();
+});
+
+test('unsupported hardware, injection and invalid integers cannot write',async()=>{
+  const f=await connected({settings:true,settingsCaps:{sound:0,gps:0,vibration:0}});
+  const before=f.port.commands.length;
+  for (const [key,value,error] of [['gps',1,'SETTINGS_UNSUPPORTED'],['vibration',1,'SETTINGS_UNSUPPORTED'],['volume',2,'SETTINGS_UNSUPPORTED'],['muted\nmode usb',1,'SETTINGS_INVALID'],['board_led',1.5,'SETTINGS_INVALID'],['board_led',2,'SETTINGS_INVALID']]) await assert.rejects(f.instance.saveDeviceSetting(key,value),code(error));
+  assert.equal(f.port.commands.length,before);
+  await f.instance.disconnect();
+});
+
+test('ADC preview is nonmutating; apply/reset need confirmation and matching readback',async()=>{
+  const f=await connected({settings:true});
+  const original=f.port.settingsState.adc_multiplier;
+  const preview=await f.instance.previewAdc('3,82');
+  assert.equal(f.port.commands.at(-1),'settings adc preview 3820');
+  assert.equal(f.port.settingsState.adc_multiplier,original);
+  assert.equal(f.instance.state.deviceSettings.adc_multiplier,original);
+  await assert.rejects(f.instance.applyAdc(),code('ADC_CONFIRM'));
+  const saved=await f.instance.applyAdc({confirmed:true});
+  assert.equal(saved.adc_multiplier,preview.multiplier);assert.equal(f.instance.state.adcPreview,null);
+  await assert.rejects(f.instance.resetAdc(),code('ADC_CONFIRM'));
+  await f.instance.resetAdc({confirmed:true});
+  assert.equal(f.port.settingsState.adc_multiplier,original);
+  assert.equal(f.port.settingsState.board_led,1);
+  await f.instance.disconnect();
+});
+
+test('ADC preview expires, is invalidated by another save and cleared on disconnect',async()=>{
+  const f=await connected({settings:true},{timeouts:{adcPreview:20}});
+  await f.instance.previewAdc('3.8');
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(f.instance.state.adcPreview,null);
+  await assert.rejects(f.instance.applyAdc({confirmed:true}),code('ADC_CONFIRM'));
+  await f.instance.previewAdc('3.8');await f.instance.saveDeviceSetting('muted',1);
+  assert.equal(f.instance.state.adcPreview,null);
+  await f.instance.previewAdc('3.8');await f.instance.disconnect();
+  assert.equal(f.instance.state.adcPreview,null);assert.equal(f.instance.state.deviceSettings,null);
+});
+
+test('failed save does not show success; timeout and mismatched readback become uncertain',async()=>{
+  for (const scenario of ['storage','timeout','mismatch','wrongack','unplug']) {
+    let writes=0;
+    const f=await connected({settings:true,onCommand(command,port){
+      if (command==='settings set volume 5') {
+        writes++;
+        if(scenario==='storage') port.reply('ERR settings storage');
+        else if(scenario==='mismatch') port.reply('OK settings set key=volume value=5');
+        else if(scenario==='wrongack') port.reply('OK settings set key=board_led value=1');
+        else if(scenario==='unplug') port.unplug();
+        return false;
+      }
+    }});
+    await assert.rejects(f.instance.saveDeviceSetting('volume',5),code(scenario==='storage'?'SETTINGS_STORAGE':'SETTINGS_UNCERTAIN'));
+    assert.equal(writes,1);
+    assert.equal(f.seen.events.some(e=>e.text.includes('Настройка сохранена')),false);
+    if (scenario!=='storage') assert.equal(f.instance.state.verified,false);
+    else assert.equal(f.instance.state.deviceSettings.volume,10);
+    await f.instance.disconnect();
+  }
+});
+
+test('settings protocol errors are sanitized, ADC stale/storage errors do not claim success',async()=>{
+  for (const [wire,expected] of [['ERR settings stale','SETTINGS_STALE'],['ERR settings storage','SETTINGS_STORAGE'],['ERR settings range','SETTINGS_RANGE'],['ERR settings measurement','SETTINGS_MEASUREMENT'],['ERR settings busy','BUSY'],['ERR settings readonly','READ_ONLY'],['ERR settings <secret>','PROTOCOL']]) {
+    const f=await connected({settings:true,onCommand(command,port){if(command.startsWith('settings adc preview ')){port.reply(wire);return false;}}});
+    await assert.rejects(f.instance.previewAdc('3.8'),code(expected));
+    assert.equal(f.instance.state.adcPreview,null);
+    assert.equal(JSON.stringify(f.seen).includes('<secret>'),false);
+    await f.instance.disconnect();
+  }
+});
+
+test('storage recovery blocks device mutation and a pending WiFi test blocks settings commands',async()=>{
+  const f=await connected({settings:true});
+  f.instance._setStatus({...f.instance.state.status,readOnly:true});
+  const before=f.port.commands.length;
+  await assert.rejects(f.instance.saveDeviceSetting('muted',1),code('READ_ONLY'));
+  assert.equal(f.port.commands.length,before);
+  f.instance._setStatus({...f.instance.state.status,readOnly:false});
+  await f.instance.testWifi('network','password');
+  await assert.rejects(f.instance.loadDeviceSettings(),code('WIFI_PENDING'));
+  await f.instance.cancelWifi();await f.instance.disconnect();
+});
+
+test('a readback error after acknowledged save is uncertain, not a claimed rollback',async()=>{
+  let acknowledged=false;
+  const f=await connected({settings:true,onCommand(command,port){
+    if(command==='settings set volume 5'){acknowledged=true;port.settingsState.volume=5;port.reply('OK settings set key=volume value=5');return false;}
+    if(command==='settings get' && acknowledged){port.reply('ERR settings unavailable');return false;}
+  }});
+  await assert.rejects(f.instance.saveDeviceSetting('volume',5),code('SETTINGS_UNCERTAIN'));
+  assert.equal(f.port.settingsState.volume,5);
+  assert.equal(f.instance.state.deviceSettings,null);
+  assert.equal(f.instance.state.verified,false);
+  await f.instance.disconnect();
+});
+
+test('Settings 1 can expose current values in recovery without allowing writes',async()=>{
+  const f=await connected({settings:true,onCommand(command,port){
+    if(['cancel','wifi cancel'].includes(command)){port.reply('Connection settings are read-only during storage recovery.');return false;}
+  }});
+  assert.equal(f.instance.state.settingsSupported,true);
+  assert.equal(f.instance.state.status.readOnly,true);
+  assert.equal(f.instance.state.deviceSettings.volume,10);
+  const before=f.port.commands.length;
+  await assert.rejects(f.instance.saveDeviceSetting('volume',5),code('READ_ONLY'));
+  assert.equal(f.port.commands.length,before);
+  await f.instance.loadDeviceSettings();
+  await f.instance.disconnect();
 });

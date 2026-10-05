@@ -26,12 +26,12 @@ class ImagePair:
 
 EXPECTED = (
     ImagePair(
-        "Heltec_V4.3_UI_0.07",
-        b"V4.3 SmartUI 0.07",
+        "Heltec_V4.3_UI_0.08",
+        b"V4.3 SmartUI 0.08",
     ),
     ImagePair(
-        "Paper_UI_0.07",
-        b"Paper SmartUI 0.07",
+        "Paper_UI_0.08",
+        b"Paper SmartUI 0.08",
     ),
 )
 

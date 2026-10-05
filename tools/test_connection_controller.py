@@ -372,6 +372,38 @@ static bool setReply(uint8_t slot, const char* text) {
   return true;
 }
 
+static unsigned settings_calls = 0;
+static bool settings_writable = false;
+static unsigned settings_reply_fault = 0;
+static std::string settings_command;
+static bool settingsHook(const char* command, char* reply, size_t capacity, bool writable) {
+  ++settings_calls;
+  settings_command = command;
+  settings_writable = writable;
+  assert(capacity >= 480);
+  if (settings_reply_fault == 1) {
+    std::memset(reply, 'x', capacity);  // Missing terminator must fail closed.
+    return true;
+  }
+  if (settings_reply_fault == 2) {
+    std::strcpy(reply, "OK settings get\r\nprivate-password");
+    return true;
+  }
+  if (settings_reply_fault == 3) return false;
+  if (settings_reply_fault == 4) {
+    const std::string maximum = "OK settings get " + std::string(463, 'x');
+    assert(maximum.size() == 479);
+    std::memcpy(reply, maximum.c_str(), maximum.size() + 1);
+    return true;
+  }
+  const bool read = std::strcmp(command, "settings caps") == 0 ||
+      std::strcmp(command, "settings get") == 0 ||
+      std::strncmp(command, "settings adc preview ", 21) == 0;
+  std::strcpy(reply, !writable && !read ? "ERR settings readonly" :
+      read ? "OK settings get value=1" : "OK settings saved");
+  return true;
+}
+
 static ConnectionControllerHooks hooks() {
   ConnectionControllerHooks value;
   value.resetLocalSession = resetSession;
@@ -381,6 +413,7 @@ static ConnectionControllerHooks hooks() {
   value.getBoardName = boardName;
   value.getQuickReply = getReply;
   value.setQuickReply = setReply;
+  value.handleDeviceSettings = settingsHook;
   return value;
 }
 
@@ -844,6 +877,132 @@ static void testInfoReadOnly() {
   quarantined = false;
 }
 
+static void testDeviceSettingsConsole() {
+  RecoveryFixture fixture;
+  fixture.boot();
+  send(fixture.controller, fixture.console, "help\n");
+  assert(fixture.console.output.find("Settings protocol: 1\r\nCredential input") != std::string::npos);
+  fixture.console.output.clear();
+  send(fixture.controller, fixture.console, "  SETTINGS GET  \r\n");
+  assert(settings_command == "settings get" && settings_writable);
+  assert(fixture.console.output == "OK settings get value=1\r\n");
+
+  quarantined = true;
+  fixture.console.output.clear();
+  send(fixture.controller, fixture.console, "settings get\nsettings set volume 1\nsettings adc preview 4120\nsettings test\n");
+  assert(!settings_writable);
+  assert(fixture.console.output == "OK settings get value=1\r\nERR settings readonly\r\nOK settings get value=1\r\nERR settings readonly\r\n");
+  quarantined = false;
+
+  for (unsigned fault : {1U, 2U, 3U}) {
+    settings_reply_fault = fault;
+    fixture.console.output.clear();
+    send(fixture.controller, fixture.console, "settings get\n");
+    assert(fixture.console.output == (fault == 3 ? "ERR settings unsupported\r\n" : "ERR settings internal\r\n"));
+    assert(fixture.console.output.find("private-password") == std::string::npos);
+  }
+  settings_reply_fault = 4;
+  fixture.console.output.clear();
+  // Pipelined full-size replies must not overflow the 512-byte TX queue.
+  send(fixture.controller, fixture.console, "settings get\nsettings get\n");
+  const std::string maximum = "OK settings get " + std::string(463, 'x') + "\r\n";
+  assert(fixture.console.output == maximum + maximum);
+  settings_reply_fault = 0;
+
+  // A stalled host must not consume another command or lose its response.
+  fixture.console.output.clear();
+  fixture.console.write_room = 0;
+  const unsigned before_blocked = settings_calls;
+  fixture.console.add("settings get\nsettings set volume 2\n");
+  pump(fixture.controller, 100);
+  assert(settings_calls == before_blocked + 1);
+  assert(fixture.console.unread() > 0 && fixture.console.output.empty());
+  fixture.console.write_room = 3;
+  pump(fixture.controller, 100);
+  assert(settings_calls == before_blocked + 2 && fixture.console.unread() == 0);
+  assert(fixture.console.output == "OK settings get value=1\r\nOK settings saved\r\n");
+  fixture.console.write_room = 4096;
+
+  const unsigned before_invalid = settings_calls;
+  const std::string overlong = "settings " + std::string(160, 'x') + "\n";
+  send(fixture.controller, fixture.console, overlong.c_str());
+  send(fixture.controller, fixture.console, "settingsx get\n");
+  assert(settings_calls == before_invalid);
+
+  RecoveryFixture local_recovery;
+  local_recovery.fs.files["/connection.cfg"] = configRecord(CompanionMode::USB);
+  local_recovery.fs.fail_remove_path = "/connection.forgot";
+  local_recovery.boot();
+  assert(local_recovery.controller.status().storageRecoveryRequired);
+  send(local_recovery.controller, local_recovery.console, "settings get\nsettings adc reset\n");
+  assert(!settings_writable);
+  assert(local_recovery.console.output.find("OK settings get value=1\r\nERR settings readonly\r\n") != std::string::npos);
+
+  RecoveryFixture no_hook;
+  auto legacy_hooks = hooks();
+  legacy_hooks.handleDeviceSettings = nullptr;
+  no_hook.controller.begin(no_hook.store, no_hook.manager, no_hook.console, nullptr, legacy_hooks);
+  send(no_hook.controller, no_hook.console, "help\nsettings get\n");
+  assert(no_hook.console.output.find("Settings protocol:") == std::string::npos);
+  assert(no_hook.console.output.find("ERR settings unsupported") != std::string::npos);
+
+#if defined(ESP32)
+  RecoveryFixture wifi_fixture;
+  wifi_fixture.boot();
+  send(wifi_fixture.controller, wifi_fixture.console, "wifi setup\n");
+  const unsigned before_credentials = settings_calls;
+  send(wifi_fixture.controller, wifi_fixture.console, "settings get\nsettings caps\n");
+  assert(settings_calls == before_credentials);
+  assert(WiFi.last_ssid == "settings get" && WiFi.last_password == "settings caps");
+  assert(wifi_fixture.console.output.find("settings get") == std::string::npos);
+  send(wifi_fixture.controller, wifi_fixture.console, "settings get\nsettings set gps 1\n");
+  assert(settings_calls == before_credentials);
+  assert(wifi_fixture.console.output.find("ERR settings busy") != std::string::npos);
+  send(wifi_fixture.controller, wifi_fixture.console, "wifi cancel\n");
+#endif
+}
+
+class MyMesh {
+public:
+  bool _cli_rescue = false;
+  char cli_command[160] = {};
+  void enterCLIRescue();
+};
+struct RescueSerial {
+  void println(const char*) {}
+} Serial;
+
+// Injected from MyMesh.cpp so physical entry tests execute production code.
+@@USB_SERVICE_ENTRY@@
+
+static void testPhysicalUsbServiceEntry() {
+  FakeFS fs;
+  DataStore store(fs);
+  FakeTransport ble, usb;
+  MultiSerialInterface manager;
+  manager.addInterface(InterfaceType::Bluetooth, &ble);
+  manager.addInterface(InterfaceType::USB, &usb);
+  manager.enable();
+  FakeStream console;
+  connection_controller.begin(store, manager, console, nullptr, hooks());
+  assert(connection_controller.setMode(CompanionMode::USB));
+  MyMesh mesh;
+  fs.fail_write_open_path = "/connection.cfg.tmp";
+  mesh.enterCLIRescue();
+  assert(!mesh._cli_rescue);
+  assert(connection_controller.status().selected == CompanionMode::USB);
+  assert(!connection_controller.status().usbConsoleEnabled);
+  mesh.enterCLIRescue();
+  assert(!mesh._cli_rescue);
+  assert(connection_controller.status().selected == CompanionMode::BLE);
+  assert(connection_controller.status().usbConsoleEnabled);
+  send(connection_controller, console, "settings get\n");
+  assert(console.output.find("OK settings get value=1") != std::string::npos);
+  // Ordinary BLE startup rescue remains available, unchanged.
+  mesh.enterCLIRescue();
+  assert(mesh._cli_rescue);
+}
+
 int main() {
   FakeFS fs;
   DataStore store(fs);
@@ -1170,6 +1329,8 @@ int main() {
   testRecoveryConsoleAndReplies();
   testForgetFailurePrivacy();
   testInfoReadOnly();
+  testDeviceSettingsConsole();
+  testPhysicalUsbServiceEntry();
   return 0;
 }
 '''
@@ -1257,10 +1418,14 @@ def main() -> None:
         (root / "stubs/WiFi.h").write_text(WIFI, encoding="utf-8")
         (esp_helpers / "SerialWifiInterface.h").write_text(SERIAL_WIFI, encoding="utf-8")
         (example / "DataStore.h").write_text(DATA_STORE, encoding="utf-8")
-        (root / "controller_test.cpp").write_text(HARNESS, encoding="utf-8")
+        mesh_source = (CONTROLLER / "MyMesh.cpp").read_text(encoding="utf-8")
+        entry_start = mesh_source.index("void MyMesh::enterCLIRescue() {")
+        entry_end = mesh_source.index("void MyMesh::checkCLIRescueCmd()", entry_start)
+        harness = HARNESS.replace("@@USB_SERVICE_ENTRY@@", mesh_source[entry_start:entry_end])
+        (root / "controller_test.cpp").write_text(harness, encoding="utf-8")
         run_build(root, esp32=True)
         run_build(root, esp32=False)
-    print("[PASS] ConnectionController persistence, two-boot/crash recovery, permanent-failure Forget privacy, info, hidden setup, bounded console, retry, approval, quarantine")
+    print("[PASS] ConnectionController persistence, two-boot/crash recovery, Forget privacy, hidden setup, settings protocol/read-only/backpressure, physical USB service entry, retry, approval, quarantine")
 
 
 if __name__ == "__main__":

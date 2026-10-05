@@ -2,6 +2,9 @@
 #include "CompanionUiLogic.h"
 #include "CompanionFrameValidation.h"
 #include "ChannelBusyPolicy.h"
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+#include "ConnectionController.h"
+#endif
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
@@ -3071,6 +3074,19 @@ bool MyMesh::saveContacts() {
 }
 
 void MyMesh::enterCLIRescue() {
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  // Physical long-press during the startup window is a deliberate, headless
+  // escape from the framed USB companion protocol. Never inject text into an
+  // active binary session or erase settings to regain the service console.
+  if (connection_controller.status().selected == CompanionMode::USB) {
+    if (connection_controller.setMode(CompanionMode::BLE)) {
+      cli_command[0] = 0;
+    }
+    // A rejected save must retain USB ownership and must not enter legacy CLI.
+    // UITask reports success/failure from the controller's actual status.
+    return;
+  }
+#endif
   _cli_rescue = true;
   cli_command[0] = 0;
   Serial.println("========= CLI Rescue =========");

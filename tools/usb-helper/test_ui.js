@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.2.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.3.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -37,14 +37,17 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
   }
   const mock = window.__serialMock = {
     requests: 0, commands: [], raw: [], mode: localRecovery ? 'USB' : 'BLE', configured: false,
-    replies, localRecovery, quickReplies: Array(9).fill(''),
+    replies, localRecovery, quickReplies: Array(9).fill(''), settings,
+    settingsCaps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125,...settingsCaps},
+    settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0},
+    settingsRecord(kind,values){return 'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');},
     stage: 'idle', manualTest, readOnly, info, closed: false, ssid: null, password: null,
     emit(text) {
       if (this.closed) return;
@@ -74,7 +77,25 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         return;
       }
       const command = raw.trim().toLowerCase();
-      if ((this.readOnly || this.localRecovery) && command !== 'status' && !(this.localRecovery && command === 'wifi forget')) { this.emit('Connection settings are read-only during storage recovery.'); return; }
+      if ((this.readOnly || this.localRecovery) && command !== 'status' && !(this.settings && ['help','info','settings caps','settings get'].includes(command)) && !(this.localRecovery && command === 'wifi forget')) { this.emit('Connection settings are read-only during storage recovery.'); return; }
+      if(this.settings && command.startsWith('settings ')) {
+        if(command==='settings caps') this.emit(this.settingsRecord('caps',this.settingsCaps));
+        else if(command==='settings get') this.emit(this.settingsRecord('get',this.settingsState));
+        else if(this.settingsFailure) this.emit('ERR settings '+this.settingsFailure);
+        else if(command.startsWith('settings set ')) {
+          const [,,key,value]=command.split(' ');this.settingsState[key]=Number(value);
+          this.settingsState.shutdown_mv=this.settingsState.battery_protection?3200:2700;
+          this.emit('OK settings set key='+key+' value='+value);
+        } else if(command.startsWith('settings adc preview ')) {
+          const measured=Number(command.split(' ').at(-1));
+          this.adcPreview={token:7,sampled_mv:this.settingsState.battery_mv,measured_mv:measured,multiplier:Number((this.settingsState.adc_multiplier*measured/this.settingsState.battery_mv).toFixed(6))};
+          this.emit(this.settingsRecord('adc_preview',this.adcPreview));
+        } else if(command==='settings adc apply 7' && this.adcPreview) {this.settingsState.adc_multiplier=this.adcPreview.multiplier;this.emit('OK settings adc_apply');}
+        else if(command==='settings adc reset') {this.settingsState.adc_multiplier=this.settingsState.adc_default;this.emit('OK settings adc_reset');}
+        else if(command==='settings test') this.emit('OK settings test');
+        else this.emit('ERR settings invalid');
+        return;
+      }
       const getReply = /^reply get ([1-9])$/.exec(command);
       const setReply = /^reply set ([1-9]) (-|[0-9a-f]+)$/.exec(command);
       if (this.replies && getReply) {
@@ -87,7 +108,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         this.emit('Reply '+(slot+1)+' saved.');return;
       }
       switch (command) {
-        case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | ' + (this.replies ? 'reply get N | reply set N HEX | ' : '') + 'help\r\nCredential input is not echoed. WiFi is saved only after a passed test.'); break;
+        case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | ' + (this.replies ? 'reply get N | reply set N HEX | ' : '') + 'help\r\n'+(this.settings?'Settings protocol: 1\r\n':'')+'Credential input is not echoed. WiFi is saved only after a passed test.'); break;
         case 'info': this.emit(this.info || "Unknown command. Type 'help'."); break;
         case 'status': {
           const online = this.mode === 'WiFi' && this.configured;
@@ -140,7 +161,7 @@ async function fixture(options = {}) {
   const network = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery) });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{} });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -433,5 +454,99 @@ test('firmware preflight stays offline without serial access and displays merged
     await f.page.locator('#firmware-board').selectOption('t114');await f.page.locator('#firmware-check').click();
     await f.page.waitForFunction(()=>document.getElementById('firmware-result').textContent.includes('другой платы'));
     assert.equal(await f.page.evaluate(()=>Boolean(window.__serialMock)),false);
+  } finally {await f.close();}
+});
+
+const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
+test('headless settings save explicit fields with readback; ADC calculation and reset require confirmation',async()=>{
+  const f=await fixture({settings:true,info:DEVICE_INFO,replies:true});
+  try {
+    await connect(f.page);
+    assert.equal(await f.page.locator('#device-fields').isVisible(),true);
+    assert.match(await f.page.locator('#settings-capabilities').textContent(),/без дисплея/);
+    assert.equal(await f.page.locator('#row-gps').isVisible(),false);
+    assert.equal(await f.page.locator('#row-vibration').isVisible(),false);
+    assert.equal(await f.page.locator('#setting-melody option[value="0"]').textContent(),'0 · Пульс');
+    assert.equal(await f.page.locator('#setting-melody option[value="30"]').textContent(),'30 · Alert');
+    assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set'))),false);
+    await f.page.locator('#setting-volume').selectOption('4');
+    assert.match(await f.page.locator('#saved-volume').textContent(),/ещё не сохранено/);
+    await f.page.locator('#save-volume').click();
+    await f.page.waitForFunction(()=>document.getElementById('saved-volume').textContent.includes('4 / 10 · Прочитано'));
+    assert.deepEqual(await f.page.evaluate(()=>__serialMock.commands.slice(-2)),['settings set volume 4','settings get']);
+    await f.page.locator('#adc-measured').fill('3,82');await f.page.locator('#adc-preview').click();
+    await f.page.locator('#adc-preview-box').waitFor({state:'visible'});
+    assert.match(await f.page.locator('#adc-preview-result').textContent(),/ещё не сохранён/);
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.adc_multiplier),4.9);
+    await noOverlap(f.page);
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.3-settings-desktop.png')});
+    await confirm(f.page,'#adc-apply',false);
+    assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc apply'))),false);
+    await confirm(f.page,'#adc-apply',true);
+    await f.page.waitForFunction(()=>document.getElementById('adc-current').textContent==='4.925789');
+    await confirm(f.page,'#adc-reset',false);
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.adc_multiplier),4.925789);
+    await confirm(f.page,'#adc-reset',true);
+    await f.page.waitForFunction(()=>document.getElementById('adc-current').textContent==='4.900000');
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.volume),4);
+    await f.page.locator('#settings-test').click();
+    await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('Команда теста принята'));
+  } finally {await f.close();}
+});
+
+test('mobile settings have accessible controls, separate LEDs and battery warning before save',async()=>{
+  const f=await fixture({settings:true,info:DEVICE_INFO,settingsCaps:{vibration:1,gps:1,display:1}});
+  try {
+    await f.page.setViewportSize({width:390,height:844});await connect(f.page);
+    assert.equal(await f.page.getByLabel('LED платы',{exact:true}).isEnabled(),true);
+    assert.equal(await f.page.getByLabel('LED уведомлений',{exact:true}).isEnabled(),true);
+    await f.page.locator('#setting-board_led').selectOption('0');await f.page.locator('#save-board_led').click();
+    await f.page.waitForFunction(()=>document.getElementById('saved-board_led').textContent.includes('Выключен · Прочитано'));
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.unread_led),1);
+    await f.page.locator('#setting-battery_protection').selectOption('0');
+    await f.page.locator('#save-battery_protection').click();
+    assert.match(await f.page.locator('#confirm-text').textContent(),/2,7 В/);
+    assert.match(await f.page.locator('#confirm-text').textContent(),/не безопасная цель/);
+    assert.equal(await f.page.evaluate(()=>document.activeElement.id),'confirm-no');
+    await f.page.locator('#confirm-no').click();
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.battery_protection),1);
+    await confirm(f.page,'#save-battery_protection',true);
+    await f.page.waitForFunction(()=>document.getElementById('saved-battery_protection').textContent.includes('2,7 В · Прочитано'));
+    await f.page.locator('#setting-volume').focus();await f.page.keyboard.press('Tab');
+    assert.equal(await f.page.evaluate(()=>document.activeElement.id),'setting-melody'); // unchanged save buttons are disabled
+    await noOverlap(f.page);
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.3-settings-mobile.png')});
+  } finally {await f.close();}
+});
+
+test('unsupported hardware is hidden and storage failure remains unsaved in the form',async()=>{
+  const f=await fixture({settings:true,info:DEVICE_INFO,settingsCaps:{sound:0,unread_led:0,vibration:0,gps:0}});
+  try {
+    await connect(f.page);
+    for(const id of ['row-volume','row-melody','row-sound_quiet','row-unread_led','row-vibration','gps-panel']) assert.equal(await f.page.locator('#'+id).isVisible(),false,id);
+    assert.equal(await f.page.locator('#settings-test').isEnabled(),false);
+    await f.page.evaluate(()=>{__serialMock.settingsFailure='storage';});
+    await f.page.locator('#setting-board_led').selectOption('0');await f.page.locator('#save-board_led').click();
+    await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('ошибка хранилища'));
+    assert.match(await f.page.locator('#saved-board_led').textContent(),/ещё не сохранено/);
+    assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.board_led),1);
+    await f.page.locator('#adc-measured').fill('99');await f.page.locator('#adc-preview').click();
+    await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('2,500'));
+    assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc preview'))),false);
+    await f.page.evaluate(()=>__serialMock.unplug());
+    await f.page.waitForFunction(()=>document.getElementById('device-fields').hidden);
+  } finally {await f.close();}
+});
+
+test('read-only Settings 1 shows current values but disables every mutation',async()=>{
+  const f=await fixture({settings:true,info:DEVICE_INFO,readOnly:true});
+  try {
+    await connect(f.page);
+    assert.equal(await f.page.locator('#device-fields').isVisible(),true);
+    assert.equal(await f.page.locator('#settings-status').textContent(),'Только чтение');
+    assert.equal(await f.page.locator('#settings-load').isEnabled(),true);
+    for(const id of ['setting-volume','save-volume','adc-measured','adc-preview','adc-reset','settings-test']) assert.equal(await f.page.locator('#'+id).isEnabled(),false,id);
+    assert.match(await f.page.locator('#battery-voltage').textContent(),/3,800/);
+    assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set'))),false);
   } finally {await f.close();}
 });

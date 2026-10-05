@@ -7,10 +7,11 @@
   let renderedReplies = Array(9).fill(null);
   let firmwareBusy = false;
   let droppedFirmware = null, droppedManifest = null;
+  const settingsDirty = new Set();
   const modeNames = {ble:"Bluetooth",wifi:"Wi-Fi",usb:"USB-компаньон"};
   const supported = Boolean(window.isSecureContext && navigator.serial);
   // Keep the existing connect -> Wi-Fi -> mode workflow ahead of optional tools.
-  $("replies-title").closest("section").before($("mode-title").closest("section"));
+  $("device-section").before($("mode-title").closest("section"));
   const replyDefaults = ["Да","Нет","Потом","Сейчас","Завтра","Сегодня","Привет","Пока","Тест?"];
   for (let slot = 0; slot < 9; ++slot) {
     const row = document.createElement("div"); row.className = "reply-row";
@@ -27,6 +28,89 @@
       if (await confirmAction("Вернуть стандартную фразу «" + replyDefaults[slot] + "» в слот " + (slot + 1) + "?")) await run(async () => { const result = await client.saveQuickReply(slot,""); input.value = result.text; input.oninput(); });
     };
     buttons.append(save,clear); row.append(label,input,bytes,buttons); $("reply-fields").append(row);
+  }
+  const settingFields = [
+    {key:"battery_protection",cap:"battery_protection",group:"battery",label:"Защита аккумулятора",options:[[1,"Включена · 3,2 В"],[0,"Выключена · нижняя отсечка 2,7 В"]]},
+    {key:"muted",cap:null,group:"sound",label:"Общая тишина",options:[[0,"Выключена"],[1,"Включена"]]},
+    {key:"sound_quiet",cap:"sound",group:"sound",label:"Звук уведомлений ЛС",options:[[0,"Включён"],[1,"Выключен"]]},
+    {key:"volume",cap:"sound",group:"sound",label:"Громкость",options:Array.from({length:10},(_,i)=>[i+1,(i+1)+" / 10"])},
+    {key:"melody",cap:"sound",group:"sound",label:"Общая мелодия",options:[]},
+    {key:"board_led",cap:"board_led",group:"lights",label:"LED платы",options:[[1,"Включён"],[0,"Выключен"]]},
+    {key:"unread_led",cap:"unread_led",group:"lights",label:"LED уведомлений",options:[[1,"Включён"],[0,"Выключен"]]},
+    {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
+    {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
+  ];
+  // Exact public 0.08 notify_tones order; the package test checks source parity.
+  // Other versions retain numeric names unless they share this known catalog.
+  const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
+  const addOptions = (select, options) => {
+    select.replaceChildren();
+    for (const [value,text] of options) { const option=document.createElement("option"); option.value=String(value); option.textContent=text; select.append(option); }
+  };
+  for (const field of settingFields) {
+    const row=document.createElement("div"); row.className="setting-row"; row.id="row-"+field.key;
+    const label=document.createElement("label"); label.htmlFor="setting-"+field.key; label.textContent=field.label;
+    const controls=document.createElement("div"); controls.className="setting-controls";
+    const select=document.createElement("select"); select.id="setting-"+field.key; select.disabled=true; select.setAttribute("aria-describedby","saved-"+field.key); addOptions(select,field.options);
+    const save=document.createElement("button"); save.id="save-"+field.key; save.textContent="Сохранить"; save.setAttribute("aria-label","Сохранить: "+field.label); save.disabled=true;
+    const status=document.createElement("p"); status.className="setting-state"; status.id="saved-"+field.key; status.textContent="Не прочитано";
+    select.onchange=()=>{settingsDirty.add(field.key); renderDeviceSettings();};
+    save.onclick=async()=>{
+      const value=Number(select.value);
+      if (field.key==="battery_protection" && value===0 && !await confirmAction("Выключить защиту аккумулятора 3,2 В? Останется только нижняя отсечка 2,7 В. Это не безопасная цель разряда; необходим исправный BMS и проверенная калибровка ADC.")) return;
+      await run(()=>client.saveDeviceSetting(field.key,value));
+    };
+    controls.append(select,save); row.append(label,controls,status); $(field.group+"-settings").append(row);
+  }
+  function renderDeviceSettings() {
+    const caps=state.settingsCaps, saved=state.deviceSettings;
+    const readReady=state.connected && state.verified && !state.busy && !state.testPassed;
+    const ready=readReady && !state.status?.readOnly && Boolean(caps && saved);
+    if (!state.connected) settingsDirty.clear();
+    $("settings-load").disabled=!readReady || !state.settingsSupported;
+    $("device-fields").hidden=!caps;
+    $("settings-status").textContent=!state.connected ? "Ожидает подключения" : !state.settingsSupported ? "Совместимый режим" : !saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
+    $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
+    const names={adc:"ADC",sound:"звук",board_led:"LED платы",unread_led:"LED уведомлений",vibration:"вибрация",gps:"GPS",battery_protection:"защита АКБ"};
+    $("settings-capabilities").textContent=caps ? "Поддержка сборки: "+Object.entries(names).filter(([key])=>caps[key]).map(([,name])=>name).join(", ")+". "+(caps.display ? "Драйвер экрана активен." : "Настройка без дисплея.") : "Новые настройки доступны в SmartUI 0.08 с протоколом Settings 1. Возможности определяются ответом ноды, не её названием.";
+    if (!caps) return;
+    const melody=$("setting-melody");
+    const melodyCatalog=state.info?.firmware==="0.08" && caps.melody_max===melodyNames.length-1;
+    const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
+    if (melody.dataset.catalog!==catalogKey) {
+      addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));
+      melody.dataset.catalog=catalogKey;
+    }
+    for (const field of settingFields) {
+      const supported=!field.cap || Boolean(caps[field.cap]);
+      $("row-"+field.key).hidden=!supported;
+      const input=$("setting-"+field.key), stored=saved?.[field.key];
+      if (stored!==undefined && (!settingsDirty.has(field.key) || Number(input.value)===stored)) { input.value=String(stored); settingsDirty.delete(field.key); }
+      const dirty=stored!==undefined && Number(input.value)!==stored;
+      input.disabled=!ready || !supported;
+      $("save-"+field.key).disabled=!ready || !supported || !dirty;
+      const label=stored===undefined ? "—" : [...input.options].find(o=>Number(o.value)===stored)?.textContent || String(stored);
+      $("saved-"+field.key).textContent=stored===undefined ? "Значение не подтверждено" : "На ноде: "+label+(dirty ? " · Изменение ещё не сохранено" : " · Прочитано");
+      $("saved-"+field.key).dataset.dirty=String(dirty);
+    }
+    $("settings-status").textContent=!saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
+    $("battery-panel").hidden=!(caps.adc || caps.battery_protection);
+    $("adc-fields").hidden=!caps.adc;
+    $("battery-protection-warning").hidden=!caps.battery_protection;
+    $("lights-panel").hidden=!(caps.board_led || caps.unread_led || caps.vibration);
+    $("lights-panel").classList.toggle("device-panel-wide",!caps.gps);
+    $("gps-panel").hidden=!caps.gps;
+    $("battery-voltage").textContent=saved?.battery_mv ? (saved.battery_mv/1000).toLocaleString("ru-RU",{minimumFractionDigits:3,maximumFractionDigits:3})+" В" : "Нет данных";
+    $("adc-current").textContent=saved ? saved.adc_multiplier.toFixed(6) : "—";
+    $("adc-range").textContent="Заводской: "+(saved ? saved.adc_default.toFixed(6) : "—")+". Допустимо: "+caps.adc_min.toFixed(6)+"–"+caps.adc_max.toFixed(6)+".";
+    $("adc-measured").disabled=!ready || !caps.adc;
+    $("adc-preview").disabled=!ready || !caps.adc;
+    $("adc-reset").disabled=!ready || !caps.adc;
+    const preview=state.adcPreview;
+    $("adc-preview-box").hidden=!preview;
+    $("adc-apply").disabled=!ready || !preview || Date.now()>=preview.expiresAt;
+    if (preview) $("adc-preview-result").textContent="Расчёт, ещё не сохранён: "+preview.multiplier.toFixed(6)+". Нода измерила "+(preview.sampled_mv/1000).toFixed(3)+" В; мультиметр — "+(preview.measured_mv/1000).toFixed(3)+" В.";
+    $("settings-test").disabled=!ready || !(caps.sound || caps.unread_led || caps.vibration);
   }
   for (const profile of SmartUiFirmware.PROFILES) {
     const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.label; $("firmware-board").append(option);
@@ -91,6 +175,7 @@
     $("info-hint").textContent = state.info ? "Данные сообщены прошивкой. Доступно: " + state.info.capabilities.join(", ") + "." : state.verified ? "Эта консоль не сообщает версию и плату (совместимый режим 0.05). Возможности Wi-Fi не определены." : "Версия и плата появятся после проверки консоли SmartUI 0.06.";
     $("wifi-hint").textContent = !wifiAvailable ? "Прошивка сообщает: у этой платы нет Wi-Fi. Доступны Bluetooth и USB-компаньон." : state.testPassed ? "Сеть проверена, но ещё не сохранена. Нажмите «Сохранить сеть» или отмените проверку. Через две минуты бездействия нода отменит настройку." : "Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.";
     $("open-warning").hidden = !$("open-network").checked;
+    renderDeviceSettings();
   }
   const client = new SmartUiConsole.ConsoleClient({
     onState(next) { state = next; if (!state.connected) clearPassword(); render(); },
@@ -132,6 +217,19 @@
   };
   $("disconnect").onclick = () => run(() => client.disconnect());
   $("refresh").onclick = () => run(() => client.refreshStatus());
+  $("settings-load").onclick=async()=>{
+    if (settingsDirty.size && !await confirmAction("Прочитать значения с ноды заново? Несохранённые изменения в полях помощника будут отменены.")) return;
+    settingsDirty.clear(); await run(()=>client.loadDeviceSettings());
+  };
+  $("adc-measured").oninput=()=>client.clearAdcPreview();
+  $("adc-preview").onclick=()=>run(()=>client.previewAdc($("adc-measured").value));
+  $("adc-apply").onclick=async()=>{
+    if (await confirmAction("Сохранить рассчитанную калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Поправка влияет на оценку заряда и защиту питания.")) await run(()=>client.applyAdc({confirmed:true}));
+  };
+  $("adc-reset").onclick=async()=>{
+    if (await confirmAction("Вернуть только калибровку ADC к заводскому множителю этой платы? Контакты, ключ ноды и остальные настройки не удаляются.")) await run(()=>client.resetAdc({confirmed:true}));
+  };
+  $("settings-test").onclick=()=>run(()=>client.testDeviceNotification());
   $("replies-load").onclick = () => run(async () => {
     const replies = await client.loadQuickReplies();
     replies.forEach((text,slot) => { $("reply-" + slot).value = text; $("reply-" + slot).oninput(); });
@@ -187,7 +285,7 @@
   $("cancel").onclick = () => run(() => client.cancelWifi());
   for (const mode of Object.keys(modeNames)) $("mode-" + mode).onclick = async () => {
     if (state.status?.mode === mode) return;
-    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата нужно выбрать Bluetooth или Wi-Fi кнопками ноды. Результат переключения проверяйте на экране ноды." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
+    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
     if (await confirmAction(message)) await run(() => client.setMode(mode));
   };
   $("forget").onclick = async () => {

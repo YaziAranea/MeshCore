@@ -885,8 +885,41 @@ void ConnectionController::serviceConsoleTx() {
 void ConnectionController::printHelp() {
   printConsole(
       "Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | "
-      "wifi status | wifi save | wifi cancel | wifi forget | reply get N | reply set N HEX | help\r\n"
-      "Credential input is not echoed. WiFi is saved only after a passed test.\r\n");
+      "wifi status | wifi save | wifi cancel | wifi forget | reply get N | reply set N HEX | help\r\n");
+  // Preserve the legacy help grammar; new helpers negotiate this extension.
+  if (_hooks.handleDeviceSettings) printConsole("Settings protocol: 1\r\n");
+  printConsole("Credential input is not echoed. WiFi is saved only after a passed test.\r\n");
+}
+
+void ConnectionController::handleDeviceSettingsCommand(const char* line) {
+  if (_wifi_setup_stage != WifiSetupStage::IDLE) {
+    printConsole("ERR settings busy\r\n");
+    return;
+  }
+  if (!_hooks.handleDeviceSettings) {
+    printConsole("ERR settings unsupported\r\n");
+    return;
+  }
+  secureZero(_settings_response, sizeof(_settings_response));
+  const bool handled = _hooks.handleDeviceSettings(
+      line, _settings_response, sizeof(_settings_response), mutationAllowed());
+  const char* end = static_cast<const char*>(
+      memchr(_settings_response, 0, sizeof(_settings_response)));
+  bool valid = handled && end &&
+      (strncmp(_settings_response, "OK settings ", 12) == 0 ||
+       strncmp(_settings_response, "ERR settings ", 13) == 0);
+  if (valid) {
+    for (const char* c = _settings_response; c != end; ++c) {
+      if (*c < 0x20 || *c > 0x7e) { valid = false; break; }
+    }
+  }
+  if (!handled) printConsole("ERR settings unsupported\r\n");
+  else if (!valid) printConsole("ERR settings internal\r\n");
+  else {
+    printConsole(_settings_response);
+    printConsole("\r\n");
+  }
+  secureZero(_settings_response, sizeof(_settings_response));
 }
 
 void ConnectionController::handleQuickReplyCommand(const char* line) {
@@ -1022,6 +1055,13 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   char* line = trimAscii(raw_line);
   lowerAscii(line);
   if (!line[0]) return;
+  if (strcmp(line, "settings") == 0 || strncmp(line, "settings ", 9) == 0) {
+    // The backend allows capability/current-value reads during recovery, but
+    // receives an explicit false for every mutation. Keep its machine grammar
+    // distinct from the human-readable legacy connection recovery response.
+    handleDeviceSettingsCommand(line);
+    return;
+  }
   const bool quarantined = _hooks.isStorageQuarantined &&
       _hooks.isStorageQuarantined();
   const bool read_only_command = strcmp(line, "status") == 0 ||
@@ -1096,6 +1136,14 @@ void ConnectionController::serviceConsole() {
     }
   }
 
+  // A settings snapshot can occupy nearly the entire queue. Do not consume a
+  // second command until the previous response has drained, including when
+  // the host has stopped reading. This also prevents accidental lost ACKs.
+  if (_console_tx_len != 0) {
+    serviceConsoleTx();
+    return;
+  }
+
   uint8_t budget = CONSOLE_BYTES_PER_LOOP;
   while (budget-- > 0 && _console->available() > 0) {
     const int value = _console->read();
@@ -1123,6 +1171,7 @@ void ConnectionController::serviceConsole() {
       _console_line_len = 0;
       _console_line_overflow = false;
       if (!consoleEnabled()) break;
+      if (_console_tx_len != 0) break;
     } else if (c == '\b' || c == 0x7f) {
       _console_swallow_lf = false;
       if (_console_line_len > 0) {

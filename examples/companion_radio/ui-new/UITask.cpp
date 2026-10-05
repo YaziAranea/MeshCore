@@ -11022,6 +11022,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   _important_notify_tone_burst_step = 0;
   _important_notify_vibe_burst_step = 0;
   _night_prompt_expires = 0;
+  _night_save_retry_at = 0;
   _night_prompt_active = false;
   _night_prompt_yes = true;
   invalidateBatteryCache();
@@ -11112,7 +11113,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
   msg_preview = new MsgPreviewScreen(this, &rtc_clock);
   storage_recovery = new StorageRecoveryScreen();
-  setCurrScreen(splash);
+  // Keep notification/inbox state alive without running visual screen logic.
+  setCurrScreen(_display != NULL ? splash : NULL);
 }
 
 bool UITask::attachDisplay(DisplayDriver* display) {
@@ -11139,6 +11141,8 @@ bool UITask::attachDisplay(DisplayDriver* display) {
   }
   if (_storage_recovery_active && storage_recovery != NULL) {
     setCurrScreen(storage_recovery);
+  } else if (curr == NULL) {
+    setCurrScreen(home);
   }
   markDisplayWake(false);
   return true;
@@ -11775,6 +11779,26 @@ void UITask::applyImportedPrefs() {
   _next_refresh = 0;
 }
 
+void UITask::applyDeviceSettingsRuntime(bool battery_changed) {
+  if (_node_prefs == NULL) return;
+  stopNotifyOutputs();
+#ifdef PIN_BUZZER
+  buzzer.quiet(_node_prefs->buzzer_quiet || _node_prefs->notifications_muted);
+#endif
+#ifdef PIN_VIBRATION
+  if (_node_prefs->vibe_quiet || _node_prefs->notifications_muted) vibration.stop();
+#endif
+  applyBoardLedsState();
+  if (battery_changed) {
+    invalidateBatteryCache();
+    _low_batt_strikes = 0;
+    _low_batt_threshold = 0;
+    // Re-evaluate on the next normal check, never add another boot grace period.
+    next_batt_chck = 0;
+  }
+  _next_refresh = 0;
+}
+
 void UITask::cycleSmartProfile() {
 #if UI_SMART_B11_EXTRAS == 1
   if (_node_prefs == NULL) return;
@@ -12086,13 +12110,9 @@ void UITask::setCommonNotifyTone(uint8_t tone_id) {
 
 uint8_t UITask::getNotifyToneVolume() const {
 #ifdef PIN_MSG_TONE
-#if UI_TONE_HIGH_DRIVE_PAGE == 1
-  return 10;
-#else
   uint8_t volume = _node_prefs ? _node_prefs->notify_tone_volume : 10;
   if (volume == 0 || volume > 10) volume = 10;
   return volume;
-#endif
 #else
   return 0;
 #endif
@@ -12425,7 +12445,7 @@ void UITask::cycleNotifyToneVolume() {
 }
 
 void UITask::setNotifyToneVolume(uint8_t volume) {
-#if defined(PIN_MSG_TONE) && UI_TONE_HIGH_DRIVE_PAGE != 1
+#if defined(PIN_MSG_TONE)
   if (!_node_prefs || volume < 1 || volume > 10 || getNotifyToneVolume() == volume) return;
   const NodePrefs before = *_node_prefs;
   _node_prefs->notify_tone_volume = volume;
@@ -12811,7 +12831,13 @@ void UITask::messageVibeHandler() {
 }
 
 void UITask::previewNotifyMode() {
+  if (areNotificationsMuted()) return;
+#if UI_NOTIFY_ONLY_IMPORTANT_MESSAGES == 1
+  uint8_t mode = getImportantNotifyMode();
+#else
   uint8_t mode = getNotifyMode();
+#endif
+  if (!isUnreadLedEnabled()) mode &= ~NOTIFY_MODE_GPIO;
 #if defined(PIN_MSG_ALERT) && defined(PIN_MSG_TONE)
   if ((mode & NOTIFY_MODE_GPIO) && !((mode & NOTIFY_MODE_TONE) && getMsgTonePin() == getMsgAlertPin())) {
     triggerMsgAlert();
@@ -12838,7 +12864,8 @@ switch(t){
   case UIEventType::channelMessage:
     break;
   case UIEventType::ack:
-    buzzer.play("ack:d=32,o=8,b=120:c");
+    if (!areNotificationsMuted() && _node_prefs != NULL && !_node_prefs->buzzer_quiet)
+      buzzer.play("ack:d=32,o=8,b=120:c");
     break;
   case UIEventType::roomMessage:
   case UIEventType::newContactMessage:
@@ -12850,7 +12877,8 @@ switch(t){
 
 #ifdef PIN_VIBRATION
   // Trigger vibration for all UI events except none
-  if (t != UIEventType::none) {
+  if (t != UIEventType::none && _node_prefs != NULL &&
+      !_node_prefs->vibe_quiet && !areNotificationsMuted()) {
     vibration.trigger();
   }
 #endif
@@ -13036,9 +13064,27 @@ void UITask::renderNightPrompt(DisplayDriver& display) {
 #endif
 }
 
+bool UITask::persistNightPrefs(uint8_t before_quiet, uint8_t before_muted, uint32_t before_day) {
+  // Only these three settings change. Avoid a full NodePrefs snapshot on the
+  // nRF52 loop stack, including when this background service runs headlessly.
+  const double before_latitude = _node_prefs->node_lat;
+  const double before_longitude = _node_prefs->node_lon;
+  if (the_mesh.savePrefs()) {
+    _night_save_retry_at = 0;
+    return true;
+  }
+  _node_prefs->night_quiet_active = before_quiet;
+  _node_prefs->notifications_muted = before_muted;
+  _node_prefs->night_prompt_day = before_day;
+  _node_prefs->node_lat = before_latitude;
+  _node_prefs->node_lon = before_longitude;
+  _night_save_retry_at = smartui::optionalDeadlineAfter((uint32_t)millis(), 5000U);
+  return false;
+}
+
 void UITask::nightModeHandler() {
 #if UI_NIGHT_MODE_PROMPT
-  if (_node_prefs == NULL || _display == NULL || _storage_recovery_active) return;
+  if (_node_prefs == NULL || _storage_recovery_active) return;
 
   if (_night_prompt_active) {
     if (_night_prompt_expires != 0 &&
@@ -13047,6 +13093,10 @@ void UITask::nightModeHandler() {
     }
     return;
   }
+
+  // A broken flash must not cause a write attempt on every loop iteration.
+  // This deadline belongs only to automatic night writes, never USB settings.
+  if (smartui::optionalDeadlinePending((uint32_t)millis(), _night_save_retry_at)) return;
 
   uint32_t rtc_now = rtc_clock.getCurrentTime();
   if (!hasTrustedTime() || rtc_now < UI_RTC_VALID_MIN) return;
@@ -13062,15 +13112,20 @@ void UITask::nightModeHandler() {
     bool missed_morning = local_day > _node_prefs->night_prompt_day &&
                           minute_of_day >= UI_NIGHT_MODE_PROMPT_MINUTE;
     if (morning || missed_morning) {
-      const NodePrefs before = *_node_prefs;
+      const uint8_t before_quiet = _node_prefs->night_quiet_active;
+      const uint8_t before_muted = _node_prefs->notifications_muted;
       _node_prefs->night_quiet_active = 0;
       _node_prefs->notifications_muted = 0;
-      if (!the_mesh.commitPrefsOrRollback(before)) return;
+      if (!persistNightPrefs(before_quiet, before_muted, _node_prefs->night_prompt_day)) return;
       _next_refresh = 0;
     } else {
       return;
     }
   }
+
+  // Existing timed quiet mode expires on its normal schedule without a panel.
+  // Starting a new prompt still requires a display and explicit user choice.
+  if (_display == NULL) return;
 
   if (minute_of_day < UI_NIGHT_MODE_PROMPT_MINUTE ||
       _node_prefs->night_prompt_day == local_day) return;
@@ -13093,9 +13148,9 @@ void UITask::nightModeHandler() {
 
   // Remember the offer before showing it, so a reset cannot make the node
   // repeatedly chirp during the same night.
-  const NodePrefs before = *_node_prefs;
+  const uint32_t before_day = _node_prefs->night_prompt_day;
   _node_prefs->night_prompt_day = local_day;
-  if (!the_mesh.commitPrefsOrRollback(before)) {
+  if (!persistNightPrefs(_node_prefs->night_quiet_active, _node_prefs->notifications_muted, before_day)) {
     showAlert("Не сохранено: память", 1400);
     return;
   }
@@ -14499,6 +14554,7 @@ void UITask::loop() {
   }
 #endif
 
+  if (_display == NULL) c = 0;
   if (c != 0 && _night_prompt_active) {
     handleNightPromptInput(c);
     c = 0;
@@ -14540,7 +14596,7 @@ void UITask::loop() {
   if (buzzer.isPlaying())  buzzer.loop();
 #endif
 
-  if (curr) curr->poll();
+  if (_display != NULL && curr) curr->poll();
   handlePendingPopupWake();
   displayRecoverHandler();
 
@@ -14792,7 +14848,12 @@ char UITask::handleLongPress(char c) {
   #endif
   if (millis() - ui_started_at < 8000) {   // long press in first 8 seconds since startup -> CLI/rescue
     the_mesh.enterCLIRescue();
+#if SMARTUI_CONNECTION_SELECTOR
+    showAlert(the_mesh.isCLIRescue() ? "Сервис: перезапуск" :
+        (connection_controller.status().usbConsoleEnabled ? "USB: помощник" : "USB: не сохранено"), 5000);
+#else
     showAlert("Сервис: перезапуск", 5000);
+#endif
     c = 0;   // consume event
   }
   if (c != 0 && curr == home && home != NULL && ((HomeScreen*)home)->isClockPage()) {

@@ -3,6 +3,10 @@
 #include "MyMesh.h"
 #include <helpers/SmartUiBuildInfo.h>
 
+#ifndef SMARTUI_HEADLESS
+  #define SMARTUI_HEADLESS 0
+#endif
+
 #ifdef ESP32_PLATFORM
 #include "esp_pm.h"
 #include "esp_bt.h"
@@ -30,6 +34,7 @@ MultiSerialInterface interface_manager;
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   #include "ConnectionController.h"
+  #include "DeviceSettings.h"
 #endif
 
 // include bluetooth interface
@@ -123,6 +128,120 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 );
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+static smartui::DeviceSettings device_settings;
+
+static smartui::DeviceSettingsState readDeviceSettings() {
+  const NodePrefs& p = *the_mesh.getNodePrefs();
+  smartui::DeviceSettingsState s;
+  s.adc_override = p.adc_multiplier;
+  s.notify_mode = p.notify_mode;
+  s.important_notify_mode = p.important_notify_mode;
+  s.sound_quiet = p.buzzer_quiet;
+  s.vibe_quiet = p.vibe_quiet;
+  s.volume = p.notify_tone_volume;
+  s.melody = p.notify_tone_id;
+  s.melody_dm = p.notify_tone_dm_id;
+  s.melody_mention = p.notify_tone_mention_id;
+  s.melody_system = p.notify_tone_system_id;
+  s.board_led = p.board_leds_enabled;
+  s.unread_led = p.unread_led_enabled;
+  s.gps = p.gps_enabled;
+  s.gps_source = p.gps_source;
+  s.battery_protection = p.low_battery_shutdown_enabled;
+  s.muted = p.notifications_muted;
+  s.night_quiet = p.night_quiet_active;
+  s.profile = p.smart_profile_id;
+  return s;
+}
+
+static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
+  NodePrefs& p = *the_mesh.getNodePrefs();
+  p.adc_multiplier = s.adc_override;
+  p.notify_mode = s.notify_mode;
+  p.important_notify_mode = s.important_notify_mode;
+  p.buzzer_quiet = s.sound_quiet;
+  p.vibe_quiet = s.vibe_quiet;
+  p.notify_tone_volume = s.volume;
+  p.notify_tone_id = s.melody;
+  p.notify_tone_dm_id = s.melody_dm;
+  p.notify_tone_mention_id = s.melody_mention;
+  p.notify_tone_system_id = s.melody_system;
+  p.board_leds_enabled = s.board_led;
+  p.unread_led_enabled = s.unread_led;
+  p.gps_enabled = s.gps;
+  p.gps_source = s.gps_source;
+  p.low_battery_shutdown_enabled = s.battery_protection;
+  p.notifications_muted = s.muted;
+  p.night_quiet_active = s.night_quiet;
+  p.smart_profile_id = s.profile;
+}
+
+static smartui::DeviceSettingsCaps deviceSettingsCapabilities() {
+  smartui::DeviceSettingsCaps c;
+#ifdef ADC_MULTIPLIER
+  c.adc_default = ADC_MULTIPLIER;
+  c.adc = c.adc_default > 0 && board.getAdcMultiplier() > 0;
+#endif
+#ifdef DISPLAY_CLASS
+  c.display = ui_task.hasDisplay();
+  c.sound = ui_task.getNotifyTonePin() >= 0;
+  c.unread_led = ui_task.getNotifyLedPin() >= 0;
+  c.vibration = ui_task.getNotifyVibePin() >= 0;
+#if UI_NOTIFY_ONLY_IMPORTANT_MESSAGES == 1
+  c.effective_notify_mode = ui_task.getImportantNotifyMode();
+#else
+  c.effective_notify_mode = ui_task.getNotifyMode();
+#endif
+  c.melody_max = ui_task.getNotifyToneCount() ? ui_task.getNotifyToneCount() - 1 : 0;
+#if defined(PIN_STATUS_LED) && PIN_STATUS_LED >= 0
+  c.unread_led = true;
+#endif
+#if defined(AUTO_SHUTDOWN_MILLIVOLTS) && AUTO_SHUTDOWN_MILLIVOLTS > 0
+  c.battery_protection = true;
+#endif
+#endif
+#if (defined(PIN_LED) && PIN_LED >= 0) || (defined(LED_BUILTIN) && LED_BUILTIN >= 0) || \
+    (defined(PIN_STATUS_LED) && PIN_STATUS_LED >= 0) || (defined(P_LORA_TX_LED) && P_LORA_TX_LED >= 0)
+  c.board_led = true;
+#endif
+#if ENV_INCLUDE_GPS == 1
+  c.gps = sensors.getLocationProvider() != nullptr;
+#endif
+  return c;
+}
+
+static bool saveDeviceSettings() {
+  // savePrefs refreshes location fields too. Restore those incidental RAM
+  // changes if persistence fails, in addition to the service's small snapshot.
+  NodePrefs& prefs = *the_mesh.getNodePrefs();
+  const double latitude = prefs.node_lat;
+  const double longitude = prefs.node_lon;
+  if (the_mesh.savePrefs()) return true;
+  prefs.node_lat = latitude;
+  prefs.node_lon = longitude;
+  return false;
+}
+static uint16_t deviceBatteryMilliVolts() { return board.getBattMilliVolts(); }
+static float deviceAdcMultiplier() { return board.getAdcMultiplier(); }
+static uint32_t deviceSettingsMillis() { return static_cast<uint32_t>(millis()); }
+static void applyDeviceSettings(bool battery_changed) {
+  the_mesh.applyUiPrefsRuntime();
+#ifdef DISPLAY_CLASS
+  ui_task.applyDeviceSettingsRuntime(battery_changed);
+#else
+  (void)battery_changed;
+#endif
+}
+static void testDeviceNotification() {
+#ifdef DISPLAY_CLASS
+  ui_task.previewNotifyMode();
+#endif
+}
+static bool handleCompanionDeviceSettings(const char* command, char* reply,
+                                          size_t capacity, bool allow_mutation) {
+  return device_settings.handle(command, reply, capacity, allow_mutation);
+}
+
 static void resetCompanionSession() {
   the_mesh.resetLocalAppSession();
 }
@@ -253,6 +372,7 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   DisplayDriver* disp = NULL;
+#if !SMARTUI_HEADLESS
   if (display.begin()) {
     disp = &display;
     disp->startFrame();
@@ -262,6 +382,7 @@ void setup() {
     disp->drawTextCentered(disp->width() / 2, 28, "Loading...");
     disp->endFrame();
   }
+#endif
 #endif
 
   if (!radio_init()) { halt(); }
@@ -439,6 +560,7 @@ void setup() {
   connection_hooks.getBoardName = companionBoardName;
   connection_hooks.getQuickReply = companionQuickReply;
   connection_hooks.setQuickReply = setCompanionQuickReply;
+  connection_hooks.handleDeviceSettings = handleCompanionDeviceSettings;
   connection_controller.begin(
       store, interface_manager, Serial,
     #if defined(ESP32)
@@ -469,6 +591,20 @@ void setup() {
   #if defined(HELTEC_WIRELESS_PAPER)
     paper_display_attached = (disp != nullptr);
   #endif
+#endif
+
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  smartui::DeviceSettingsHooks settings_hooks;
+  settings_hooks.read = readDeviceSettings;
+  settings_hooks.write = writeDeviceSettings;
+  settings_hooks.save = saveDeviceSettings;
+  settings_hooks.apply = applyDeviceSettings;
+  settings_hooks.caps = deviceSettingsCapabilities;
+  settings_hooks.batteryMilliVolts = deviceBatteryMilliVolts;
+  settings_hooks.adcMultiplier = deviceAdcMultiplier;
+  settings_hooks.millis = deviceSettingsMillis;
+  settings_hooks.testNotification = testDeviceNotification;
+  device_settings.begin(settings_hooks);
 #endif
 
   board.onBootComplete();
@@ -530,11 +666,15 @@ void setup() {
 }
 
 void loop() {
-#if defined(HELTEC_WIRELESS_PAPER) && defined(DISPLAY_CLASS)
+#if defined(HELTEC_WIRELESS_PAPER) && defined(DISPLAY_CLASS) && !SMARTUI_HEADLESS
   // A bounded boot-time display failure must not make the node permanently
   // headless. E213 owns the exponential backoff and bounds each retry.
-  if (!paper_display_attached && display.retryAfterMillis() == 0 && display.begin()) {
-    paper_display_attached = ui_task.attachDisplay(&display);
+  // Retry only twice after the initial attempt. A physically absent display
+  // must not consume SPI time and power forever on a functioning headless node.
+  static uint8_t paper_attach_attempts = 0;
+  if (!paper_display_attached && paper_attach_attempts < 2 && display.retryAfterMillis() == 0) {
+    ++paper_attach_attempts;
+    if (display.begin()) paper_display_attached = ui_task.attachDisplay(&display);
   }
 #endif
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR

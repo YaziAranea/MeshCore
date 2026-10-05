@@ -1,14 +1,22 @@
 # MeshCore Smart UI — PowerSaving17
 
 > [!NOTE]
-> **Текущий публичный выпуск — Smart UI 0.07.**
-> [Скачать Smart UI 0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07) · [Изменения и выбор файла](RELEASE_NOTES_SmartUI_0.07_RU.md) · [Нумерация старых выпусков](docs/RELEASE_NUMBERING_RU.md).
-> Встроенная версия и имена новых файлов — `0.07`. Исторические теги и встроенные номера прежних выпусков сохранены. USB Helper имеет отдельную нумерацию.
+> **Текущий публичный выпуск — Smart UI 0.08.**
+> [Скачать Smart UI 0.08](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.08) · [Изменения и выбор файла](RELEASE_NOTES_SmartUI_0.08_RU.md) · [Нумерация старых выпусков](docs/RELEASE_NUMBERING_RU.md).
+> Встроенная версия и имена новых файлов — `0.08`. Исторические теги и встроенные номера прежних выпусков сохранены. USB Helper имеет отдельную нумерацию.
 
 > [!IMPORTANT]
-> **0.07 исправляет сброс маршрута контакта и экран выключения Wireless Paper.** Обработчик `RESET_PATH` формирует `OK` после сброса маршрута в памяти; сохранение контактов отложено. Paper оставляет значок питания и «Выключено», обычный сон с часами не изменён.
-> Полная отложенная запись всё ещё может задержать главный цикл. Устранение всех пауз радио/BLE и аппаратная стабильность всех плат не заявляются. Подробнее — [границы проверки](RELEASE_NOTES_SmartUI_0.07_RU.md#что-проверяется-а-что-ещё-требует-устройства).
+> **0.08 добавляет настройки устройства через USB — экран для них не нужен.** Калибровка батареи с подтверждением, общая мелодия и громкость, проверка уведомления, LED, GPS и защита АКБ доступны через обновлённый USB-помощник 1.3 в пределах возможностей платы. [Пошаговая инструкция](tools/usb-helper/README_RU.md).
+> Полная отложенная запись всё ещё может задержать главный цикл. Устранение всех пауз радио/BLE и аппаратная стабильность всех плат не заявляются. Подробнее — [границы проверки](RELEASE_NOTES_SmartUI_0.08_RU.md#что-проверяется-а-что-ещё-требует-устройства).
 > Возможности чата и компактное меню предыдущего публичного 0.06 сохранены. [Как пользоваться](docs/TEST_0.06_USER_GUIDE_RU.md).
+
+## USB-помощник 1.3
+
+[Скачать HTML](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.08/SmartUI_USB_Helper_1.3.html) · [ZIP с инструкцией и снимками интерфейса](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.08/SmartUI_USB_Helper_1.3.zip) · [Пошаговая инструкция](tools/usb-helper/README_RU.md).
+
+Настройки читаются с ноды, а не угадываются по названию платы. Новые функции требуют прошивки 0.08. Ниже — программный снимок помощника с имитацией USB; это не результат измерения физической платы.
+
+![USB-помощник: калибровка батареи, звук и LED](tools/usb-helper/screenshots/settings-desktop.png)
 
 > [!WARNING]
 > **Базовый выпуск — Smart UI 0.04 по новой нумерации** (встроенная версия `0.06`): обновление PowerSaving и исправления по аудиту.
@@ -28,9 +36,9 @@
 
 В 0.06 исправлены восстановление настроек подключения, гонка BLE-очередей nRF52, устаревший GPS FIX и потеря ввода при idle/уведомлениях. Готовые ответы проходят выбор адресата; в «Сервис» появилась страница «О прошивке», USB-помощник обновлён до 1.1. Постоянных черновиков нет. [Исправления и границы проверки](docs/AUDIT_FIXES_0.06_RU.md). Старые иллюстрации ниже показывают сохранённые элементы UI; это симуляции, не аппаратная проверка 0.06.
 
-[⬇ Скачать Smart UI 0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07) · [Как выбрать файл](RELEASE_NOTES_SmartUI_0.07_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
+[⬇ Скачать Smart UI 0.08](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.08) · [Как выбрать файл](RELEASE_NOTES_SmartUI_0.08_RU.md) · [Инструкция по прошивке](docs/FLASHING_RU.md)
 
-**Выбор подключения, добавленный в 0.05, сохранён.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль или USB-помощник 1.2. Первое Wi-Fi/TCP-приложение принимается автоматически, порт **5000**. Отдельного TCP-пароля/TLS нет: только доверенная локальная сеть, без проброса порта в Интернет. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.06_RU.md). [Внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.07`; архив — `SmartUI_0.07_all-boards.zip`.
+**Выбор подключения, добавленный в 0.05, сохранён.** На V3/V4.3/Paper доступны Bluetooth, USB Serial и Wi-Fi; на T096/T114/ProMicro — Bluetooth и USB Serial. Сеть настраивается через USB-консоль или USB-помощник 1.3. Первое Wi-Fi/TCP-приложение принимается автоматически, порт **5000**. Отдельного TCP-пароля/TLS нет: только доверенная локальная сеть, без проброса порта в Интернет. Одновременно работает один канал приложения, USB-консоль остаётся доступна в BLE/Wi-Fi. [Инструкция](docs/CONNECTIONS_0.06_RU.md). [Внешний GPS ProMicro](docs/PROMICRO_GPS_RU.md), уведомления и LED сохранены. Заставка — `MeshCore` / `0.08`; архив — `SmartUI_0.08_all-boards.zip`.
 
 > [!WARNING]
 > **Все ESP32 merged в 0.06 содержат пустое подготовленное хранилище.**
@@ -52,10 +60,10 @@
 
 > Это независимая модификация, не официальный выпуск MeshCore или IoTThinks. В 0.06 база `PowerSaving-v17` обновлена до [`a27e78e4`](https://github.com/IoTThinks/MeshCore/commit/a27e78e4da1389055b6dd16ce473112d25c8a5cd). Сборки и симуляции не означают физическое испытание всех плат. Чёрный экран V4.3 после app-only update не объявляется исправленным.
 
-История PS17-порта сохранена в ветках [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1) и [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2). Для ближайшего отката сохранён SmartUI 0.05.
+История PS17-порта сохранена в ветках [`smartui-ps17.1`](https://github.com/YaziAranea/MeshCore/tree/smartui-ps17.1) и [`smartui-2.1-beta.2`](https://github.com/YaziAranea/MeshCore/tree/smartui-2.1-beta.2). Для ближайшего отката сохранён [SmartUI 0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07).
 
-Текущая публичная ветка — [`smartui-0.07`](https://github.com/YaziAranea/MeshCore/tree/smartui-0.07).
-[Разница с предыдущим публичным 0.06](https://github.com/YaziAranea/MeshCore/compare/smartui-0.06-test.2...smartui-0.07).
+Текущая публичная ветка — [`smartui-0.08`](https://github.com/YaziAranea/MeshCore/tree/smartui-0.08).
+[Разница с предыдущим публичным 0.07](https://github.com/YaziAranea/MeshCore/compare/smartui-0.07...smartui-0.08).
 
 ## Что умеет интерфейс
 
@@ -96,7 +104,7 @@
 
 ## Быстрый старт
 
-Используйте [Release Smart UI 0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07). Для отката сохранён [предыдущий публичный 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2). Проверка сборок и симуляции не означает испытание каждого экземпляра платы.
+Используйте [Release Smart UI 0.08](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.08). Для отката сохранён [предыдущий публичный 0.06](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.06-test.2). Проверка сборок и симуляции не означает испытание каждого экземпляра платы.
 
 1. Откройте [GitHub Releases](https://github.com/YaziAranea/MeshCore/releases) или артефакты нужного CI-run и скачайте файл строго для своей платы.
 2. Скачайте контрольные суммы из того же выпуска: `SHA256SUMS.txt` для трёх UF2 и `SHA256SUMS-ESP32.txt` для всех шести BIN. В общем ZIP находятся те же файлы и `RELEASE-MANIFEST.json`.
@@ -153,7 +161,7 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin
 
 ## Проверки и статус разработки
 
-Изменения и границы проверки `SmartUI 0.07` описаны в [примечаниях к выпуску](RELEASE_NOTES_SmartUI_0.07_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты нового выпуска.
+Изменения и границы проверки `SmartUI 0.08` описаны в [примечаниях к выпуску](RELEASE_NOTES_SmartUI_0.08_RU.md). Контрольные суммы и манифест публикуются рядом с файлами Release после успешной сборки CI. Проверки старых версий сохранены в их исторических примечаниях и не выдаются за результаты нового выпуска.
 
 Основной CI собирает все шесть релизных конфигураций из одного commit: девять прошивок, общий ZIP, USB-помощник и 16 assets. V3 FS2 и подготовленная SPIFFS проверяются в этом же pipeline. Старый `Heltec_v3_companion_radio_ble` остаётся compile-only представителем общего драйвера, а не V3-файлом SmartUI. Xiao S3 WIO и Heltec T1 не добавляются в Release.
 
@@ -172,7 +180,7 @@ T096 симулируется с реальными bitmap-метриками, T
 - [Проверка SHA-256](docs/VERIFY_RU.md)
 - [Безопасность и радиопараметры](docs/SECURITY_RADIO_RU.md)
 - [История изменений](CHANGELOG.md)
-- [Примечания к Smart UI 0.07](RELEASE_NOTES_SmartUI_0.07_RU.md)
+- [Примечания к Smart UI 0.08](RELEASE_NOTES_SmartUI_0.08_RU.md)
 - [Примечания к прежней встроенной версии 0.06](RELEASE_NOTES_SmartUI_0.06_RU.md)
 - [Подключение внешнего GPS к ProMicro](docs/PROMICRO_GPS_RU.md)
 - [Предыдущий SmartUI V5](RELEASE_NOTES_SmartUI_V5_RU.md)

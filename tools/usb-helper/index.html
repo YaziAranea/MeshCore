@@ -9,7 +9,7 @@
     :root { color-scheme: dark; --bg:#101722; --panel:#182230; --edge:#344355; --text:#edf2f7; --muted:#b0bfd0; --accent:#82dec8; --blue:#a9d0ff; --warn:#ffcf87; --error:#ffa9a9; }
     * { box-sizing:border-box; }
     body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
-    main { max-width:1040px; margin:auto; padding:38px 24px 24px; }
+    main { max-width:1120px; margin:auto; padding:38px 24px 24px; }
     header { display:flex; gap:20px; align-items:center; justify-content:space-between; margin-bottom:26px; }
     h1 { margin:0; font-size:clamp(25px,4vw,36px); letter-spacing:-.7px; }
     h2 { margin:0 0 8px; font-size:20px; }
@@ -66,20 +66,56 @@
     dialog { max-width:470px; width:calc(100% - 36px); background:var(--panel); color:var(--text); border:1px solid var(--edge); border-radius:14px; padding:25px; }
     dialog::backdrop { background:#000a; }
     [hidden] { display:none!important; }
+    html { scroll-behavior:smooth; scroll-padding-top:20px; }
+    body { background:radial-gradient(ellipse at 25% 0,#193033 0,transparent 48%),var(--bg); }
+    .local-badge { display:inline-flex; align-items:center; gap:7px; color:var(--accent); font-size:13px; }
+    .local-badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
+    .tool-nav { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 24px; }
+    .tool-nav a { color:var(--text); text-decoration:none; border:1px solid var(--edge); border-radius:99px; padding:9px 15px; font-size:14px; background:#172631; }
+    .tool-nav a:hover { border-color:var(--accent); }
+    .tool-nav a:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+    .section-heading { display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between; }
+    .section-heading p { margin:0; }
+    #device-section { border-color:#426a68; background:linear-gradient(135deg,#1b2d35,#182230 60%); }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px; }
+    .device-panel { min-width:0; padding:20px; background:#111e2a; border:1px solid #324750; border-radius:12px; }
+    .device-panel h3 { color:var(--text); font-size:18px; }
+    .device-panel-wide { grid-column:1/-1; }
+    .device-panel-wide #lights-settings { display:grid; grid-template-columns:1fr 1fr; gap:0 24px; }
+    .panel-kicker { margin:0 0 8px; color:var(--accent); font-size:11px; font-weight:700; letter-spacing:1.8px; text-transform:uppercase; }
+    .measurement { display:flex; flex-wrap:wrap; gap:18px 32px; margin:18px 0; }
+    .measurement dd { font-size:30px; line-height:1.2; font-variant-numeric:tabular-nums; letter-spacing:-1px; }
+    .measurement .small-value { font-size:20px; padding-top:8px; letter-spacing:0; }
+    .setting-row { padding:14px 0; border-bottom:1px solid #293d49; }
+    .setting-row:last-child { border-bottom:0; padding-bottom:0; }
+    .setting-row label { display:block; font-weight:600; margin-bottom:7px; }
+    .setting-controls { display:grid; grid-template-columns:minmax(90px,1fr) auto; gap:9px; align-items:center; }
+    .setting-controls select { margin:0; }
+    .setting-state { margin:7px 0 0; font-size:12px; color:var(--muted); }
+    .setting-state[data-dirty="true"] { color:var(--warn); }
+    .preview-box { margin-top:14px; padding:14px; background:#1b3536; border:1px solid #416f69; border-radius:9px; }
+    .preview-box p { margin:0; }
+    .safety-note { font-size:13px; color:var(--warn); border-left:2px solid #9b7849; padding-left:10px; margin-top:14px; }
+    #settings-status { display:inline-block; padding:6px 10px; border:1px solid #426a68; border-radius:8px; color:var(--accent); font-size:13px; }
+    #settings-capabilities { font-size:13px; }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+    @media(max-width:730px) { .settings-grid,.device-panel-wide #lights-settings { grid-template-columns:1fr; } .device-panel { padding:16px; } .section-heading { align-items:flex-start; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } }
     @media(max-width:730px) { main { padding:22px 16px 12px; } header { align-items:flex-start; flex-direction:column; gap:10px; } .grid { grid-template-columns:1fr; } .card { padding:20px; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>USB помощник</h1><p class="subtitle">Настройка подключения ноды без команд консоли.</p></div>
-    <span class="tag">Помощник 1.2 · SmartUI 0.07 / 0.06-test.2 / test.1 / 0.06 / 0.05</span>
+    <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>Ваша нода. Ваши настройки.</h1><p class="subtitle">USB помощник — подключение, аккумулятор и уведомления.</p></div>
+    <div><span class="tag">Помощник 1.3 · SmartUI 0.08</span><p class="local-badge">Локально. Без аккаунта и облака.</p></div>
   </header>
+  <nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Подключение</a><a href="#device-section">Устройство</a><a href="#replies-section">Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a></nav>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
-  <div class="notice"><strong>Перед подключением:</strong> на ноде выберите <strong>Bluetooth или Wi-Fi</strong> в «Настройки → Подключение». Закройте веб-флешер, PuTTY и другие программы, использующие её USB-порт.</div>
+  <div class="notice"><strong>Перед подключением:</strong> нода должна работать в режиме <strong>Bluetooth или Wi-Fi</strong>. При наличии экрана выберите его в «Настройки → Подключение». Без экрана используйте вход ниже, если нода работает USB-компаньоном. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</div>
+  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   <div class="grid">
-    <section class="card" aria-labelledby="usb-title">
+    <section id="connection-section" class="card" aria-labelledby="usb-title">
       <h2 id="usb-title"><span class="step">1</span>Подключите ноду</h2>
       <p class="hint">Нужен USB-кабель с передачей данных. В окне браузера выберите порт именно вашей ноды.</p>
       <div class="buttons"><button id="connect" class="primary">Выбрать USB-порт</button><button id="disconnect" disabled>Отключиться</button></div>
@@ -116,14 +152,39 @@
       </form>
       <p id="wifi-hint" class="hint">Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.</p>
     </section>
-    <section class="card wide" aria-labelledby="replies-title">
+    <section id="device-section" class="card wide" aria-labelledby="device-title">
+      <div class="section-heading"><div><p class="panel-kicker">Настройки устройства</p><h2 id="device-title">Настройте ноду — даже без экрана</h2></div><span id="settings-status" role="status">Ожидает подключения</span></div>
+      <p id="settings-hint" class="hint">Доступные функции определяет прошивка. Изменения в полях не сохраняются автоматически.</p>
+      <div class="buttons"><button id="settings-load" disabled>Прочитать настройки</button></div>
+      <p id="settings-capabilities" class="hint">Для новых настроек нужна SmartUI 0.08 с протоколом Settings 1. Старые прошивки сохраняют прежние инструменты.</p>
+      <div id="device-fields" class="settings-grid" hidden>
+        <section id="battery-panel" class="device-panel" aria-labelledby="battery-title">
+          <p class="panel-kicker">Питание</p><h3 id="battery-title">Аккумулятор и калибровка</h3>
+          <div id="adc-fields">
+            <dl class="measurement"><div><dt>Напряжение ноды</dt><dd id="battery-voltage">—</dd></div><div><dt>ADC-множитель</dt><dd id="adc-current" class="small-value">—</dd></div></dl>
+            <p id="adc-range" class="hint">Заводской множитель и границы появятся после чтения.</p>
+            <label class="field" for="adc-measured">Напряжение мультиметра, В</label><input id="adc-measured" inputmode="decimal" type="text" autocomplete="off" placeholder="Например, 3,82" aria-describedby="adc-instructions" disabled>
+            <p id="adc-instructions" class="hint">Измерьте напряжение непосредственно на аккумуляторе. Введите 2,500–4,500 В. Расчёт не меняет настройки.</p>
+            <div class="buttons"><button id="adc-preview" disabled>Рассчитать поправку</button></div>
+            <div id="adc-preview-box" class="preview-box" hidden><p id="adc-preview-result" role="status"></p><div class="buttons"><button id="adc-apply" class="primary" disabled>Сохранить калибровку</button></div><p class="hint">Расчёт действует до 60 секунд. Изменение другой настройки отменяет его.</p></div>
+            <div class="buttons"><button id="adc-reset" disabled>Заводская калибровка ADC</button></div>
+          </div>
+          <div id="battery-settings"></div>
+          <p id="battery-protection-warning" class="safety-note">Защита включена: порог 3,2 В. При выключении остаётся нижняя отсечка 2,7 В — это не безопасная цель разряда. Нужны исправный BMS и проверенный ADC. Внешнее питание может менять поведение отключения.</p>
+        </section>
+        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">В публичных сборках звук относится к уведомлениям ЛС. Мелодия общая для важных уведомлений. Тест использует только сохранённые настройки.</p><div id="sound-settings"></div><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div><p class="hint">Общая тишина отключает звук и вибрацию; обычные статусные LED могут оставаться включёнными. Принятая команда теста не подтверждает работу физического излучателя.</p></section>
+        <section id="lights-panel" class="device-panel" aria-labelledby="lights-title"><p class="panel-kicker">Индикация</p><h3 id="lights-title">Светодиоды и вибрация</h3><p class="hint">LED платы и LED уведомлений — разные настройки. Аппаратный индикатор зарядки может не управляться прошивкой.</p><div id="lights-settings"></div></section>
+        <section id="gps-panel" class="device-panel" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Аппаратный GPS</h3><p class="hint">Доступен только при поддержке сборкой. Включение не означает, что спутники уже найдены. GPS телефона не используется.</p><div id="gps-settings"></div></section>
+      </div>
+    </section>
+    <section id="replies-section" class="card wide" aria-labelledby="replies-title">
       <h2 id="replies-title">Свои быстрые фразы</h2>
       <p class="hint">9 фраз на ноде, каждая до 64 байт UTF-8. Сначала прочитайте текущие значения. Пустое поле возвращает стандартную фразу. Сохранение — отдельно для каждого слота; адресат выбирается на ноде перед отправкой.</p>
       <p id="replies-hint" class="hint">Нужна прошивка с поддержкой своих фраз.</p>
       <div class="buttons"><button id="replies-load" disabled>Прочитать фразы с ноды</button></div>
       <div id="reply-fields"></div>
     </section>
-    <section class="card wide" aria-labelledby="firmware-title">
+    <section id="firmware-section" class="card wide" aria-labelledby="firmware-title">
       <h2 id="firmware-title">Проверить файл прошивки</h2>
       <p class="hint">Полностью локально: файл не передаётся в интернет, устройство не прошивается. Выберите BIN/UF2 и RELEASE-MANIFEST.json из одного релиза. Можно перетащить оба файла в этот блок.</p>
       <label class="field" for="firmware-file">Файл BIN / UF2 (до 32 МиБ)</label><input id="firmware-file" type="file" accept=".bin,.uf2">
@@ -136,7 +197,7 @@
       <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
       <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
-      <p class="hint">При выборе USB-компаньона помощник перестанет работать: порт займёт приложение. Для возврата выберите Bluetooth или Wi-Fi кнопками ноды.</p>
+      <p class="hint">При выборе USB-компаньона помощник перестанет работать: порт займёт приложение. Для возврата выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08.</p>
       <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
       <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Помощник только настраивает соединение; это не чат и не веб-флешер.</p></details>
       <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>

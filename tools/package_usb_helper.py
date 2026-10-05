@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_1.2.html"
-ZIP_NAME = "SmartUI_USB_Helper_1.2.zip"
+HTML_NAME = "SmartUI_USB_Helper_1.3.html"
+ZIP_NAME = "SmartUI_USB_Helper_1.3.zip"
 
 
 def digest(data):
@@ -41,6 +41,8 @@ def package(output):
         HTML_NAME: html,
         "README_RU.md": (SOURCE / "README_RU.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
+        "screenshots/settings-desktop.png": (SOURCE / "screenshots/settings-desktop.png").read_bytes(),
+        "screenshots/settings-mobile.png": (SOURCE / "screenshots/settings-mobile.png").read_bytes(),
     }
     checksums = "".join(f"{digest(raw)}  {name}\n" for name, raw in sorted(payloads.items()))
     payloads["SHA256SUMS.txt"] = checksums.encode("ascii")

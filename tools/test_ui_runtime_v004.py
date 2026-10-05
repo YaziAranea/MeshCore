@@ -106,7 +106,7 @@ def main() -> None:
     assert idle_gate < mark_day; checks += 1
     assert "gotoHomeFirstScreen" not in night; checks += 1
     checks += require(night, "local_day > _node_prefs->night_prompt_day",
-                      "commitPrefsOrRollback(before)", "optionalDeadlineAfter(")
+                      "persistNightPrefs(", "optionalDeadlineAfter(")
 
     popup = section(source, "void UITask::handlePendingPopupWake()", "void UITask::shutdown")
     assert popup.index("setCurrScreen(msg_preview);") < popup.index("_last_activity_ms = now;"); checks += 1
