@@ -582,13 +582,17 @@ check(
             'backup = "/prefs.json.bak"',
             "_prefs.saveSerial(file)",
             "std::unique_ptr<NodePrefs> verification(new (std::nothrow) NodePrefs(_prefs));",
-            "if (!verification) return false;",
+            "if (!verification) {",
+            "_prefs_save_error = PrefsSaveError::NO_MEMORY;",
+            "attempt < 2",
+            "prefsPrimaryAllowsBackupReclaim(_fs, target, *verification)",
             "verification->loadSerial(verify_file)",
             "memcmp(verification->quick_replies, _prefs.quick_replies,",
             "commitScratch(_fs, target, scratch, backup,",
             "prefsFileValid(_fs, target, *verification)",
         ),
     )
+    and prefs_saver.index("if (!verification)") < prefs_saver.index("prepareScratch(")
     and has_all(
         contacts_storage,
         (
