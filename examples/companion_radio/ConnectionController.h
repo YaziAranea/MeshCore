@@ -106,6 +106,7 @@ private:
   bool _api_mode_reply_queued = false;
   CompanionMode _api_mode_target = CompanionMode::BLE;
   uint32_t _api_mode_started = 0;
+  uint32_t _api_mode_session = 0;
   const char* _api_mode_error = "none";
   char _candidate_ssid[WIFI_SSID_MAX + 1] = {};
   char _candidate_password[WIFI_PASSWORD_MAX + 1] = {};

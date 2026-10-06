@@ -874,8 +874,10 @@ void ConnectionController::apiReplyQueued() {
 void ConnectionController::serviceApiMode() {
   if (!_api_mode_pending) return;
   // Controller.loop runs before the companion router observes its session
-  // epoch. Never apply a switch in that gap after its original peer left.
-  if (!_interfaces || !_interfaces->isInterfaceConnected(interfaceType(_config.mode))) {
+  // epoch. A fast reconnect can already look connected, so bind the deferred
+  // switch to the session which requested it, not only the current link state.
+  if (!_interfaces || _interfaces->sessionGeneration() != _api_mode_session ||
+      !_interfaces->isInterfaceConnected(interfaceType(_config.mode))) {
     _api_mode_pending = _api_mode_reply_queued = false;
     _api_mode_error = "cancelled";
     return;
@@ -918,6 +920,7 @@ bool ConnectionController::handleApiCommand(const char* command, char* reply,
       _api_mode_pending = true;
       _api_mode_reply_queued = false;
       _api_mode_started = millis();
+      _api_mode_session = _interfaces->sessionGeneration();
       _api_mode_error = "none";
       snprintf(reply, capacity, "OK api mode target=%s state=pending", command + 9);
     }

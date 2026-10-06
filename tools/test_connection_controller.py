@@ -188,6 +188,8 @@ public:
   bool fail_next_select = false;
   bool pending_tx = false;
   bool hasPendingTx() const { return pending_tx; }
+  uint32_t session_generation = 1;
+  uint32_t sessionGeneration() const { return session_generation; }
   bool addInterface(InterfaceType type, BaseSerialInterface* interface) {
     for (auto& item : items_) if (!item.interface) { item = {type, interface}; return true; }
     return false;
@@ -1076,6 +1078,19 @@ static void testApiConnectionControl() {
   assert(controller.status().selected == CompanionMode::BLE);
   assert(api(controller, "api wifi status").find("last_mode_error=cancelled") != std::string::npos);
   ble.connected = true;
+  // Disconnect/reconnect between router polls: connected stays true but the
+  // replacement session must not inherit the old session's queued mode write.
+  const auto before_reconnect = fs.files;
+  api(controller, "api mode usb");
+  controller.apiReplyQueued();
+  ++manager.session_generation;
+  assert(manager.isInterfaceConnected(InterfaceType::Bluetooth));
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  assert(fs.files == before_reconnect);
+  assert(!controller.deviceApiBusy());
+  assert(api(controller, "api wifi status").find("mode_pending=none last_mode_error=cancelled") != std::string::npos);
 #if defined(ESP32)
   assert(api(controller, "api mode wifi") == "ERR api unconfigured");
   assert(api(controller, "api wifi begin", false) == "ERR api readonly");
@@ -1545,7 +1560,8 @@ def run_build(root: Path, esp32: bool) -> None:
 def main() -> None:
     source = (CONTROLLER / "ConnectionController.cpp").read_text(encoding="utf-8")
     assert "getSessionGeneration" not in source
-    assert "sessionGeneration()" not in source
+    assert "_interfaces->sessionGeneration() != _api_mode_session" in source
+    assert "_api_mode_session = _interfaces->sessionGeneration();" in source
     assert "noteSessionBoundary" not in source
     assert "while (_console" not in source
     main_source = (CONTROLLER / "main.cpp").read_text(encoding="utf-8")
