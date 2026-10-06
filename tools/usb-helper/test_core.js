@@ -253,11 +253,19 @@ test('advertised invalid info fails closed without displaying raw text or sendin
   }
 });
 
-test('0.06 storage recovery status blocks settings even without the legacy read-only notice', async () => {
-  const { instance, port } = await connected({info:INFO,onCommand(raw,p) {
+test('local storage error without legacy notice warns instead of green success and blocks writes', async () => {
+  const { instance, port, seen } = await connected({info:INFO,onCommand(raw,p) {
     if(raw === 'status') {p.reply(STATUS + ' storage=recovery-required'); return false;}
   }});
   assert.equal(instance.state.status.readOnly, true);
+  assert.equal(instance.state.status.recoveryRequired, true);
+  assert.equal(seen.events.at(-1).kind, 'warning');
+  assert.match(seen.events.at(-1).text, /Ошибка хранилища подключения.*storage=recovery-required/);
+  assert.match(seen.events.at(-1).text, /Обновите состояние.*версию и build/);
+  assert.equal(seen.events.some(e=>e.kind==='success'),false);
+  assert.doesNotMatch(seen.events.at(-1).text,/устройство восстанавливает/);
+  await instance.refreshStatus();
+  assert.equal(seen.events.at(-1).kind,'warning');
   const count = port.commands.length;
   await assert.rejects(instance.setMode('wifi'), code('READ_ONLY'));
   await assert.rejects(instance.testWifi('private network','private password'), code('READ_ONLY'));
@@ -499,15 +507,38 @@ test('BLE/WiFi mode and Forget require exact ACK followed by fresh status', asyn
   await instance.disconnect();
 });
 
-test('read-only firmware can be inspected but mutations are blocked', async () => {
-  const { instance, port } = await connected({ readOnly: true });
+test('global read-only quarantine warns without claiming local cleanup and forbids every mutation', async () => {
+  const { instance, port, seen } = await connected({ readOnly: true });
   assert.equal(instance.state.verified, true);
   assert.equal(instance.state.status.readOnly, true);
+  assert.equal(instance.state.status.recoveryRequired,false);
+  assert.equal(seen.events.at(-1).kind,'warning');
+  assert.match(seen.events.at(-1).text,/запись заблокирована из-за состояния хранилища/);
+  assert.doesNotMatch(seen.events.at(-1).text,/хранилища подключения|устройство восстанавливает/);
+  assert.equal(seen.events.some(e=>e.kind==='success'),false);
+  const before=port.commands.length;
   await assert.rejects(instance.testWifi('network', 'password'), code('READ_ONLY'));
   await assert.rejects(instance.setMode('wifi'), code('READ_ONLY'));
   await assert.rejects(instance.forgetWifi(), code('READ_ONLY'));
+  assert.equal(port.commands.length,before);
   assert.equal(port.commands.includes('wifi setup'), false);
   await instance.refreshStatus();
+  assert.equal(seen.events.at(-1).kind,'warning');
+  await instance.disconnect();
+});
+
+test('global quarantine still rejects explicit local cleanup when both storage error signals exist',async()=>{
+  const {instance,port,seen}=await connected({onCommand(raw,p){
+    if(raw==='status'){p.reply(STATUS+' storage=recovery-required');return false;}
+    if(['cancel','wifi cancel','wifi forget'].includes(raw)){p.reply('Connection settings are read-only during storage recovery.');return false;}
+  }});
+  assert.equal(instance.state.status.readOnly,true);
+  assert.equal(instance.state.status.recoveryRequired,true);
+  assert.equal(port.commands.includes('wifi forget'),false,'connection must not attempt repair');
+  await assert.rejects(instance.forgetWifi(),code('READ_ONLY'));
+  assert.equal(port.commands.filter(c=>c==='wifi forget').length,1,'only the explicit requested action is sent');
+  assert.equal(instance.state.status.readOnly,true);
+  assert.equal(seen.events.some(e=>e.kind==='success'),false);
   await instance.disconnect();
 });
 

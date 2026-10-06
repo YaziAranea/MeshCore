@@ -43,6 +43,9 @@ public:
   virtual size_t write(const uint8_t* data, size_t len) = 0;
 };
 
+static const uint8_t FILE_O_READ = 0;
+static const uint8_t FILE_O_WRITE = 1;
+
 class File;
 class FakeFS {
 public:
@@ -59,11 +62,15 @@ public:
   std::string corrupt_rename_to;
   std::string permanent_remove_path;
   std::string permanent_write_open_path;
+  unsigned write_open_count = 0;
+  unsigned remove_attempt_count = 0;
+  unsigned rename_attempt_count = 0;
 
   void checkpoint() { if (record_snapshots) snapshots.push_back(files); }
 
   bool exists(const char* path) const { return files.count(path) != 0; }
   bool remove(const char* path) {
+    ++remove_attempt_count;
     if (permanent_remove_path == path) return false;
     if (fail_remove_path == path) {
       fail_remove_path.clear();
@@ -74,6 +81,7 @@ public:
     return removed;
   }
   bool rename(const char* from, const char* to) {
+    ++rename_attempt_count;
     if (fail_next_rename || fail_rename_from == from) {
       fail_next_rename = false;
       fail_rename_from.clear();
@@ -91,6 +99,7 @@ public:
     return true;
   }
   File open(const char* path, const char* mode, bool create = false);
+  File open(const char* path, uint8_t mode);
 };
 
 class File {
@@ -100,11 +109,18 @@ class File {
   bool open_ = false;
 public:
   File() = default;
-  File(FakeFS* fs, const char* path, bool write)
+  File(FakeFS* fs, const char* path, bool write, bool append = false)
       : fs_(fs), path_(path), open_(fs != nullptr) {
     if (open_ && write) {
-      fs_->files[path_].clear();
-      fs_->checkpoint();
+      const bool existed = fs_->files.count(path_) != 0;
+      auto& bytes = fs_->files[path_];
+      if (append) {
+        offset_ = bytes.size();
+        if (!existed) fs_->checkpoint();
+      } else {
+        bytes.clear();
+        fs_->checkpoint();
+      }
     }
   }
   explicit operator bool() const { return open_; }
@@ -146,6 +162,7 @@ public:
 
 inline File FakeFS::open(const char* path, const char* mode, bool) {
   const bool write = mode && mode[0] == 'w';
+  if (write) ++write_open_count;
   if (write && permanent_write_open_path == path) return File();
   if (write && fail_write_open_path == path) {
     fail_write_open_path.clear();
@@ -153,6 +170,20 @@ inline File FakeFS::open(const char* path, const char* mode, bool) {
   }
   if (!write && !exists(path)) return File();
   return File(this, path, write);
+}
+
+inline File FakeFS::open(const char* path, uint8_t mode) {
+  const bool write = mode == FILE_O_WRITE;
+  if (write) ++write_open_count;
+  if (write && permanent_write_open_path == path) return File();
+  if (write && fail_write_open_path == path) {
+    fail_write_open_path.clear();
+    return File();
+  }
+  if (!write && !exists(path)) return File();
+  // Match Adafruit_LittleFS: FILE_O_WRITE opens read/write, creates when
+  // absent, then seeks to EOF.  It does not truncate an existing file.
+  return File(this, path, write, write);
 }
 
 #define FILESYSTEM FakeFS
@@ -664,6 +695,7 @@ static void testCredentialBearingRecovery() {
 static void testRecoveryConsoleAndReplies() {
   RecoveryFixture recovery;
   recovery.fs.files["/connection.cfg"] = configRecord(CompanionMode::USB);
+  recovery.fs.files["/connection.forgot"] = {1};
   recovery.fs.fail_remove_path = "/connection.forgot";
   recovery.boot();
   assert(recovery.controller.status().storageRecoveryRequired);
@@ -718,6 +750,118 @@ static void assertCleanReboot(const FakeFS::State& files, CompanionMode mode) {
   assert(!next.controller.status().storageRecoveryRequired);
   assert(next.fs.files["/connection.cfg"] == configRecord(mode));
   assertNoCredentials(next.fs.files);
+}
+
+static void testCleanBootDoesNotWrite() {
+  RecoveryFixture clean;
+  clean.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+  const auto before = clean.fs.files;
+  // A healthy boot must not touch the recovery marker or any config record.
+  clean.fs.fail_write_open_path = "/connection.forgot";
+  clean.fs.fail_remove_path = "/connection.forgot";
+  clean.boot();
+  assert(!clean.controller.status().storageRecoveryRequired);
+  assert(clean.manager.isEnabled());
+  assert(clean.fs.files == before);
+  assert(clean.fs.write_open_count == 0);
+  assert(clean.fs.remove_attempt_count == 0);
+  assert(clean.fs.rename_attempt_count == 0);
+}
+
+static void testNrfAppendSafeRecovery() {
+#if defined(NRF52_PLATFORM)
+  const auto clean = configRecord(CompanionMode::BLE);
+  std::vector<std::vector<uint8_t>> malformed = {
+      {}, {1, 2, 3}, std::vector<uint8_t>(108, 0x41),
+      std::vector<uint8_t>(110, 0x42)};
+  auto bad_crc = clean;
+  bad_crc[105] ^= 0x80;
+  malformed.push_back(bad_crc);
+  auto oversized_secret = configRecord(CompanionMode::BLE, true);
+  oversized_secret.push_back(0x43);
+  malformed.push_back(oversized_secret);
+
+  for (const auto& damaged : malformed) {
+    RecoveryFixture repaired;
+    repaired.fs.files["/connection.cfg"] = damaged;
+    repaired.fs.record_snapshots = true;
+    repaired.boot();
+    assert(!repaired.controller.status().storageRecoveryRequired);
+    assert(repaired.manager.isEnabled());
+    assert(repaired.fs.files["/connection.cfg"] == clean);
+    assert(!repaired.fs.exists("/connection.forgot"));
+    assertNoCredentials(repaired.fs.files);
+    // Every observable power-cut state remains recoverable on the next boot.
+    for (const auto& snapshot : repaired.fs.snapshots) {
+      assertCleanReboot(snapshot, CompanionMode::BLE);
+    }
+  }
+
+  // A blocked invalid primary stays byte-for-byte unchanged: no append retry.
+  // Once unlink works again, the same non-destructive WiFi cleanup command
+  // replaces only connection metadata and releases recovery without reboot.
+  RecoveryFixture blocked;
+  auto malformed_primary = clean;
+  malformed_primary[105] ^= 0x40;
+  blocked.fs.files["/connection.cfg"] = malformed_primary;
+  blocked.fs.permanent_remove_path = "/connection.cfg";
+  blocked.boot();
+  assert(blocked.controller.status().storageRecoveryRequired);
+  assert(blocked.fs.files["/connection.cfg"] == malformed_primary);
+  const unsigned writes_before_retry = blocked.fs.write_open_count;
+  send(blocked.controller, blocked.console, "wifi forget\n");
+  assert(blocked.controller.status().storageRecoveryRequired);
+  assert(blocked.fs.files["/connection.cfg"] == malformed_primary);
+  assert(blocked.fs.write_open_count == writes_before_retry);
+  blocked.fs.permanent_remove_path.clear();
+  send(blocked.controller, blocked.console, "wifi forget\n");
+  assert(!blocked.controller.status().storageRecoveryRequired);
+  assert(blocked.manager.isEnabled());
+  assert(blocked.fs.files["/connection.cfg"] == clean);
+  assert(!blocked.fs.exists("/connection.forgot"));
+
+  // Interrupted cleanup marker: first unlink failure is explicit recovery;
+  // retry removes the marker without rewriting an already-clean primary.
+  RecoveryFixture marker;
+  marker.fs.files["/connection.cfg"] = clean;
+  marker.fs.files["/connection.forgot"] = {1};
+  marker.fs.fail_remove_path = "/connection.forgot";
+  marker.boot();
+  assert(marker.controller.status().storageRecoveryRequired);
+  assert(marker.fs.write_open_count == 0);
+  send(marker.controller, marker.console, "wifi forget\n");
+  assert(!marker.controller.status().storageRecoveryRequired);
+  assert(marker.fs.write_open_count == 0);
+  assert(!marker.fs.exists("/connection.forgot"));
+
+  // Failed unlink is idempotent when the leftover is already exact and clean.
+  RecoveryFixture clean_leftover;
+  clean_leftover.fs.files["/connection.cfg"] = clean;
+  clean_leftover.fs.files["/connection.cfg.tmp"] = clean;
+  clean_leftover.fs.permanent_remove_path = "/connection.cfg.tmp";
+  clean_leftover.boot();
+  assert(!clean_leftover.controller.status().storageRecoveryRequired);
+  assert(clean_leftover.fs.files["/connection.cfg.tmp"] == clean);
+  assert(clean_leftover.fs.write_open_count == 1);  // marker only
+  assert(!clean_leftover.fs.exists("/connection.forgot"));
+
+  // A credential-bearing leftover that cannot be unlinked is never appended
+  // to or claimed clean.  Recovery remains fail-closed until unlink succeeds.
+  RecoveryFixture secret_leftover;
+  const auto secret = configRecord(CompanionMode::BLE, true);
+  secret_leftover.fs.files["/connection.cfg"] = clean;
+  secret_leftover.fs.files["/connection.cfg.tmp"] = secret;
+  secret_leftover.fs.permanent_remove_path = "/connection.cfg.tmp";
+  secret_leftover.boot();
+  assert(secret_leftover.controller.status().storageRecoveryRequired);
+  assert(secret_leftover.fs.files["/connection.cfg.tmp"] == secret);
+  assert(secret_leftover.fs.write_open_count == 1);  // marker only
+  assert(secret_leftover.fs.exists("/connection.forgot"));
+  secret_leftover.fs.permanent_remove_path.clear();
+  send(secret_leftover.controller, secret_leftover.console, "wifi forget\n");
+  assert(!secret_leftover.controller.status().storageRecoveryRequired);
+  assertNoCredentials(secret_leftover.fs.files);
+#endif
 }
 
 static void testCredentialFreeRecovery() {
@@ -838,6 +982,9 @@ static void testForgetFailurePrivacy() {
       // Retry is available without reboot once the storage fault is gone.
       first.fs.permanent_remove_path.clear();
       first.fs.permanent_write_open_path.clear();
+      first.fs.fail_remove_path.clear();
+      first.fs.short_write_path.clear();
+      first.fs.corrupt_flush_path.clear();
       send(first.controller, first.console, "wifi forget\n");
       assert(!first.controller.status().storageRecoveryRequired);
       assert(first.manager.isEnabled());
@@ -935,6 +1082,7 @@ static void testDeviceSettingsConsole() {
 
   RecoveryFixture local_recovery;
   local_recovery.fs.files["/connection.cfg"] = configRecord(CompanionMode::USB);
+  local_recovery.fs.files["/connection.forgot"] = {1};
   local_recovery.fs.fail_remove_path = "/connection.forgot";
   local_recovery.boot();
   assert(local_recovery.controller.status().storageRecoveryRequired);
@@ -1495,6 +1643,8 @@ int main() {
   assert(blocked_console.max_write <= 7 && blocked_console.max_write <= 64);
 
   testModeChangeErrors();
+  testCleanBootDoesNotWrite();
+  testNrfAppendSafeRecovery();
   testCredentialFreeRecovery();
   testCredentialBearingRecovery();
   testRecoveryConsoleAndReplies();
@@ -1515,15 +1665,17 @@ def linux_path(path: Path) -> str:
     return "/mnt/" + resolved.drive[0].lower() + resolved.as_posix()[2:]
 
 
-def run_build(root: Path, esp32: bool) -> None:
-    binary = root / ("controller-esp32" if esp32 else "controller-generic")
+def run_build(root: Path, platform: str) -> None:
+    binary = root / ("controller-" + platform)
     sources = [
         root / "controller_test.cpp",
         root / "examples/companion_radio/ConnectionController.cpp",
     ]
     definitions = ["SMARTUI_CONNECTION_SELECTOR=1"]
-    if esp32:
+    if platform == "esp32":
         definitions.append("ESP32=1")
+    elif platform == "nrf52":
+        definitions.append("NRF52_PLATFORM=1")
     arguments = [
         "-std=c++17", "-O1", "-Wall", "-Wextra", "-Werror",
         *[f"-D{definition}" for definition in definitions],
@@ -1603,9 +1755,10 @@ def main() -> None:
         entry_end = mesh_source.index("void MyMesh::checkCLIRescueCmd()", entry_start)
         harness = HARNESS.replace("@@USB_SERVICE_ENTRY@@", mesh_source[entry_start:entry_end])
         (root / "controller_test.cpp").write_text(harness, encoding="utf-8")
-        run_build(root, esp32=True)
-        run_build(root, esp32=False)
-    print("[PASS] ConnectionController persistence, recovery, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
+        run_build(root, "esp32")
+        run_build(root, "generic")
+        run_build(root, "nrf52")
+    print("[PASS] ConnectionController generic/ESP32/nRF52 persistence, append-safe recovery, zero-write clean boot, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
 
 
 if __name__ == "__main__":

@@ -388,6 +388,10 @@ test('read-only console blocks settings and remains disconnectable', async () =>
     await connect(f.page);
     for (const selector of ['#test', '#save', '#cancel', '#mode-wifi', '#forget']) assert.equal(await f.page.locator(selector).isDisabled(), true);
     assert.match(await f.page.locator('#feedback').textContent(), /только для чтения/);
+    assert.equal(await f.page.locator('#feedback').getAttribute('data-kind'),'warning');
+    assert.match(await f.page.locator('#feedback').textContent(),/запись заблокирована.*версию и build/);
+    assert.doesNotMatch(await f.page.locator('#feedback').textContent(),/устройство восстанавливает|хранилища подключения/);
+    assert.equal(await f.page.evaluate(()=>window.__serialMock.commands.includes('wifi forget')),false);
     await f.page.locator('#disconnect').click();
     await f.page.waitForFunction(() => !document.getElementById('connect').disabled);
   } finally { await f.close(); }
@@ -424,6 +428,9 @@ test('local USB recovery leaves status and safe cleanup action accessible',async
     await connect(f.page);
     assert.equal(await f.page.locator('#refresh').isEnabled(),true);
     assert.equal(await f.page.locator('#mode-ble').isDisabled(),true);
+    assert.equal(await f.page.locator('#feedback').getAttribute('data-kind'),'warning');
+    assert.match(await f.page.locator('#feedback').textContent(),/Ошибка хранилища подключения.*storage=recovery-required/);
+    assert.equal(await f.page.evaluate(()=>window.__serialMock.commands.includes('wifi forget')),false);
     await f.page.locator('summary').filter({hasText:'Служебные события'}).click();
     assert.equal(await f.page.locator('#forget').isEnabled(),true);
     await confirm(f.page,'#forget',true);

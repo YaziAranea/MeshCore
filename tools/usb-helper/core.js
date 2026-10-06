@@ -33,7 +33,8 @@
     TIMEOUT: 'Устройство не ответило вовремя. Проверьте USB и выбранный режим.',
     SERIAL_ERROR: 'Ошибка USB-соединения. Закройте другие программы, использующие порт, и переподключитесь.',
     OPEN_FAILED: 'Не удалось открыть USB-порт. Закройте другие программы, использующие порт.',
-    READ_ONLY: 'Настройки доступны только для чтения: устройство восстанавливает хранилище.',
+    READ_ONLY: 'Настройки доступны только для чтения: запись заблокирована из-за состояния хранилища. Обновите состояние; если блокировка остаётся, сообщите версию и build прошивки для диагностики. Автоматическое исправление не подтверждено.',
+    STORAGE_RECOVERY_REQUIRED: 'Ошибка хранилища подключения (storage=recovery-required). Настройки доступны только для чтения. Обновите состояние; если ошибка остаётся, сообщите версию и build прошивки для диагностики. Автоматическое исправление не подтверждено.',
     WIFI_PENDING: 'Сначала сохраните или отмените проверенные настройки WiFi.',
     INVALID_SSID: 'SSID должен содержать 1–32 байта UTF-8 без управляющих символов.',
     RESERVED_SSID: 'SSID «cancel» зарезервирован прошивкой и не поддерживается мастером.',
@@ -325,7 +326,12 @@
           if (this._state.settingsSupported) await this._loadDeviceSettings(session);
           this._assertCurrent(session);
           this._stateChanged({ verified: true });
-          this._event('success', session.readOnly ? 'Консоль подключена. Настройки доступны только для чтения.' : 'Сервисная консоль SmartUI подключена.');
+          const currentStatus = this._state.status;
+          if (currentStatus?.readOnly) {
+            this._event('warning', currentStatus.recoveryRequired ? MESSAGES.STORAGE_RECOVERY_REQUIRED : MESSAGES.READ_ONLY);
+          } else {
+            this._event('success', 'Сервисная консоль SmartUI подключена.');
+          }
           return this.state;
         } catch (error) {
           if (this._session === session) await this._shutdown(session, false);
@@ -505,7 +511,11 @@
     }
     async refreshStatus() {
       return this._operate(async session => {
-        try { return await this._readStatus(session); }
+        try {
+          const status = await this._readStatus(session);
+          if (status.readOnly) this._event('warning', status.recoveryRequired ? MESSAGES.STORAGE_RECOVERY_REQUIRED : MESSAGES.READ_ONLY);
+          return status;
+        }
         catch (error) {
           if (this._current(session)) { this._stateChanged({ verified: false }); this._setStatus(null); }
           throw error;

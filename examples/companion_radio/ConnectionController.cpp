@@ -373,12 +373,15 @@ bool ConnectionController::removeOrNeutralizeConfigFile(
   FILESYSTEM* fs = _store->getPrimaryFS();
   if (!fs) return false;
   if (!fs->exists(path)) return true;
-  if (fs->remove(path) && !fs->exists(path)) return true;
+  // Treat an already-absent path as success even if the filesystem reports a
+  // failed unlink.  This keeps cleanup idempotent after an interrupted retry.
+  fs->remove(path);
+  if (!fs->exists(path)) return true;
 
-  // Some flash filesystems can reject unlink while still allowing an existing
-  // fixed-size file to be overwritten.  A verified credential-free record is
-  // safe recovery input even when that stale filename cannot be removed.
-  if (!writeConfigFile(path, clean)) return false;
+  // FILE_O_WRITE appends on Adafruit nRF52 LittleFS.  Never try to neutralize
+  // an existing record by writing over it: that can preserve credentials and
+  // create an invalid longer record.  A leftover is safe only when its exact
+  // on-flash record already matches the credential-free configuration.
   Config verified;
   const bool safe = readConfigFile(path, verified) &&
       configsEqual(clean, verified);
@@ -390,6 +393,18 @@ bool ConnectionController::persistCleanConfig(const Config& clean) {
   if (!mutationAllowed() || clean.wifi_configured || !_store) return false;
   FILESYSTEM* fs = _store->getPrimaryFS();
   if (!fs) return false;
+
+  Config verified;
+  bool primary_clean = readConfigFile(CONFIG_PATH, verified) &&
+      configsEqual(clean, verified);
+  secureZero(&verified, sizeof(verified));
+  // Normal BLE/USB boots must not write storage when there is no recovery work.
+  // Besides avoiding flash wear, this prevents a transient marker write or
+  // unlink failure from quarantining an otherwise valid configuration.
+  if (primary_clean && !fs->exists(CONFIG_TEMP_PATH) &&
+      !fs->exists(CONFIG_BACKUP_PATH) && !fs->exists(CONFIG_FORGET_PATH)) {
+    return true;
+  }
 
   // Keep a durable fail-closed barrier until every old generation is harmless.
   // A partial marker is intentional: its existence alone suppresses secrets.
@@ -403,13 +418,15 @@ bool ConnectionController::persistCleanConfig(const Config& clean) {
     if (!fs->exists(CONFIG_FORGET_PATH)) return false;
   }
 
-  Config verified;
-  bool primary_clean = readConfigFile(CONFIG_PATH, verified) &&
-      configsEqual(clean, verified);
-  secureZero(&verified, sizeof(verified));
   if (!primary_clean) {
     // Do not use saveConfig here: it truncates .tmp, which may be the sole
     // verified recovery generation. Preserve .tmp/.bak until primary verifies.
+    // Remove an invalid primary before writing because nRF52 FILE_O_WRITE
+    // appends instead of truncating.  The durable marker makes the gap safe.
+    if (fs->exists(CONFIG_PATH)) {
+      fs->remove(CONFIG_PATH);
+      if (fs->exists(CONFIG_PATH)) return false;
+    }
     if (!writeConfigFile(CONFIG_PATH, clean)) return false;
     primary_clean = readConfigFile(CONFIG_PATH, verified) &&
         configsEqual(clean, verified);
