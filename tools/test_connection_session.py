@@ -35,6 +35,8 @@ def main():
 #define RESP_CODE_CONTACT 3
 #define RESP_CODE_END_OF_CONTACTS 4
 static unsigned freed=0;
+static unsigned api_resets=0;
+void resetSmartUiApiSession() { ++api_resets; }
 void checked_free(void* p) {
   for(unsigned i=0;i<4;++i) assert(static_cast<uint8_t*>(p)[i]==0);
   ++freed; std::free(p);
@@ -83,6 +85,7 @@ int main(){
   m.sign_data=static_cast<uint8_t*>(malloc(4)); m.sign_data_len=4;
   memset(m.sign_data,0x77,4);
   m.resetLocalAppSession();
+  assert(api_resets==1);
   assert(freed==1 && !m.sign_data && m.sign_data_len==0);
   assert(!m._iter_started && m._iter_filter_since==0 && m._most_recent_lastmod==0);
   assert(m.app_target_ver==0 && m.pending==0 && !m.send_unscoped && !ui.connected);
@@ -92,16 +95,16 @@ int main(){
   // The first USB query establishes the epoch DURING checkRecvFrame.
   serial.next_generation=2; serial.next[0]=22;serial.next[1]=3;serial.next_len=2;
   m.checkSerialInterface();
-  assert(m.app_target_ver==3 && m.handled==1 && m.resets==2);
+  assert(m.app_target_ver==3 && m.handled==1 && m.resets==2 && api_resets==2);
   // APP_START belongs to the same connection: do not erase negotiated version.
   serial.next[0]=1;serial.next_len=1;
   m.checkSerialInterface();
-  assert(m.app_target_ver==3 && m.handled==2 && m.resets==2);
+  assert(m.app_target_ver==3 && m.handled==2 && m.resets==2 && api_resets==2);
   // Disconnect/reconnect can happen between UI loops, with no false-connected gap.
   serial.generation=serial.next_generation=4; m._iter_started=true;m.pending=1;
   serial.next[0]=22;serial.next[1]=4;serial.next_len=2;
   m.checkSerialInterface();
-  assert(m.app_target_ver==4 && m.handled==3 && m.resets==3 && m.pending==0);
+  assert(m.app_target_ver==4 && m.handled==3 && m.resets==3 && api_resets==3 && m.pending==0);
   assert(m.offline_queue_len==2 && m.inbox[0]==41);
 }
 '''
@@ -123,7 +126,7 @@ int main(){
         run = [str(binary)]
     subprocess.run(build, check=True, timeout=60)
     subprocess.run(run, check=True, timeout=30)
-    print("PASS actual MyMesh session reset, first-query preservation, reconnect and inbox retention")
+    print("PASS actual MyMesh/API session reset, first-query preservation, reconnect and inbox retention")
 
 
 if __name__ == "__main__":
