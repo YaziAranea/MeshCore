@@ -67,6 +67,15 @@ def require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
+def validate_release_notes(text: str) -> None:
+    require(bool(text.strip()) and "RELEASE_FINALIZATION" not in text,
+            "release notes are unfinished")
+    # The public title is "Smart UI"; embedded firmware markers use "SmartUI".
+    # Accept both spellings, while rejecting longer/different version numbers.
+    require(re.search(rf"\bSmart ?UI {re.escape(VERSION)}(?![\d.])", text) is not None,
+            "release notes must identify this exact release version")
+
+
 def require_clean_checkout(root: Path = ROOT) -> None:
     untracked = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=root)
@@ -224,8 +233,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "source commit must be a full lowercase SHA")
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
-    require(text.strip() and "RELEASE_FINALIZATION" not in text, "release notes are unfinished")
-    require(f"SmartUI {VERSION}" in text, "release notes must identify this exact release version")
+    validate_release_notes(text)
     require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
             "packaging requires the exact nine-image six-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:

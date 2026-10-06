@@ -6,7 +6,7 @@ import unittest
 
 from package_smartui_release import (
     ARCHIVE_NAME, ASSET_COUNT, DISTRIBUTION, ESP_ENVS, FIRMWARE_NAMES, NOTES_NAME, NRF_ENVS,
-    PUBLICATION, TAG, VERSION,
+    PUBLICATION, TAG, VERSION, validate_release_notes,
 )
 
 
@@ -28,8 +28,17 @@ class PublicReleasePolicyTests(unittest.TestCase):
         self.assertEqual(ARCHIVE_NAME, "SmartUI_0.11_all-boards.zip")
         self.assertEqual(NOTES_NAME, "RELEASE_NOTES_SmartUI_0.11_RU.md")
         self.assertIn("Smart UI 0.11", (ROOT / NOTES_NAME).read_text(encoding="utf-8"))
+        validate_release_notes((ROOT / NOTES_NAME).read_text(encoding="utf-8"))
         build_info = (ROOT / "src/helpers/SmartUiBuildInfo.h").read_text(encoding="utf-8")
         self.assertIn('#define SMARTUI_VERSION "0.11"', build_info)
+
+    def test_public_title_and_firmware_spelling_require_exact_version(self):
+        for title in ("# Smart UI 0.11 — release", "# SmartUI 0.11"):
+            validate_release_notes(title)
+        for title in ("", "Smart UI 0.10", "SmartUI 0.110", "Smart UI 0.11.1",
+                      "SmartUI 0.11 RELEASE_FINALIZATION"):
+            with self.subTest(title=title), self.assertRaises(ValueError):
+                validate_release_notes(title)
 
     def test_all_release_profiles_use_the_public_marker(self):
         for board in ("heltec_t096", "heltec_t114", "promicro", "heltec_v3",
