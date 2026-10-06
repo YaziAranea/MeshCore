@@ -57,6 +57,18 @@ public:
   virtual float getMCUTemperature() { return NAN; }
   virtual bool setAdcMultiplier(float multiplier) { return false; };
   virtual float getAdcMultiplier() const { return 0.0f; }
+  // Optional source for calibration when the active transport can disturb the
+  // live battery ADC (for example USB power on some ProMicro/SuperMini boards).
+  // The sample must report the multiplier that produced it and its age.
+  // Callers are responsible for enforcing a freshness window.
+  virtual bool getBatteryCalibrationSample(uint16_t& millivolts,
+                                           float& multiplier,
+                                           uint32_t& age_ms) {
+    millivolts = getBattMilliVolts();
+    multiplier = getAdcMultiplier();
+    age_ms = 0;
+    return millivolts != 0;
+  }
   virtual const char* getManufacturerName() const = 0;
   virtual void onBeforeTransmit() { }
   virtual void onAfterTransmit() { }

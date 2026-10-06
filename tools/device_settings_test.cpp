@@ -1,4 +1,5 @@
 #include "DeviceSettings.h"
+#include <helpers/AdcCalibration.h>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -13,6 +14,10 @@ static DeviceSettingsCaps caps;
 static float multiplier;
 static uint16_t battery;
 static uint32_t now;
+static bool calibration_source_enabled, calibration_source_valid;
+static uint16_t calibration_battery;
+static float calibration_multiplier;
+static uint32_t calibration_age_ms;
 static bool save_ok;
 static unsigned writes, saves, applies, tests, battery_changes, checks, melody_reads;
 static const char* melody_name;
@@ -40,6 +45,14 @@ static DeviceSettingsCaps capabilities() {
   return resolved;
 }
 static uint16_t readBattery() { return battery; }
+static bool readCalibrationBattery(uint16_t& millivolts, float& sample_multiplier,
+                                   uint32_t& age_ms) {
+  if (!calibration_source_valid) return false;
+  millivolts = calibration_battery;
+  sample_multiplier = calibration_multiplier;
+  age_ms = calibration_age_ms;
+  return true;
+}
 static float readAdc() { return multiplier; }
 static uint32_t readMillis() { return now; }
 static void testNotification() { ++tests; }
@@ -62,6 +75,10 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   caps.melody_max = 30;
   battery = 4000;
   now = 100;
+  calibration_source_enabled = calibration_source_valid = false;
+  calibration_battery = battery;
+  calibration_multiplier = multiplier;
+  calibration_age_ms = 0;
   save_ok = true;
   writes = saves = applies = tests = battery_changes = melody_reads = 0;
   melody_name = "Test tone";
@@ -70,6 +87,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   DeviceSettingsHooks hooks;
   hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
   hooks.caps = capabilities; hooks.batteryMilliVolts = readBattery;
+  hooks.batteryCalibrationSample = calibration_source_enabled ? readCalibrationBattery : nullptr;
   hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
   hooks.testNotification = testNotification;
   hooks.melodyName = names ? melodyName : nullptr;
@@ -163,6 +181,48 @@ int main() {
   CHECK(command("settings adc preview 3000").find("OK settings adc_preview") == 0);
   fresh(); battery = 3600;
   CHECK(command("settings adc preview 4500").find("OK settings adc_preview") == 0);
+
+  // A transport-disturbed board uses only a recent battery-only sample made
+  // with the same multiplier. It never falls back to the live USB reading.
+  fresh(1.815f); calibration_source_enabled = calibration_source_valid = true;
+  multiplier = state.adc_override = 1.97f;
+  calibration_battery = 3100; calibration_multiplier = multiplier;
+  calibration_age_ms = 0; battery = 4400;
+  {
+    DeviceSettingsHooks hooks;
+    hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
+    hooks.caps = capabilities; hooks.batteryMilliVolts = readBattery;
+    hooks.batteryCalibrationSample = readCalibrationBattery;
+    hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
+    service = DeviceSettings{}; service.begin(hooks);
+  }
+  const auto cached_reply = command("settings adc preview 3320");
+  unsigned long cached_token = 0;
+  CHECK(sscanf(cached_reply.c_str(),
+               "OK settings adc_preview token=%lu sampled_mv=3100 measured_mv=3320 multiplier=2.109806",
+               &cached_token) == 1);
+  CHECK(cached_token != 0);
+  calibration_age_ms = 120000U;
+  CHECK(command("settings adc preview 3320").find("sampled_mv=3100") != std::string::npos);
+  calibration_source_valid = false;
+  CHECK(command("settings adc preview 3320") == "ERR settings source");
+  CHECK(command("api adc preview 3320") == "ERR api source");
+  CHECK(applyToken(static_cast<uint32_t>(cached_token)) == "ERR settings stale");
+  calibration_source_valid = true; calibration_age_ms = 120001U;
+  CHECK(command("settings adc preview 3320") == "ERR settings source");
+  calibration_age_ms = 0; calibration_multiplier = multiplier + 0.01f;
+  CHECK(command("settings adc preview 3320") == "ERR settings source");
+
+  // The real ProMicro cache ignores USB-disturbed samples, invalidates after a
+  // multiplier change and reports wrap-safe age. This path needs no display.
+  mesh::BatteryCalibrationSampleCache promicro_cache;
+  uint16_t cached_mv = 0; float cached_multiplier = 0.0f; uint32_t cached_age = 0;
+  promicro_cache.capture(3100, 1.815f, UINT32_MAX - 49U, false);
+  promicro_cache.capture(4400, 1.815f, UINT32_MAX - 20U, true);
+  CHECK(promicro_cache.read(50U, cached_mv, cached_multiplier, cached_age));
+  CHECK(cached_mv == 3100 && cached_multiplier == 1.815f && cached_age == 100U);
+  promicro_cache.invalidate();
+  CHECK(!promicro_cache.read(51U, cached_mv, cached_multiplier, cached_age));
 
   const std::vector<std::string> valid = {
     "sound_quiet 1", "volume 1", "volume 10", "melody 0", "melody 30",

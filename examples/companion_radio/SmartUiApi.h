@@ -49,4 +49,5 @@ private:
 size_t handleSmartUiApiFrame(const uint8_t* request, size_t length,
                             uint8_t* response, size_t capacity);
 void resetSmartUiApiSession();
+void noteSmartUiMessage(uint32_t generation, uint8_t flags);
 #endif

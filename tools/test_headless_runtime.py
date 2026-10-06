@@ -179,6 +179,7 @@ public:
   char handleTripleClick(char c) { return c; }
   void toggleNotificationsMuted() {}
   void clearImportantNotify() {}
+  void dismissCurrentMessageNotifications() {}
   void extendAutoOff() {}
   void userLedHandler() { ++leds; }
   void updateHourlyMessageWindow() {}

@@ -64,6 +64,7 @@
     SETTINGS_STORAGE: 'Нода отклонила сохранение: ошибка хранилища. Изменение не подтверждено.',
     SETTINGS_STALE: 'Предварительный расчёт устарел. Измерьте напряжение и повторите расчёт.',
     SETTINGS_MEASUREMENT: 'Нода не получила пригодное измерение аккумулятора. Проверьте питание и повторите.',
+    SETTINGS_SOURCE: 'Запустите ProMicro от АКБ, дождитесь измерения, подключите USB без перезапуска и повторите расчёт в течение 2 минут. При USB питание искажает замер.',
     SETTINGS_RANGE: 'Значение вне допустимого диапазона. Проверьте измерение и параметры платы.',
     SETTINGS_UNCERTAIN: 'Результат изменения неизвестен. Переподключитесь и прочитайте настройки: не считайте их сохранёнными.',
     SETTINGS_READBACK: 'Не удалось прочитать настройки. Текущие значения не подтверждены.',
@@ -101,7 +102,7 @@
     const ssidBytes = encoder.encode(ssid).length;
     const passwordBytes = encoder.encode(password).length;
     if (!ssidBytes || ssidBytes > 32 || controls.test(ssid)) throw failure('INVALID_SSID');
-    if (ssid === 'cancel') throw failure('RESERVED_SSID');
+    if (ssid === 'cancel' && options.allowReservedSsid !== true) throw failure('RESERVED_SSID');
     if (options.openNetwork === true && password !== '') throw failure('OPEN_PASSWORD');
     if (password === '' && options.openNetwork !== true) throw failure('OPEN_CONFIRMATION');
     if (controls.test(password) || (password !== '' && !((passwordBytes >= 8 && passwordBytes <= 63) || /^[0-9a-fA-F]{64}$/.test(password)))) throw failure('INVALID_PASSWORD');
@@ -184,7 +185,7 @@
   }
   function settingsError(line) {
     if (line === RX.readonly || line === 'ERR settings readonly') return 'READ_ONLY';
-    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE'};
+    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE'};
     const match = /^ERR settings ([a-z]+)$/.exec(line);
     if (match) return errors[match[1]] || 'PROTOCOL';
     if (line.startsWith('ERR settings') || line === RX.unknown) return 'PROTOCOL';

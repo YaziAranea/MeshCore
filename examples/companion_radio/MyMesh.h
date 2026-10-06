@@ -375,6 +375,11 @@ public:
   // To check if there is pending work
   bool hasPendingWork() const;
 
+#if SMARTUI_CONNECTION_SELECTOR
+  int apiPeekOfflineFrame(uint8_t frame[], uint32_t& generation, uint8_t& flags) const;
+  bool apiReceiveOfflineFrame(uint32_t generation);
+#endif
+
 private:
   mesh::Packet* createAdvertWithShareableLocation();
   void writeOKFrame();

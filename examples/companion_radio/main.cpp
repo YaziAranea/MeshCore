@@ -36,6 +36,7 @@ MultiSerialInterface interface_manager;
   #include "ConnectionController.h"
   #include "DeviceSettings.h"
   #include "SmartUiApi.h"
+  #include "SmartUiSyncApi.h"
 #endif
 
 // include bluetooth interface
@@ -133,6 +134,10 @@ static smartui::DeviceSettings device_settings;
 // Separate preview-token domain: USB console tokens are not API tokens.
 static smartui::DeviceSettings api_device_settings;
 static smartui::SmartUiApi smartui_api;
+static smartui::SmartUiSync smartui_sync;
+static smartui::SmartUiSyncApi smartui_sync_api;
+static uint32_t sync_hint_cursor = 0;
+static uint32_t sync_hint_at = 0;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
@@ -257,6 +262,10 @@ static bool saveDeviceSettings() {
   return false;
 }
 static uint16_t deviceBatteryMilliVolts() { return board.getBattMilliVolts(); }
+static bool deviceBatteryCalibrationSample(uint16_t& millivolts, float& multiplier,
+                                           uint32_t& age_ms) {
+  return board.getBatteryCalibrationSample(millivolts, multiplier, age_ms);
+}
 static float deviceAdcMultiplier() { return board.getAdcMultiplier(); }
 static uint32_t deviceSettingsMillis() { return static_cast<uint32_t>(millis()); }
 static void applyDeviceSettings(bool battery_changed) {
@@ -309,6 +318,129 @@ static const char* apiTransportName(CompanionMode mode) {
   return mode == CompanionMode::WiFi ? "wifi" : mode == CompanionMode::USB ? "usb" : "ble";
 }
 
+void noteSmartUiMessage(uint32_t generation, uint8_t flags) {
+  smartui_sync.noteMessage(generation, flags);
+}
+
+static void localSyncAction(uint32_t generation, smartui::SyncAction action, uint32_t value) {
+  smartui_sync.apply(generation, action, value);
+}
+
+static int syncPeekFrame(uint8_t* frame, uint32_t& generation, uint8_t& flags) {
+  return the_mesh.apiPeekOfflineFrame(frame, generation, flags);
+}
+
+static bool syncReceiveFrame(uint32_t generation) { return the_mesh.apiReceiveOfflineFrame(generation); }
+
+static bool syncMessageAction(uint32_t generation, smartui::SyncAction action, uint32_t value) {
+#ifdef DISPLAY_CLASS
+  return ui_task.applyMessageAction(generation, action, value);
+#else
+  (void)generation; (void)value;
+  return action == smartui::SyncAction::Read || action == smartui::SyncAction::Dismiss;
+#endif
+}
+
+static void syncReadPolicy(bool enabled) {
+#ifdef DISPLAY_CLASS
+  ui_task.setExplicitReadPolicy(enabled);
+#else
+  (void)enabled;
+#endif
+}
+
+static bool syncCanSnooze(uint32_t generation) {
+#ifdef DISPLAY_CLASS
+  return ui_task.canSnoozeMessage(generation);
+#else
+  (void)generation;
+  return false;
+#endif
+}
+
+static uint32_t syncNotificationGeneration() {
+#ifdef DISPLAY_CLASS
+  return ui_task.notificationGeneration();
+#else
+  return 0;
+#endif
+}
+
+// Observe RAM state, not flash bytes or credentials. This adds no ADC reads,
+// persistent writes, wake deadlines or power-management locks.
+static void serviceSmartUiSync() {
+  const uint32_t now = (uint32_t)millis();
+  static bool observed = false;
+  static uint32_t observed_at = 0, settings_hash = 0, connection_bits = 0, notification = 0;
+  static uint16_t battery_mv = 0;
+  static uint8_t battery_state = 0;
+  if (!observed || (uint32_t)(now - observed_at) >= 1000U) {
+    observed_at = now;
+    const auto s = readDeviceSettings();
+    uint32_t hash = 2166136261UL;
+    auto mix = [&](uint32_t n) { for (unsigned i = 0; i < 4; ++i) { hash ^= n & 255U; hash *= 16777619UL; n >>= 8; } };
+    uint32_t adc_bits = 0;
+    static_assert(sizeof(adc_bits) == sizeof(s.adc_override), "ADC fingerprint width");
+    memcpy(&adc_bits, &s.adc_override, sizeof(adc_bits));
+    mix(adc_bits);
+    mix(s.notify_mode); mix(s.important_notify_mode); mix(s.sound_quiet); mix(s.vibe_quiet);
+    mix(s.volume); mix(s.melody); mix(s.board_led); mix(s.unread_led); mix(s.gps); mix(s.gps_source);
+    mix(s.battery_protection); mix(s.muted); mix(s.night_quiet); mix(s.agc_reset); mix(s.fem_lna); mix(s.fem_pa); mix(s.bridge);
+    const CompanionStatus connection = connection_controller.status();
+    const uint32_t bits = (uint32_t)connection.selected | (connection.clientConnected ? 4U : 0U) |
+        (connection.wifiAssociated ? 8U : 0U) | (connection.wifiConfigured ? 16U : 0U);
+    const uint32_t active = syncNotificationGeneration();
+    if (observed && hash != settings_hash) smartui_sync.emitState(smartui::SyncEventKind::Setting, hash);
+    if (observed && bits != connection_bits) smartui_sync.emitState(smartui::SyncEventKind::Connection, bits);
+    if (observed && active != notification) smartui_sync.emitState(smartui::SyncEventKind::Notification, active ? 1U : 0U);
+    settings_hash = hash; connection_bits = bits; notification = active;
+#ifdef DISPLAY_CLASS
+    uint16_t mv = 0; uint32_t sampled_at = 0;
+    const bool valid = ui_task.peekBatterySample(mv, sampled_at) && mv && (uint32_t)(now - sampled_at) <= 120000U;
+    // Informational low-voltage state, not a shutdown prediction. Hysteresis
+    // avoids event storms near 3.3 V; the existing safety policy is unchanged.
+    const uint8_t state = !valid ? 3 : (mv <= 3300 || (battery_state == 2 && mv < 3400)) ? 2 : 1;
+    const unsigned delta = mv > battery_mv ? mv - battery_mv : battery_mv - mv;
+    if (state != battery_state || (valid && delta >= 50)) {
+      smartui_sync.emitState(smartui::SyncEventKind::Battery, valid ? mv : 0, state);
+      // Compare with the last emitted voltage, not the previous sample: slow
+      // discharge must eventually cross the 50 mV reporting threshold too.
+      battery_mv = mv;
+    }
+    battery_state = state;
+#endif
+    observed = true;
+  }
+  const uint8_t subscriptions = smartui_sync_api.subscriptions();
+  if (!subscriptions || !interface_manager.isConnected()) { sync_hint_cursor = smartui_sync.newestEvent(); return; }
+  if (sync_hint_cursor == smartui_sync.newestEvent() || interface_manager.hasPendingTx() ||
+      (uint32_t)(now - sync_hint_at) < 250U) return;
+  uint32_t cursor = sync_hint_cursor;
+  uint8_t changed = 0;
+  smartui::SyncEvent event;
+  for (unsigned i = 0; i < smartui::SmartUiSync::EVENT_CAPACITY; ++i) {
+    const auto result = smartui_sync.eventAfter(cursor, event);
+    if (result == smartui::SyncEventResult::Gap) { changed = 15; break; }
+    if (result != smartui::SyncEventResult::Event) break;
+    cursor = event.seq;
+    changed |= event.kind == smartui::SyncEventKind::Setting ? 2 :
+        event.kind == smartui::SyncEventKind::Connection ? 4 :
+        event.kind == smartui::SyncEventKind::Battery ? 8 : 1;
+  }
+  changed &= subscriptions;
+  if (!changed) { sync_hint_cursor = smartui_sync.newestEvent(); return; }
+  uint8_t frame[smartui::SmartUiApi::MAX_FRAME] = {201, 'S', 'U', 'I', 1, 0, 0, 3, 0, 0, 0, 0, 0};
+  const uint64_t boot = smartui_sync.boot();
+  const int length = snprintf((char*)frame + 13, sizeof(frame) - 13,
+      "EV api events boot=%08lx%08lx cursor=%lu mask=%u", (unsigned long)(uint32_t)(boot >> 32),
+      (unsigned long)(uint32_t)boot, (unsigned long)smartui_sync.newestEvent(), changed);
+  if (length <= 0 || size_t(length) >= sizeof(frame) - 13) return;
+  frame[11] = uint8_t(length); frame[12] = uint8_t(length >> 8);
+  sync_hint_at = now;
+  if (interface_manager.writeFrame(frame, size_t(length) + 13) == size_t(length) + 13)
+    sync_hint_cursor = smartui_sync.newestEvent();
+}
+
 static bool executeSmartUiApi(const char* command, char* reply, size_t capacity,
                               bool allow_mutation) {
   // The reusable service also speaks the USB legacy grammar. Never expose
@@ -320,7 +452,7 @@ static bool executeSmartUiApi(const char* command, char* reply, size_t capacity,
   const CompanionStatus status = connection_controller.status();
   if (strcmp(command, "api hello") == 0) {
     snprintf(reply, capacity,
-        "OK api hello v=1 firmware=%s stage=release max_command=152 max_reply=479 max_frame=160 transport=%s write=%u events=0 wifi_setup=%u",
+        "OK api hello v=1 firmware=%s stage=release max_command=152 max_reply=479 max_frame=160 transport=%s write=%u events=1 sync=1 wifi_setup=%u",
         SMARTUI_VERSION, apiTransportName(status.selected), allow_mutation ? 1U : 0U,
         (status.capabilities & COMPANION_CAP_WIFI) && status.selected != CompanionMode::WiFi ? 1U : 0U);
     return true;
@@ -337,6 +469,13 @@ static bool executeSmartUiApi(const char* command, char* reply, size_t capacity,
   // It must run before the ordinary settings busy guard, or its own pending
   // transaction would block status/save/cancel forever.
   if (connection_controller.handleApiCommand(command, reply, capacity, allow_mutation)) return true;
+  if (smartui_sync_api.handle(command, reply, capacity, allow_mutation)) return true;
+  if (strcmp(command, "api notify status") == 0) {
+    const uint32_t generation = syncNotificationGeneration();
+    snprintf(reply, capacity, "OK api notify active=%u id=%08lx muted=%u", generation ? 1U : 0U,
+             (unsigned long)generation, readDeviceSettings().muted ? 1U : 0U);
+    return true;
+  }
   // No arbitrary CLI passthrough or raw GPIO writes. TCP retains the existing
   // companion trust model: no extra authentication or TLS; trusted LAN only.
   const bool read = strcmp(command, "api caps") == 0 || strcmp(command, "api get") == 0 ||
@@ -366,6 +505,8 @@ size_t handleSmartUiApiFrame(const uint8_t* request, size_t length,
 
 void resetSmartUiApiSession() {
   smartui_api.resetSession();
+  smartui_sync_api.resetSession();
+  sync_hint_cursor = smartui_sync.newestEvent();
   api_device_settings.resetSession();
   connection_controller.resetApiSession();
 }
@@ -729,6 +870,7 @@ void setup() {
   settings_hooks.apply = applyDeviceSettings;
   settings_hooks.caps = deviceSettingsCapabilities;
   settings_hooks.batteryMilliVolts = deviceBatteryMilliVolts;
+  settings_hooks.batteryCalibrationSample = deviceBatteryCalibrationSample;
   settings_hooks.adcMultiplier = deviceAdcMultiplier;
   settings_hooks.millis = deviceSettingsMillis;
   settings_hooks.testNotification = testDeviceNotification;
@@ -736,6 +878,22 @@ void setup() {
   settings_hooks.melodyName = apiMelodyName;
   settings_hooks.setToneBridge = apiSetToneBridge;
   api_device_settings.begin(settings_hooks);
+  uint64_t sync_boot = 0;
+  fast_rng.random((uint8_t*)&sync_boot, sizeof(sync_boot));
+  // Nonzero boot nonce prevents stale IDs crossing ordinary resets. No flash
+  // counter is written; nonce uniqueness is probabilistic, not authentication.
+  if (!sync_boot) sync_boot = 1;
+  smartui_sync.begin(sync_boot);
+  smartui::SyncApiHooks sync_hooks;
+  sync_hooks.peek = syncPeekFrame;
+  sync_hooks.receive = syncReceiveFrame;
+  sync_hooks.action = syncMessageAction;
+  sync_hooks.policy = syncReadPolicy;
+  sync_hooks.canSnooze = syncCanSnooze;
+  smartui_sync_api.begin(smartui_sync, sync_hooks);
+#ifdef DISPLAY_CLASS
+  ui_task.setSyncActionCallback(localSyncAction);
+#endif
   smartui_api.begin(executeSmartUiApi);
 #endif
 
@@ -817,6 +975,9 @@ void loop() {
   sensors.loop();
 #ifdef DISPLAY_CLASS
   ui_task.loop();
+#endif
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  serviceSmartUiSync();
 #endif
   rtc_clock.tick();
 #ifdef HAS_EXTERNAL_WATCHDOG

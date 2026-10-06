@@ -27,12 +27,13 @@ def main_adapter_source():
 
     declarations = r'''
 #include "SmartUiApi.h"
+#include "SmartUiSyncApi.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
-#define SMARTUI_VERSION "0.10-test"
+#define SMARTUI_VERSION "0.11-test"
 static constexpr unsigned COMPANION_CAP_WIFI = 4;
 static unsigned checks, backend_calls, backend_resets, connection_calls, connection_resets;
 static bool backend_permission;
@@ -73,6 +74,17 @@ struct Backend {
   void resetSession() { ++backend_resets; }
 } api_device_settings;
 static smartui::SmartUiApi smartui_api;
+static smartui::SmartUiSync smartui_sync;
+static smartui::SmartUiSyncApi smartui_sync_api;
+static uint32_t sync_hint_cursor = 0;
+static unsigned sync_actions = 0;
+static bool explicit_policy = false;
+static uint32_t notification_generation = 0;
+static uint32_t syncNotificationGeneration() { return notification_generation; }
+struct SettingsSnapshot { bool muted = false; } settings_snapshot;
+static SettingsSnapshot readDeviceSettings() { return settings_snapshot; }
+static void syncPolicy(bool enabled) { explicit_policy = enabled; }
+static bool syncAction(uint32_t, smartui::SyncAction, uint32_t) { ++sync_actions; return true; }
 '''
     bodies = "\n".join(function(signature) for signature in (
         "static const char* apiTransportName(",
@@ -84,6 +96,10 @@ static smartui::SmartUiApi smartui_api;
 static void fresh() {
   backend_calls = backend_resets = connection_calls = connection_resets = 0; backend_permission = false;
   connection_controller = Controller{}; the_mesh = Mesh{}; radio_driver = Radio{};
+  CHECK(smartui_sync.begin(1));
+  smartui::SyncApiHooks hooks; hooks.policy = syncPolicy; hooks.action = syncAction;
+  smartui_sync_api.begin(smartui_sync, hooks);
+  sync_hint_cursor = 0; sync_actions = 0; notification_generation = 0; settings_snapshot = SettingsSnapshot{};
   smartui_api.begin(executeSmartUiApi);
 }
 static std::string command(const char* input, bool allowed = true) {
@@ -108,6 +124,8 @@ int main() {
   }
   CHECK(command("api hello", false).find("write=0") != std::string::npos);
   CHECK(command("api hello").find("stage=release") != std::string::npos);
+  CHECK(command("api hello").find("firmware=0.11-test") != std::string::npos);
+  CHECK(command("api hello").find("events=1 sync=1") != std::string::npos);
   CHECK(command("api hello").find("max_reply=479") != std::string::npos);
   CHECK(command("api hello").find("wifi_setup=1") != std::string::npos);
   CHECK(command("api connection", false).find("readonly=1") != std::string::npos);
@@ -156,6 +174,22 @@ int main() {
   CHECK(handleSmartUiApiFrame(fetch, sizeof(fetch), response, sizeof(response)) == 13);
   CHECK(response[8] == smartui::SmartUiApi::STALE && backend_calls == 1);
   CHECK(frame("api get") == smartui::SmartUiApi::OK && backend_calls == 2);
+  fresh(); connection_controller.busy = true;
+  CHECK(command("api sync status", false).find("explicit=0") != std::string::npos);
+  CHECK(command("api sync enable", false) == "ERR api readonly" && !explicit_policy);
+  CHECK(command("api sync enable").find("explicit=1") != std::string::npos && explicit_policy);
+  CHECK(command("api events subscribe 15", false).find("subscribed=15") != std::string::npos);
+  CHECK(smartui_sync.noteMessage(77, 1) == smartui::SyncResult::Applied);
+  CHECK(command("api inbox read 0000000000000001 0000004d", false) == "ERR api readonly");
+  CHECK(command("api inbox read 0000000000000001 0000004d") == "OK api inbox read id=0000004d state=2 changed=1");
+  CHECK(sync_actions == 1 && backend_calls == 0);
+  notification_generation = 77; settings_snapshot.muted = true;
+  CHECK(command("api notify status", false) == "OK api notify active=1 id=0000004d muted=1");
+  CHECK(backend_calls == 0);
+  resetSmartUiApiSession();
+  CHECK(!explicit_policy && !smartui_sync_api.enabled() && smartui_sync_api.subscriptions() == 0);
+  CHECK(smartui_sync.recordCount() == 1 && sync_hint_cursor == smartui_sync.newestEvent());
+  CHECK(command("api inbox read 0000000000000001 0000004d") == "ERR api negotiate");
   printf("PASS %u production main.cpp SmartUI authorization/session adapter assertions\n", checks);
 }
 '''
@@ -514,6 +548,9 @@ def main():
         for suite in (ROOT / "tools/smartui_api_test.cpp", adapter, effects, bridge, no_bridge):
             output = Path(directory) / suite.stem
             paths = [suite, ROOT / "examples/companion_radio/SmartUiApi.cpp"]
+            if suite == adapter:
+                paths += [ROOT / "examples/companion_radio/SmartUiSync.cpp",
+                          ROOT / "examples/companion_radio/SmartUiSyncApi.cpp"]
             if suite in (effects, bridge, no_bridge):
                 paths = [suite, ROOT / "examples/companion_radio/DeviceSettings.cpp"]
             if compiler:

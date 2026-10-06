@@ -15,12 +15,18 @@ def harness(source):
         '  bool hasUnreadPreviews()', '  int unreadPreviewCount()',
         '  int selectedOffset()', '  void selectNewest()', '  void closeDetails()', '  bool isReading()',
         '  bool removePreviewById(', '  bool snoozePreviewById(', '  bool takeDueReminder(',
+        '  bool applyActionByGeneration(',
+        '  bool containsGeneration(',
         '  bool removeOldestPreview(', '  void clearPreviews(', '  void addPreview(',
         '  bool handleInput(char c)',
     ))
     handler = '\n'.join(function(source, name) for name in (
         'void UITask::snoozedMessageHandler()', 'void UITask::dismissMessageNotification(',
         'void UITask::localMessageRead(', 'bool UITask::hasActiveInboxSession() const',
+        'void UITask::localMessageDismiss(', 'bool UITask::localMessageSnooze(',
+        'bool UITask::applyMessageAction(', 'void UITask::dismissCurrentMessageNotifications(',
+        'bool UITask::canSnoozeMessage(',
+        'void UITask::msgRead(int msgcount)', 'void UITask::msgRead(int msgcount, bool',
         'void UITask::directMsgRead(', 'void UITask::messageTransferState('))
     return r'''
 #include <cassert>
@@ -28,6 +34,7 @@ def harness(source):
 #include <cstdio>
 #include <cstring>
 #include "UiTiming.h"
+#include "../SmartUiSync.h"
 #define PUB_KEY_SIZE 32
 #define UI_UNREAD_MSG_LIMIT 4
 #define UI_UNREAD_TEXT_LEN 181
@@ -54,6 +61,8 @@ struct UITask {
   void* curr=nullptr;
   bool _storage_recovery_active=false, muted=false, _important_notify_active=false;
   bool _popup_pending=false, _popup_pending_important=false;
+  bool _explicit_read_policy=false;
+  void (*_sync_action_callback)(uint32_t,smartui::SyncAction,uint32_t)=nullptr;
   uint8_t _ble_smart_notify_flags=0;
   uint8_t _important_msg_flags=0;
   int notify_mode=1, replies=0, homes=0, reminder_calls=0, _msgcount=0, stopped=0;
@@ -68,8 +77,14 @@ struct UITask {
   }
   void gotoHomeScreen() { ++homes; }
   void localMessageRead(uint32_t);
+  void localMessageDismiss(uint32_t);
+  bool localMessageSnooze(uint32_t,uint32_t);
+  bool applyMessageAction(uint32_t,smartui::SyncAction,uint32_t=0);
+  bool canSnoozeMessage(uint32_t) const;
+  void dismissCurrentMessageNotifications();
   void dismissMessageNotification(uint32_t);
   void clearBleSmartNotify() { _ble_smart_notify_flags=0; _ble_smart_notify_generation=0; }
+  void clearImportantNotify() { finishImportantNotify(true,true); }
   void finishImportantNotify(bool stop_tone,bool clear_pending) {
     _important_notify_active=false; _important_notify_generation=0;
     if(stop_tone) ++stopped;
@@ -85,6 +100,8 @@ struct UITask {
   void snoozedMessageHandler();
   bool hasActiveInboxSession() const;
   void directMsgRead(bool);
+  void msgRead(int);
+  void msgRead(int,bool);
   void messageTransferState(uint32_t,uint8_t,UIMessageTransferState,int);
 };
 struct MsgPreviewScreen { public:
@@ -129,7 +146,7 @@ int main() {
   task.dismissMessageNotification(101);
   CHECK(task._important_notify_active && task._important_notify_generation==103 && task.stopped==0);
   CHECK(task._ble_smart_notify_flags==1 && task._ble_smart_notify_generation==103);
-  task.localMessageRead(101);
+  task.localMessageRead(999); // An absent older generation cannot stop B either.
   CHECK(task._important_notify_active && task._ble_smart_notify_flags==1 && task.stopped==0);
   task.dismissMessageNotification(103);
   CHECK(!task._important_notify_active && task._ble_smart_notify_flags==0 && task.stopped==1);

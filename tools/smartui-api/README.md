@@ -1,8 +1,12 @@
-# SmartUI 0.10 API — Python reference client
+# SmartUI 0.11 API — Python reference client
 
-API v1 targets SmartUI 0.10. Discover `smartui_api:1` and inspect HELLO rather
+API v1 targets SmartUI 0.11. Discover `smartui_api:1` and inspect HELLO rather
 than relying only on the firmware version. Source, protocol tests and examples
 are not a claim of physical-device verification or external publication.
+
+SmartUI 0.11 adds the ecosystem extension. Require HELLO `sync=1` / `events=1`;
+published 0.10 does not provide these sync commands (`sync` absent, `events=0`),
+but its base settings API remains compatible. Tests do not imply physical validation.
 
 The core uses Python 3.10+ and the standard library. The optional USB adapter
 requires `pyserial`; nothing is installed automatically. TCP uses the standard
@@ -13,6 +17,8 @@ inside a framed companion session.
 - [Russian integration guide](../../docs/SMARTUI_API_RU.md)
 - [English wire specification](../../docs/SMARTUI_API_EN.md)
 - `smartui_api.py`: discovery, HELLO, framing validation, pagination, explicit replay.
+- `ecosystem.py`: exact message identities, explicit received/read ACKs, snapshots,
+  dismiss/snooze, bounded hint mailbox and event cursor/gap recovery.
 - `transports.py`: strict incremental USB/TCP framing and push dispatch.
 - `inspect_device.py`: read-only example; no setting or Wi-Fi configuration writes.
 - `tests/`: mocked protocol tests and a fragmented local socket round-trip.
@@ -25,7 +31,7 @@ From the repository root:
 python -B -m unittest discover -s tools/smartui-api/tests -v
 ```
 
-## Inspect a development build
+## Inspect a supported device
 
 Close any app already owning the same companion session. Select the transport
 on the device first. Wi-Fi must already be configured. Opening a serial port can
@@ -93,9 +99,60 @@ this command. Read the guides before integrating these side effects.
 
 ## Current limits
 
-No events/subscriptions, no credential readback, no Wi-Fi provisioning over the
+No credential readback, no Wi-Fi provisioning over the
 same TCP link being reconfigured, no automatic retries/background reconnection,
 and no BLE pairing/MTU management. Bridge control follows the board capability.
 BLE applications must supply correct whole-packet
 delivery and adequate negotiated ATT payload size. Unit tests validate SDK
 behavior; device acceptance and transport endurance tests are separate work.
+
+## Optional ecosystem integration
+
+```python
+from ecosystem import SmartUISync
+
+sync = SmartUISync(client)  # Reuse the existing request-ID allocator.
+if hello.get("sync") == "1":
+    status = sync.status()       # Read-only; does not enable explicit mode.
+    snapshot = sync.snapshot()   # Consistent bounded view, not chat history.
+```
+
+Call `enable()` deliberately before explicit message delivery/ACKs. `next_message()`
+peeks an exact companion frame plus `(boot,generation)` and does not consume it.
+After app storage/deduplication, `received(identity)` consumes that exact queue
+entry but leaves unread. Only a real human read triggers `read(identity)`.
+`dismiss` and `snooze` affect notification behavior, not reading. Snooze needs a
+retained supported preview (`InboxRecord.snoozable`), currently a direct message.
+A device-local
+Read event updates app UI without sending an echo read command.
+
+For events require `events=1`, subscribe to a bitmask, then use the pull log.
+Push op3/id0 packets are hints only: route them into `HintMailbox` from the shared
+dispatcher, pull outside its callback, and use `EventCursor` to detect gaps,
+duplicates and reboot. Do not advance to a hint's cursor. Read the guides for
+snapshot recovery and reconnect; both device records and log are bounded to 32.
+Only human plaintext messages enter the record ledger; service/data frames have
+exact delivery IDs too, but do not become unread inbox entries.
+Use `transport.poll()` from the same owner loop for idle hints. No second reader
+or background retry thread is started by the SDK.
+
+Battery events are informational: `BatterySampleState` maps normal=1/low=2/unknown=3.
+Unknown means a missing or older-than-120000ms cached measurement; ignore value as
+a current voltage. Low ≤3300mV clears at 3400mV; this is not `shutdown_mv`. A 50mV
+delta is measured from the last emitted event, not the immediately previous sample.
+
+## Create a local development kit
+
+From the repository root (packager is a source-tree tool, not bundled in the kit):
+
+```sh
+python -B tools/package_smartui_developer_kit.py OUTPUT_DIR --development --base-commit BASE_COMMIT
+```
+
+Replace BASE_COMMIT with the full 40-character provenance commit SHA. Output uses
+the distinct `SmartUI_Developer_Kit_0.11-development.zip` name, development/local
+manifest, base version/commit and hashes of actual working-tree bytes. It does
+not claim these edited files are exact-source release files. Existing files
+are not overwritten; nothing is uploaded or installed. Default release mode
+remains separate and requires an exact-source validated release workflow; its
+artifact is `SmartUI_Developer_Kit_0.11.zip` with `stage=release` and USB Helper 1.4 guidance.

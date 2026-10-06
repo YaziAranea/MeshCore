@@ -124,6 +124,7 @@ public:
   NodePrefs* _node_prefs=&prefs;
   int _msg_alert_pin=DEFAULT_NOTIFY_GPIO_PIN, _msg_tone_pin=DEFAULT_NOTIFY_TONE_PIN;
   bool muted=false, connected=false, board_leds=true, offline_led=true, ble_led=true;
+  bool _explicit_read_policy=false;
   bool _important_notify_active=false, _important_notify_tone_started=false;
   bool _important_notify_tone_repeat_suppressed=false, _important_notify_visual_repeat_suppressed=false;
   uint32_t _important_notify_generation=0;

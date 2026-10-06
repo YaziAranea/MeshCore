@@ -1,4 +1,4 @@
-"""Optional synchronous USB/TCP adapters for SmartUI 0.10.
+"""Optional synchronous USB/TCP adapters for SmartUI 0.11.
 
 TCP uses only the stdlib. USB imports pyserial only when explicitly opened.
 No adapter retries, reconnects, scans networks, or changes device settings.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import socket
 import time
+import math
 from collections import deque
 from typing import Callable
 
@@ -122,6 +123,35 @@ class StreamExchange:
                 if remaining <= 0:
                     raise TimeoutError("companion response deadline expired; request outcome may be unknown")
                 self._frames.extend(self.decoder.feed(self.read(4096, remaining)))
+        finally:
+            self._active = False
+
+    def poll(self, *, timeout: float = 0.1, max_packets: int = 64) -> int:
+        """Dispatch unsolicited packets without sending a request.
+
+        Drain buffered packets first; otherwise perform one bounded read. A
+        timeout is normal here, not an ambiguous request outcome. Call from the
+        same owner/event loop as exchange(), never from its push callback.
+        """
+        if not math.isfinite(timeout) or timeout < 0 or timeout > self.timeout:
+            raise ValueError("poll timeout must be between zero and transport timeout")
+        if isinstance(max_packets, bool) or not isinstance(max_packets, int) or not 1 <= max_packets <= 1024:
+            raise ValueError("max_packets must be in 1..1024")
+        if self._active:
+            raise RuntimeError("concurrent or reentrant poll is not supported")
+        self._active = True
+        try:
+            if not self._frames and timeout:
+                try:
+                    chunk = self.read(4096, timeout)
+                except TimeoutError:
+                    return 0
+                self._frames.extend(self.decoder.feed(chunk))
+            count = 0
+            while self._frames and count < max_packets:
+                self._dispatch(self._frames.popleft())
+                count += 1
+            return count
         finally:
             self._active = False
 

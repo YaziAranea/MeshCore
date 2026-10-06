@@ -253,8 +253,10 @@ bool NRF52Board::isExternalPowered() {
   sd_softdevice_is_enabled(&sd_enabled);
 
   if (sd_enabled) {
-    uint32_t usb_status;
-    sd_power_usbregstatus_get(&usb_status);
+    uint32_t usb_status = POWER_USBREGSTATUS_VBUSDETECT_Msk;
+    // Failure must not expose an uninitialized value or let a USB-disturbed
+    // battery reading enter safety/calibration state. Fail closed as external.
+    if (sd_power_usbregstatus_get(&usb_status) != NRF_SUCCESS) return true;
     return (usb_status & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
   } else {
     return (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;

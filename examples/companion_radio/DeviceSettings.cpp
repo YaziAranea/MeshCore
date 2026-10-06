@@ -8,6 +8,7 @@ namespace {
 constexpr uint8_t GPIO_MODE = 1;
 constexpr uint8_t TONE_MODE = 2;
 constexpr uint8_t VIBE_MODE = 4;
+constexpr uint32_t ADC_CALIBRATION_SAMPLE_MAX_AGE_MS = 120000U;
 
 bool unsignedNumber(const char* text, uint32_t& number) {
   if (text == nullptr || *text == 0) return false;
@@ -95,18 +96,33 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
     } else if (measured < 2500 || measured > 4500) {
       response(reply, capacity, "ERR settings range");
     } else {
-      const uint16_t sampled = _hooks.batteryMilliVolts();
       const float current = _hooks.adcMultiplier();
+      const uint32_t preview_now = _hooks.millis();
+      uint16_t sampled = 0;
+      bool source_valid = true;
+      if (_hooks.batteryCalibrationSample) {
+        float sample_multiplier = 0.0f;
+        uint32_t sample_age_ms = 0;
+        source_valid = _hooks.batteryCalibrationSample(
+            sampled, sample_multiplier, sample_age_ms) && sampled != 0 &&
+            isfinite(sample_multiplier) && isfinite(current) && current > 0.0f &&
+            fabsf(sample_multiplier - current) <= current * 0.000001f &&
+            sample_age_ms <= ADC_CALIBRATION_SAMPLE_MAX_AGE_MS;
+      } else {
+        sampled = _hooks.batteryMilliVolts();
+      }
       float normalized;
       const float proposed = sampled ? current * (static_cast<float>(measured) / sampled) : 0;
-      if (sampled == 0 || !isfinite(current) || current <= 0) {
+      if (!source_valid) {
+        response(reply, capacity, "ERR settings source");
+      } else if (sampled == 0 || !isfinite(current) || current <= 0) {
         response(reply, capacity, "ERR settings measurement");
       } else if (!mesh::normalizeAdcMultiplier(proposed, caps.adc_default, normalized)) {
         response(reply, capacity, "ERR settings range");
       } else {
         if (++_token_counter == 0) ++_token_counter;
         _preview_token = _token_counter;
-        _preview_started = _hooks.millis();
+        _preview_started = preview_now;
         _preview_multiplier = normalized;
         _preview_baseline = current;
         _preview_override = before.adc_override;

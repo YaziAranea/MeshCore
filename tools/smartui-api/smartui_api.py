@@ -1,4 +1,4 @@
-"""SmartUI 0.10 API v1. No third-party dependencies in the core.
+"""SmartUI 0.11 API v1. No third-party dependencies in the core.
 
 An exchange accepts and returns one *deframed* companion packet. It must
 serialize access to its session and dispatch unrelated companion push packets.

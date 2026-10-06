@@ -14,8 +14,8 @@ from smartui_api import (ApiError, MAGIC, MAX_PAGE, Op, PendingRequestError,
 from transports import FrameDecoder, StreamExchange, frame_to_device
 
 
-HELLO = ("OK api hello v=1 firmware=0.10 max_command=152 max_reply=479 "
-         "max_frame=160 transport=usb write=1 events=0 wifi_setup=1")
+HELLO = ("OK api hello v=1 firmware=0.11 stage=release max_command=152 max_reply=479 "
+         "max_frame=160 transport=usb write=1 events=1 sync=1 wifi_setup=1")
 
 
 def reply(request_id, op, text=b"OK api get", *, offset=0, total=None, status=0):
@@ -34,6 +34,7 @@ class MockDevice:
     """Contract simulator, not a replacement for firmware/hardware tests."""
 
     def __init__(self):
+        self.hello_text = HELLO
         self.requests = []
         self.last_id = 0
         self.original = None
@@ -62,7 +63,7 @@ class MockDevice:
                 return reply(request_id, op, b"", status=Status.STALE)
             else:
                 self.last_id, self.original = request_id, request
-                self.data = (HELLO if op == Op.HELLO else self.command_text).encode("ascii")
+                self.data = (self.hello_text if op == Op.HELLO else self.command_text).encode("ascii")
                 self.status = Status.OK if op == Op.HELLO else self.command_status
                 if op == Op.EXEC and request[8:].startswith(b"api set "):
                     self.writes += 1
@@ -133,6 +134,19 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(self.client.hello()["v"], "1")
         self.assertEqual(self.device.requests[0], b"\x28")
         self.assertEqual(self.device.requests[1], encode_request(1, Op.HELLO))
+
+    def test_released_011_hello_advertises_ecosystem_without_version_gating(self):
+        fields = self.client.hello()
+        self.assertEqual(fields["firmware"], "0.11")
+        self.assertEqual(fields["stage"], "release")
+        self.assertEqual((fields["events"], fields["sync"]), ("1", "1"))
+
+    def test_historical_010_settings_api_remains_compatible(self):
+        self.device.hello_text = HELLO.replace("firmware=0.11", "firmware=0.10").replace("events=1 sync=1", "events=0")
+        fields = self.client.hello()
+        self.assertEqual(fields["firmware"], "0.10")
+        self.assertNotIn("sync", fields)
+        self.assertEqual(self.client.get()["battery_mv"], "3800")
 
     def test_stock_fails_without_unknown_opcode(self):
         self.device.advertised = False

@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.3.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.4.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -222,7 +222,7 @@ async function noOverlap(page) {
 test('offline package loads in Chrome: unsupported Web Serial and responsive layout', async () => {
   const f = await fixture({ supported: false });
   try {
-    assert.equal(await f.page.title(), 'SmartUI · USB помощник');
+    assert.equal(await f.page.title(), 'SmartUI · Локальный центр управления');
     assert.equal(await f.page.locator('#unsupported').isVisible(), true);
     for (const selector of ['#connect', '#disconnect', '#test', '#save', '#refresh', '#mode-wifi', '#forget']) assert.equal(await f.page.locator(selector).isDisabled(), true);
     for (const width of [320, 390, 730, 731, 1040, 1440]) {
@@ -458,13 +458,17 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
-test('0.09 and 0.10 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.11');
+test('0.08 through 0.11 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
+    {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
     {version:'0.10',maximum:30,named:true},
-    {version:'0.11',maximum:30,named:false},
+    {version:'0.11',maximum:30,named:true},
+    {version:'0.12',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
+    {version:'0.11',maximum:29,named:false},
   ]) {
     const info=DEVICE_INFO.replace('SmartUI=0.08','SmartUI='+version);
     const f=await fixture({settings:true,info,settingsCaps:{melody_max:maximum}});
@@ -484,7 +488,7 @@ test('0.09 and 0.10 retain verified melody names; unknown firmware or changed ca
 });
 
 test('headless settings save explicit fields with readback; ADC calculation and reset require confirmation',async()=>{
-  const f=await fixture({settings:true,info:DEVICE_INFO,replies:true});
+  const f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,replies:true});
   try {
     await connect(f.page);
     assert.equal(await f.page.locator('#device-fields').isVisible(),true);
@@ -504,7 +508,9 @@ test('headless settings save explicit fields with readback; ADC calculation and 
     assert.match(await f.page.locator('#adc-preview-result').textContent(),/ещё не сохранён/);
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.adc_multiplier),4.9);
     await noOverlap(f.page);
-    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.3-settings-desktop.png')});
+    await f.page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · тестовые данные. Физическая плата не подключена.';section.prepend(caption);});
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.4-settings-desktop.png')});
+    await f.page.locator('#simulation-caption').evaluate(caption=>caption.remove());
     await confirm(f.page,'#adc-apply',false);
     assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc apply'))),false);
     await confirm(f.page,'#adc-apply',true);
@@ -520,7 +526,7 @@ test('headless settings save explicit fields with readback; ADC calculation and 
 });
 
 test('mobile settings have accessible controls, separate LEDs and battery warning before save',async()=>{
-  const f=await fixture({settings:true,info:DEVICE_INFO,settingsCaps:{vibration:1,gps:1,display:1}});
+  const f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,settingsCaps:{vibration:1,gps:1,display:1}});
   try {
     await f.page.setViewportSize({width:390,height:844});await connect(f.page);
     assert.equal(await f.page.getByLabel('LED платы',{exact:true}).isEnabled(),true);
@@ -540,8 +546,39 @@ test('mobile settings have accessible controls, separate LEDs and battery warnin
     await f.page.locator('#setting-volume').focus();await f.page.keyboard.press('Tab');
     assert.equal(await f.page.evaluate(()=>document.activeElement.id),'setting-melody'); // unchanged save buttons are disabled
     await noOverlap(f.page);
-    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.3-settings-mobile.png')});
+    await f.page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · тестовые данные. Физическая плата не подключена.';section.prepend(caption);});
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.4-settings-mobile.png')});
+    await f.page.locator('#simulation-caption').evaluate(caption=>caption.remove());
   } finally {await f.close();}
+});
+
+test('ProMicro console shows cached reference and actionable source error without retaining a save token',async()=>{
+  const f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,settingsCaps:{adc_min:1.36125,adc_max:2.26875}});
+  try{const p=f.page;
+    await p.evaluate(()=>{const m=window.__serialMock,original=m.command;
+      Object.assign(m.settingsState,{battery_mv:4100,adc_multiplier:1.97,adc_default:1.815});
+      m.command=function(raw){if(raw.startsWith('settings adc preview ')){
+        this.commands.push(raw);
+        if(this.adcSourceMissing)this.emit('ERR settings source');
+        else {this.adcPreview={token:7,sampled_mv:3100,measured_mv:3320,multiplier:2.109806};this.emit(this.settingsRecord('adc_preview',this.adcPreview));}
+        return;
+      }original.call(this,raw);};
+    });
+    await connect(p);
+    assert.match(await p.locator('#adc-source-warning').textContent(),/ProMicro.*USB.*без перезапуска.*2 минут/);
+    await p.locator('#adc-measured').fill('3,32');await p.locator('#adc-preview').click();
+    await p.locator('#adc-preview-box').waitFor({state:'visible'});
+    assert.match(await p.locator('#adc-preview-result').textContent(),/2\.109806.*Опорный замер: 3\.100/);
+    assert.equal(await p.evaluate(()=>window.__serialMock.settingsState.adc_multiplier),1.97);
+    await p.evaluate(()=>{window.__serialMock.adcSourceMissing=true;});
+    await p.locator('#adc-preview').click();
+    await p.waitForFunction(()=>document.getElementById('feedback').textContent.includes('Запустите ProMicro от АКБ'));
+    assert.match(await p.locator('#feedback').textContent(),/без перезапуска.*2 минут/);
+    assert.equal(await p.locator('#adc-apply').isDisabled(),true);
+    assert.equal(await p.locator('#adc-preview-box').isHidden(),true);
+    assert.equal(await p.evaluate(()=>window.__serialMock.commands.some(c=>c.startsWith('settings adc apply'))),false);
+    assert.equal(await p.evaluate(()=>window.__serialMock.settingsState.adc_multiplier),1.97);
+  }finally{await f.close();}
 });
 
 test('unsupported hardware is hidden and storage failure remains unsaved in the form',async()=>{

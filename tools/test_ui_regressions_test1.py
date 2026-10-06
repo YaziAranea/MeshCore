@@ -27,6 +27,7 @@ struct UITask {
   uint32_t _last_activity_ms=0,_next_refresh=0;
   int dismissals=0;
   void clearImportantNotify(){++dismissals;}
+  void dismissCurrentMessageNotifications(){++dismissals;}
   void extendAutoOff(){}
   void setCurrScreen(UIScreen*);
   void input(char c){

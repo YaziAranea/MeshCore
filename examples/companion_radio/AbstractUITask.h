@@ -12,6 +12,7 @@
 #endif
 
 #include "NodePrefs.h"
+#include "SmartUiSync.h"
 
 enum class UIEventType {
     none,
@@ -43,13 +44,29 @@ protected:
   mesh::MainBoard* _board;
   MultiSerialInterface* _interfaceManager;
   bool _connected;
+  using SyncActionCallback = void (*)(uint32_t, smartui::SyncAction, uint32_t);
+  SyncActionCallback _sync_action_callback = nullptr;
+  bool _explicit_read_policy = false;
 
   AbstractUITask(mesh::MainBoard* board, MultiSerialInterface* interfaceManager) : _board(board), _interfaceManager(interfaceManager) {
     _connected = false;
   }
 
 public:
-  void setHasConnection(bool connected) { _connected = connected; }
+  void setSyncActionCallback(SyncActionCallback callback) { _sync_action_callback = callback; }
+  void setExplicitReadPolicy(bool enabled) { _explicit_read_policy = enabled; }
+  bool explicitReadPolicy() const { return _explicit_read_policy; }
+  // Remote application is silent: the caller commits its backend event once.
+  // Local UI actions report through the callback after applying UI state.
+  virtual bool applyMessageAction(uint32_t generation, smartui::SyncAction action,
+                                  uint32_t snooze_seconds = 0) {
+    (void)generation; (void)action; (void)snooze_seconds;
+    return false;
+  }
+  void setHasConnection(bool connected) {
+    _connected = connected;
+    if (!connected) _explicit_read_policy = false;
+  }
   bool hasConnection() const { return _connected; }
   virtual uint16_t getBattMilliVolts() const { return _board->getBattMilliVolts(); }
   bool isBluetoothEnabled() const { return _interfaceManager->isBluetoothEnabled(); }

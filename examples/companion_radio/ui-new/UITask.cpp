@@ -10768,6 +10768,36 @@ public:
     return false;
   }
 
+  bool applyActionByGeneration(uint32_t generation, smartui::SyncAction action,
+                               uint32_t seconds) {
+    for (int offset = 0; offset < num_unread; ++offset) {
+      MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
+      if (entry.generation != generation) continue;
+      if (action == smartui::SyncAction::Read) {
+        const uint32_t id = entry.preview_id;
+        if (detail_open && opened_entry.generation == generation) detail_open = false;
+        return removePreviewById(id);
+      }
+      if (action == smartui::SyncAction::Snooze) {
+        entry.snooze_until = smartui::optionalDeadlineAfter((uint32_t)millis(), seconds * 1000UL);
+      } else if (action == smartui::SyncAction::Dismiss) {
+        entry.snooze_until = 0;
+      }
+      return true;
+    }
+    // An open copied detail may outlive eviction of its bounded ring entry.
+    if (action == smartui::SyncAction::Read && detail_open &&
+        opened_entry.generation == generation) detail_open = false;
+    return false;
+  }
+
+  bool containsGeneration(uint32_t generation) const {
+    if (generation == 0) return false;
+    for (int offset = 0; offset < num_unread; ++offset)
+      if (unread[unreadIndexFromNewest(offset)].generation == generation) return true;
+    return false;
+  }
+
   bool takeDueReminder(uint32_t& generation, uint8_t& flags) {
     for (int offset = 0; offset < num_unread; ++offset) {
       MsgEntry& entry = unread[unreadIndexFromNewest(offset)];
@@ -10793,7 +10823,14 @@ public:
   }
 
   void clearPreviews(bool locally_dismissed = false) {
-    (void)locally_dismissed;
+    // A physical clear-all is a human read action for each retained ID, not
+    // queue delivery. Remove first so the shared action cannot invalidate the
+    // iteration; generation-zero legacy previews still clear without an ACK.
+    while (locally_dismissed && num_unread > 0) {
+      const uint32_t generation = unread[unreadIndexFromNewest(num_unread - 1)].generation;
+      removeOldestPreview();
+      if (_task != NULL && generation != 0) _task->localMessageRead(generation);
+    }
     num_unread = 0;
     detail_open = false;
     selected_preview_id = 0;
@@ -11029,13 +11066,11 @@ public:
         detail_open = false;
       else _task->showAlert("Контакт недоступен", 1100);
     } else if (detail_action == 1) {
-      removePreviewById(opened_entry.preview_id);
       detail_open = false;
       _task->localMessageRead(opened_entry.generation);
       _task->showAlert("ЛС прочитано", 900);
     } else if (detail_action == 2) {
-      if (snoozePreviewById(opened_entry.preview_id)) {
-        _task->dismissMessageNotification(opened_entry.generation);
+      if (_task->localMessageSnooze(opened_entry.generation, 15UL * 60UL)) {
         detail_open = false;
         _task->showAlert("Напомню через 15м", 1000);
       } else _task->showAlert("Уже вне буфера", 1100);
@@ -11204,6 +11239,9 @@ void UITask::showAlert(const char* text, int duration_millis) {
 
 void UITask::invalidateBatteryCache() {
   _battery_display.invalidate();
+  _battery_sample_mv = 0;
+  _battery_sampled_at = 0;
+  _battery_sample_valid = false;
 }
 
 bool UITask::commitUiPrefs(const NodePrefs& before) {
@@ -11214,8 +11252,26 @@ bool UITask::commitUiPrefs(const NodePrefs& before) {
 }
 
 uint16_t UITask::getBattMilliVolts() const {
-  return _battery_display.read((uint32_t)millis(), UI_BATTERY_SAMPLE_MILLIS,
-      [this]() -> uint16_t { return _board ? _board->getBattMilliVolts() : 0; });
+  const uint32_t now = (uint32_t)millis();
+  bool sampled = false;
+  const uint16_t millivolts = _battery_display.read(now, UI_BATTERY_SAMPLE_MILLIS,
+      [this, &sampled]() -> uint16_t {
+        sampled = true;
+        return _board ? _board->getBattMilliVolts() : 0;
+      });
+  if (sampled) {
+    _battery_sample_mv = millivolts;
+    _battery_sampled_at = now;
+    _battery_sample_valid = millivolts != 0;
+  }
+  return millivolts;
+}
+
+bool UITask::peekBatterySample(uint16_t& millivolts, uint32_t& sampled_at) const {
+  // Observation must not trigger ADC work or make an old cached sample fresh.
+  millivolts = _battery_sample_mv;
+  sampled_at = _battery_sampled_at;
+  return _battery_sample_valid;
 }
 
 smartui::BatteryReading UITask::readSafetyBattery() const {
@@ -11226,7 +11282,11 @@ smartui::BatteryReading UITask::readSafetyBattery() const {
   const uint16_t a = _board->getBattMilliVolts();
   const uint16_t b = _board->getBattMilliVolts();
   const uint16_t c = _board->getBattMilliVolts();
-  return smartui::medianBatteryReading(a, b, c);
+  const smartui::BatteryReading reading = smartui::medianBatteryReading(a, b, c);
+  _battery_sample_mv = reading.millivolts;
+  _battery_sampled_at = (uint32_t)millis();
+  _battery_sample_valid = reading.valid;
+  return reading;
 }
 
 bool UITask::hasTrustedTime() const {
@@ -13521,7 +13581,8 @@ void UITask::importantNotifyHandler() {
 #ifdef PIN_MSG_TONE
   bool allow_first_tone = !_important_notify_tone_started;
   bool allow_tone_repeat = !UI_IMPORTANT_NOTIFY_TONE_SERIES_ONCE &&
-                           !_important_notify_tone_repeat_suppressed && !hasConnection();
+                           !_important_notify_tone_repeat_suppressed &&
+                           (_explicit_read_policy || !hasConnection());
   if (!(mode & NOTIFY_MODE_TONE) || !(allow_first_tone || allow_tone_repeat)) {
     _important_notify_tone_next = 0;
   } else if (!_msg_tone_active) {
@@ -13808,6 +13869,10 @@ void UITask::msgRead(int msgcount) {
 }
 
 void UITask::msgRead(int msgcount, bool dismiss_notification) {
+  if (_explicit_read_policy && !dismiss_notification) {
+    _next_refresh = 0;
+    return;
+  }
 #if UI_IMPORTANT_NOTIFY_BLE_SMART_DELAY_MS > 0
   // Legacy callers have no generation.  Once detailed callbacks are active,
   // a total queue count must not acknowledge a different important message.
@@ -14076,14 +14141,60 @@ void UITask::dismissMessageNotification(uint32_t generation) {
 }
 
 void UITask::localMessageRead(uint32_t generation) {
+  if (applyMessageAction(generation, smartui::SyncAction::Read) && _sync_action_callback)
+    _sync_action_callback(generation, smartui::SyncAction::Read, 0);
+}
+
+void UITask::localMessageDismiss(uint32_t generation) {
+  if (applyMessageAction(generation, smartui::SyncAction::Dismiss) && _sync_action_callback)
+    _sync_action_callback(generation, smartui::SyncAction::Dismiss, 0);
+}
+
+void UITask::dismissCurrentMessageNotifications() {
+  const uint32_t active = _important_notify_generation;
+  const uint32_t pending = _ble_smart_notify_generation;
+  if (active != 0) localMessageDismiss(active);
+  if (pending != 0 && pending != active) localMessageDismiss(pending);
+  // Preserve legacy generation-zero behavior without inventing a message ID.
+  clearImportantNotify();
+}
+
+bool UITask::localMessageSnooze(uint32_t generation, uint32_t seconds) {
+  if (!applyMessageAction(generation, smartui::SyncAction::Snooze, seconds)) return false;
+  if (_sync_action_callback) _sync_action_callback(generation, smartui::SyncAction::Snooze, seconds);
+  return true;
+}
+
+bool UITask::applyMessageAction(uint32_t generation, smartui::SyncAction action,
+                               uint32_t snooze_seconds) {
+  if (generation == 0) return false;
+  if (action == smartui::SyncAction::Snooze) {
+    if (snooze_seconds == 0 || snooze_seconds > smartui::SmartUiSync::MAX_SNOOZE_SECONDS) return false;
+  } else if (snooze_seconds != 0) return false;
+  if (action == smartui::SyncAction::Received) return true;
+  if (action != smartui::SyncAction::Read && action != smartui::SyncAction::Dismiss &&
+      action != smartui::SyncAction::Snooze) return false;
+  MsgPreviewScreen* preview = static_cast<MsgPreviewScreen*>(msg_preview);
+  const bool found = preview && preview->applyActionByGeneration(generation, action, snooze_seconds);
+  // A channel notification need not own a direct-message preview. Read and
+  // dismiss remain valid no-ops when an older bounded preview was evicted.
+  // Snooze requires a retained timer owner and must never stop B for missing A.
+  if (action == smartui::SyncAction::Snooze && !found) return false;
   dismissMessageNotification(generation);
-  if (msg_preview == NULL) return;
-  _msgcount = ((MsgPreviewScreen*)msg_preview)->unreadPreviewCount();
-  if (_msgcount == 0) {
-    _popup_pending = false;
-    if (curr == msg_preview) gotoHomeScreen();
+  if (preview) {
+    _msgcount = preview->unreadPreviewCount();
+    if (_msgcount == 0 && _important_notify_generation == 0 && _ble_smart_notify_generation == 0) {
+      _popup_pending = false;
+      if (curr == msg_preview) gotoHomeScreen();
+    }
   }
   _next_refresh = 0;
+  return true;
+}
+
+bool UITask::canSnoozeMessage(uint32_t generation) const {
+  return msg_preview != NULL &&
+      static_cast<const MsgPreviewScreen*>(msg_preview)->containsGeneration(generation);
 }
 
 void UITask::snoozedMessageHandler() {
@@ -14093,6 +14204,7 @@ void UITask::snoozedMessageHandler() {
   uint32_t generation;
   uint8_t flags;
   if (!((MsgPreviewScreen*)msg_preview)->takeDueReminder(generation, flags)) return;
+  if (_sync_action_callback) _sync_action_callback(generation, smartui::SyncAction::Resume, 0);
   // Snooze belongs to this stored message only. A new arrival still uses the
   // ordinary independent notification path, including while this timer waits.
   beginImportantNotify(flags, generation, false);
@@ -14185,7 +14297,7 @@ bool UITask::handleRawButtonWakeWhenDark() {
   if (!user_btn.isPressed()) return false;
 
   unsigned long now = millis();
-  if (curr != msg_preview) clearImportantNotify();
+  if (curr != msg_preview) dismissCurrentMessageNotifications();
   _display->turnOn();
   bool reset_to_clock =
 #if UI_WAKE_SHOW_CLOCK
@@ -14260,7 +14372,7 @@ void UITask::handleButtonWakeLatch() {
 #if UI_WAKE_DEBUG_LOG
       Serial.printf("[DBG UI] buttonWakeLatch turnOn ok now=%lu\r\n", millis());
 #endif
-      if (curr != msg_preview) clearImportantNotify();
+      if (curr != msg_preview) dismissCurrentMessageNotifications();
       markDisplayWake(
 #if UI_WAKE_SHOW_CLOCK
           true
@@ -14682,7 +14794,7 @@ void UITask::loop() {
   if (c != 0 && curr) {
     // Inbox actions address one stored generation. Do not dismiss B's newer
     // reminder while the user reads or snoozes A.
-    if (curr != msg_preview) clearImportantNotify();
+    if (curr != msg_preview) dismissCurrentMessageNotifications();
     _last_activity_ms = millis();
 #if UI_EINK_IDLE_SCREENSAVER
     if (curr == idle_saver) {
@@ -14852,6 +14964,7 @@ void UITask::messageTransferState(uint32_t generation, uint8_t flags,
                                   UIMessageTransferState state,
                                   int pending_count) {
   (void)pending_count;  // Total transport backlog is not an important-message ACK.
+  if (_explicit_read_policy) return;
   flags &= (UI_MSG_FLAG_DIRECT | UI_MSG_FLAG_MENTION | UI_MSG_FLAG_IMPORTANT);
   if (state != UIMessageTransferState::queuedToCompanion ||
       generation == 0 || flags == UI_MSG_FLAG_NONE) return;
@@ -14916,7 +15029,7 @@ char UITask::checkDisplayOn(char c) {
       if (!checked_display) {
         _display->turnOn();   // turn display on and consume event
       }
-      if (curr != msg_preview) clearImportantNotify();
+      if (curr != msg_preview) dismissCurrentMessageNotifications();
       bool reset_to_clock =
 #if UI_WAKE_SHOW_CLOCK
           true;

@@ -787,6 +787,32 @@ test('ADC preview expires, is invalidated by another save and cleared on disconn
   assert.equal(f.instance.state.adcPreview,null);assert.equal(f.instance.state.deviceSettings,null);
 });
 
+test('ADC cached source stays exact within board caps; source error cancels prior preview without saving',async()=>{
+  let sourceMissing=false;
+  const f=await connected({settings:true,settingsCaps:{adc_min:1.36125,adc_max:2.26875},
+    settingsState:{battery_mv:4100,adc_multiplier:1.97,adc_default:1.815},
+    onCommand(command,port){if(command.startsWith('settings adc preview ')){
+      if(sourceMissing)port.reply('ERR settings source');
+      else {port.adcPreview={token:7,sampled_mv:3100,measured_mv:3320,multiplier:2.109806};port.reply(wireRecord('adc_preview',port.adcPreview));}
+      return false;
+    }}});
+  const preview=await f.instance.previewAdc('3,32');
+  assert.equal(preview.sampled_mv,3100);assert.equal(preview.multiplier,2.109806);
+  assert.equal(f.instance.state.deviceSettings.battery_mv,4100);
+  assert.equal(f.port.settingsState.adc_multiplier,1.97);
+  sourceMissing=true;
+  await assert.rejects(f.instance.previewAdc('3.32'),error=>error.code==='SETTINGS_SOURCE'&&/от АКБ/.test(error.message)&&/без перезапуска/.test(error.message)&&/2 минут/.test(error.message));
+  assert.equal(f.instance.state.adcPreview,null);
+  await assert.rejects(f.instance.applyAdc({confirmed:true}),code('ADC_CONFIRM'));
+  assert.equal(f.port.commands.some(c=>c.startsWith('settings adc apply')),false);
+  assert.equal(f.port.settingsState.adc_multiplier,1.97);
+  sourceMissing=false;
+  await f.instance.previewAdc('3.32');await f.instance.applyAdc({confirmed:true});
+  assert.equal(f.port.settingsState.adc_multiplier,2.109806);
+  assert.equal(parseAdcPreview('OK settings adc_preview token=1 sampled_mv=3100 measured_mv=3320 multiplier=2.300000',f.instance.state.settingsCaps,3320),null);
+  await f.instance.disconnect();
+});
+
 test('failed save does not show success; timeout and mismatched readback become uncertain',async()=>{
   for (const scenario of ['storage','timeout','mismatch','wrongack','unplug']) {
     let writes=0;
@@ -810,7 +836,7 @@ test('failed save does not show success; timeout and mismatched readback become 
 });
 
 test('settings protocol errors are sanitized, ADC stale/storage errors do not claim success',async()=>{
-  for (const [wire,expected] of [['ERR settings stale','SETTINGS_STALE'],['ERR settings storage','SETTINGS_STORAGE'],['ERR settings range','SETTINGS_RANGE'],['ERR settings measurement','SETTINGS_MEASUREMENT'],['ERR settings busy','BUSY'],['ERR settings readonly','READ_ONLY'],['ERR settings <secret>','PROTOCOL']]) {
+  for (const [wire,expected] of [['ERR settings stale','SETTINGS_STALE'],['ERR settings storage','SETTINGS_STORAGE'],['ERR settings range','SETTINGS_RANGE'],['ERR settings measurement','SETTINGS_MEASUREMENT'],['ERR settings source','SETTINGS_SOURCE'],['ERR settings busy','BUSY'],['ERR settings readonly','READ_ONLY'],['ERR settings <secret>','PROTOCOL']]) {
     const f=await connected({settings:true,onCommand(command,port){if(command.startsWith('settings adc preview ')){port.reply(wire);return false;}}});
     await assert.rejects(f.instance.previewAdc('3.8'),code(expected));
     assert.equal(f.instance.state.adcPreview,null);

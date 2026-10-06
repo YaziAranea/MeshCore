@@ -1,8 +1,13 @@
-# SmartUI 0.10 API v1 — specification
+# SmartUI 0.11 API v1 — specification
 
-API v1 targets SmartUI 0.10. Discover `smartui_api:1` and inspect HELLO rather
+API v1 targets SmartUI 0.11. Discover `smartui_api:1` and inspect HELLO rather
 than relying on the version string alone. These files do not claim external
 publication or physical-device verification. The base protocol is unchanged.
+
+SmartUI 0.11 adds ecosystem sync/events with `sync=1 events=1`, `stage=release`.
+Published 0.10 does not contain these sync commands: it advertises `events=0`
+and omits `sync`. Its base settings API remains compatible. Detect extension
+features independently rather than relying only on the firmware version.
 
 See the [Russian integration guide](SMARTUI_API_RU.md) for the full workflow and
 the [Python reference client](../tools/smartui-api/README.md) for executable tests.
@@ -121,7 +126,7 @@ reading persistent settings. The SDK never reconnects or retries automatically.
 HELLO schema (values separated by `|` below are alternatives):
 
 ```text
-OK api hello v=1 firmware=0.10 stage=release max_command=152 max_reply=479 max_frame=160 transport=ble|usb|wifi write=0|1 events=0 wifi_setup=0|1
+OK api hello v=1 firmware=0.11 stage=release max_command=152 max_reply=479 max_frame=160 transport=ble|usb|wifi write=0|1 events=1 sync=1 wifi_setup=0|1
 ```
 
 Parse additive `key=value` fields without depending on order. Accept unknown
@@ -175,13 +180,22 @@ if the ADC baseline/settings have changed; successful settings commits may also
 invalidate it. On `stale`, obtain a new preview. Read `api get` after success.
 Never fabricate a measurement or automatically reset calibration after failure.
 
+In 0.11 ProMicro calibration uses its last battery-only sample, at most 120000 ms
+old and taken with the current multiplier: USB can alter the sensed supply.
+`sampled_mv` is this reference, not the current USB reading. No eligible sample
+returns `ERR api source` (`ERR settings source` in the console) without an apply
+token. Run on battery until sampled, connect USB without resetting, then request
+preview within two minutes. Resetting/changing the multiplier invalidates the
+sample. Other boards retain live sampling. Limits are unchanged; verify the
+result with USB disconnected and a meter on the battery itself.
+
 BLE/USB/TCP share existing storage/rescue guards; HELLO `write` reports permission.
 TCP supports settings writes with no added authentication or TLS. A network peer
 can change settings when guards permit; use a trusted network and do not expose
 the listener to the Internet. Wi-Fi provisioning uses BLE/USB so its test does not
 destroy the controlling session; same-link TCP provisioning returns `transport`.
-The existing USB helper/local UI remain available. Events are not implemented:
-`events=0` is explicit, not an undocumented subscription feature.
+The existing USB helper/local UI remain available. Ecosystem commands require
+their HELLO flags `sync=1` and/or `events=1`; missing flags mean unsupported.
 
 ## Staged Wi-Fi provisioning
 
@@ -242,6 +256,209 @@ repeat discovery/HELLO and verify `api connection`. If it did not switch,
 `cancelled`, `readonly`, `storage` or `apply`. Do not treat a queued reply as
 successful persistence or automatically loop reconnects/new-ID writes.
 
+## Optional ecosystem synchronization
+
+This additive extension retains the base companion frame format and radio
+protocol. Device state synchronization is not an over-the-air read receipt.
+Legacy clients keep their existing behavior unless their session opts in.
+
+Message identity is `(boot, id)`: boot is 16 lowercase hexadecimal digits,
+nonzero; id is an 8-lowercase-hex nonzero generation within that boot. Never
+substitute a timestamp, queue index or request ID. Sequence/revision/cursor are
+decimal uint32 values, shared across all event categories. State is volatile:
+32 records and 32 events, retained across transport reconnect but not reboot.
+This is a bounded working set, not a complete chat archive.
+
+Commands and representative response schemas (`BOOT`, `ID`, etc. are placeholders):
+
+```text
+api sync enable|disable|status
+OK api sync boot=BOOT explicit=0|1 subscribed=MASK cursor=N oldest=N revision=N count=N capacity=32
+
+api inbox snapshot
+OK api inbox snapshot boot=BOOT revision=REV count=N cursor=N capacity=32
+api inbox item BOOT REV INDEX
+OK api inbox item boot=BOOT revision=REV index=INDEX id=ID flags=N state=N snooze=N snoozable=0|1
+
+api inbox next
+OK api inbox next boot=BOOT id=ID flags=N frame_hex=HEX
+OK api inbox empty=1 boot=BOOT
+
+api inbox received BOOT ID
+api inbox read BOOT ID
+api inbox dismiss BOOT ID
+api inbox snooze BOOT ID SECONDS
+OK api inbox read id=ID state=N changed=0|1
+
+api notify status
+OK api notify active=0|1 id=ID muted=0|1
+```
+
+The ACK response substitutes the actual action name for `read`. Additive
+`tracked=0` is possible when received commits an exact still-queued frame whose
+32-record ledger entry was evicted; it does not resurrect that entry. Unknown
+objects return `ERR api gone`, never retargeting the queue head. Notification
+status refers to the logical active/pending chain, not instantaneous audio or
+vibration pin state. Its id can be zero; obtain boot from the current sync status.
+
+`enable` opts this session into explicit receive/read behavior. It is required
+for inbox next and actions, not snapshots or event reads. `disable` clears the
+subscription too. Disconnect clears opt-in/subscription, not the per-boot log.
+Use one coordinated message consumer after opting in, not an independent legacy
+queue reader alongside it. Session opt-in is not a persistent board setting.
+Enable/disable and ACK actions require `write=1`; snapshots/subscriptions do not.
+Next/actions without opt-in return `ERR api negotiate`.
+
+| Operation | Meaning | Does not imply |
+| --- | --- | --- |
+| next | Peek exact existing companion frame together with its identity | Delivery or reading |
+| received | App accepted this exact frame; commit its delivery queue entry | Human read |
+| read | Explicit human-read acknowledgement | Delivery queue consumption |
+| dismiss | Dismiss notification | Read acknowledgement |
+| snooze | Pause a supported retained preview, 1…86400 seconds | Read acknowledgement |
+
+State bits: RECEIVED=1, READ=2, DISMISSED=4, SNOOZED=8. Read/dismiss clear snooze;
+snooze clears dismiss. Repeating identical active snooze seconds is unchanged
+and does not extend it, including across reconnect. Resume is internal expiry,
+not an app command. Snapshot `snooze` is configured duration, not a remaining-time
+countdown. `changed=0` is a successful no-op. Item `snoozable=1` means a supported
+preview is still retained on the node (currently a direct message). Missing
+field does not establish support; unsupported snooze has no side effect.
+Read/dismiss also work for channel notifications. Firmware remains authoritative
+if preview availability changes after the snapshot.
+
+Persist/deduplicate a delivered frame and its `(boot,id)` before received. Only
+send read on a UI action/visibility rule that represents actual human reading,
+never merely on a BLE notification or background fetch. A device-local Read
+event updates the app without an echo read command. Generation is assigned to
+all queued frames for exact received ACKs, but only human plaintext messages
+enter the 32-record ledger. Telemetry/CLI/data frames remain retrievable via
+frame_hex without creating unread state or an inbox record. `flags=0` is ambiguous:
+interpret human vs data using the ordinary companion frame parser. `frame_hex`
+is exact deframed message data, not safe diagnostic metadata; do not log it.
+
+### Snapshots, reconnect and gaps
+
+Read snapshot metadata, then indices 0…count-1 with the same boot/revision.
+`ERR api changed` invalidates the partial snapshot; restart a bounded number of
+times. The SDK defaults to three read-only attempts, then surfaces failure.
+Each individual paginated response is already stable in the normal API cache.
+Snapshot cursor equals revision. Missing entries are evicted/unknown, not
+automatically read; do not erase local chat history from this limited view.
+
+Start by subscribing, taking an inbox snapshot, and reading settings/connection/
+notification snapshots. Pull from the inbox snapshot cursor, apply events in
+sequence, then advance the applied cursor. Store app state and cursor atomically
+if persisted. A gap/reboot requires fresh snapshots; do not guess lost events
+or mass-clear unread. A new transport session requires discovery/HELLO, opt-in
+and subscription again. Same boot plus a persisted consistent app state/cursor
+can resume from the log; otherwise snapshot. New boot invalidates old IDs even
+when generation numbers happen to match.
+
+Timeout/replay rules are unchanged: retry the exact last request only on the same
+session; never automatically repeat a mutation with a new ID after reconnect.
+Explicitly inspected read/received actions are idempotent, but this is not a
+general permission to retry arbitrary side effects.
+
+### Pull log and bounded push hints
+
+```text
+api events subscribe MASK
+OK api events subscribed=MASK boot=BOOT cursor=N
+api events next BOOT CURSOR
+OK api event boot=BOOT seq=N id=ID kind=N state=N flags=N value=N key=N
+OK api events end=1 boot=BOOT cursor=N
+ERR api gap boot=BOOT oldest=N cursor=N
+ERR api boot boot=BOOT
+```
+
+Mask bits: messages/notifications=1, settings=2, connection=4, battery=8; all=15,
+unsubscribe=0. Mask filters push hints only. Pull returns **all** categories to
+keep the cursor contiguous. Neither the subscription response cursor nor a hint
+cursor may replace the last applied cursor. `end=1` is not a message read ACK.
+The gap error cursor is the current log head, not permission to skip lost events;
+obtain fresh snapshots before adopting a new baseline.
+
+| kind | Meaning | value/key |
+| ---: | --- | --- |
+| 1 | Message | New record/frame |
+| 2 | Received | App delivery acknowledged |
+| 3 | Read | App or device-local human read |
+| 4 | Dismissed | Notification dismissed |
+| 5 | Snoozed | value = requested seconds |
+| 6 | Resumed | Internal snooze expiry |
+| 7 | Setting | key=0 invalidates settings snapshot; value is a fingerprint, not settings |
+| 8 | Connection | value bits0–1 selected mode (BLE0/USB1/Wi-Fi2), bit2 client connected, bit3 associated, bit4 configured |
+| 9 | Battery | value = cached mV; key1 normal/key2 low/key3 unknown |
+| 10 | Notification | value0/1 inactive/active logical chain, key0 |
+
+Setting observes the settings exposed by this API, not every screen-menu field.
+The observer compares state once per second and can coalesce rapid changes.
+It invalidates the settings view; it is not an audit log of each save. Brightness
+and other fields not yet exposed by the API are outside this observation set.
+
+Non-message events use id zero. Read `api get` for Setting, and `api connection`
+for full connection metadata. Preserve/ignore additive future fields and kinds
+safely rather than failing the entire stream. Individual short physical pulses
+are not guaranteed as separate events.
+
+Battery is informational, not shutdown policy. Key3 means no cached sample or
+sample age greater than 120000ms; do not display its value as a current reading.
+Low begins at ≤3300mV and remains low until 3400mV (hysteresis); this does not
+replace `shutdown_mv`. Voltage delta events use 50mV relative to the last emitted
+Battery event, allowing small successive sample changes to accumulate. The SDK
+preserves numeric key; `BatterySampleState` names NORMAL1/LOW2/UNKNOWN3. API
+polling does not require forcing a new ADC sample every time.
+
+Push uses the usual 13-byte response header with **id=0, op=3, status=0,
+offset=0**, total equal to its one ASCII body length (no READ_PAGE):
+
+```text
+EV api events boot=BOOT cursor=N mask=MASK
+```
+
+It fits the same 160-byte maximum. Hints are coalesced, subscription-only and
+rate-limited to at most 4Hz. They only say to inspect the authoritative pull log.
+Poll the log periodically even without hints; a lost hint must not stall sync.
+Callbacks queue/coalesce hints and return. Pull from the main loop afterwards;
+never make a reentrant API request from a push callback. Ordinary companion
+pushes still go to their existing handler.
+
+SDK: `SmartUISync(client)` reuses the same request-ID allocator. `status`,
+`enable`, `disable`, `notification_status`, `subscribe`, `snapshot`, `item`,
+`next_message`, `received`, `read`, `dismiss`, `snooze`, `next_event` expose the
+commands. `HintMailbox` keeps one coalesced hint. `EventCursor(snapshot)` rejects
+future sequence gaps/boot changes, ignores duplicate/older events, and does not
+advance until `accept(event)`. Call `check(event)`, apply, then `accept(event)`.
+`EventCursor.next_event(sync)` marks gap/boot API errors as needing a fresh
+snapshot. `StreamExchange.poll(timeout=0.1)` processes idle incoming frames;
+timeout zero drains buffered frames only. No background thread is created.
+
+```python
+from ecosystem import SmartUISync, EventCursor, EventEnd
+
+sync = SmartUISync(api)  # Same already-discovered SmartUIClient.
+if hello.get("sync") == "1" and hello.get("events") == "1":
+    sync.enable()  # Deliberate session opt-in; not a persistent setting.
+    sync.subscribe(15)
+    baseline = sync.snapshot()
+    replace_device_inbox_view(baseline)  # App hook; preserve chat history.
+    cursor = EventCursor(baseline)
+    for _ in range(32):  # Bounded work per event-loop iteration.
+        event = cursor.next_event(sync)
+        if isinstance(event, EventEnd):
+            break
+        if cursor.check(event):
+            apply_device_event(event)  # App hook; no echo read command.
+            cursor.accept(event)
+```
+
+Catch `ApiError` for gap/boot and `RecoveryRequired` for invalid sequence/epoch;
+replace the cursor only after complete recovery. Read other category snapshots
+too; the inbox snapshot is not a settings/connection snapshot. Integration hooks
+above belong to the app, not the SDK. See the Russian guide for frame delivery
+and acknowledgement examples.
+
 ## Python and application integration
 
 Python 3.10+; standard-library core/TCP, optional `pyserial` for USB. From the
@@ -274,7 +491,7 @@ request is blocked by `PendingRequestError`. `ApiError` exposes status, text and
 request_id. Malformed/mismatched data raises `ProtocolError`.
 
 The provided stream adapter routes unrelated packets through `on_packet`, or
-retains up to 64 in `unsolicited`. It is not a background event loop. Production
+retains up to 64 in `unsolicited`. Call `poll()` for idle reception; it is not a background event loop. Production
 apps should use one shared companion dispatcher that routes existing asynchronous
 pushes and correlates API replies by magic, ID, operation and offset. Do not run
 competing stream readers or independent request-ID allocators in one session.
@@ -282,3 +499,28 @@ competing stream readers or independent request-ID allocators in one session.
 The tests cover discovery refusal, byte order, bounds, pagination, same-ID replay,
 timeouts, errors, push dispatch, split/coalesced frames and a real local socket
 round-trip. These are not BLE/USB/Wi-Fi hardware acceptance or endurance tests.
+Ecosystem simulations additionally cover received vs read, exact ACK identity,
+dismiss/snooze, local-read reverse sync, snapshot mutation/retry bounds, ring
+overflow, reconnect/reboot, duplicates/gaps and coalesced/fragmented hints.
+
+## Local development package
+
+From the source root, supply the full 40-character base commit SHA:
+
+```sh
+python -B tools/package_smartui_developer_kit.py OUTPUT_DIR --development --base-commit BASE_COMMIT
+```
+
+Output is `SmartUI_Developer_Kit_0.11-development.zip`, never the release ZIP name.
+Manifest fields include `stage=development`, `distribution=local`,
+`base_firmware_version`, `base_source_commit`, `source_snapshot=working-tree`,
+`exact_source_commit=false`. The base is provenance only, not an exact commit
+claim for edited files. Per-file manifest/SHA256SUMS hashes identify actual bytes.
+
+Only the explicit SDK/tests/guides/license allowlist is included; no recursive
+collection of local notes, caches or credentials. Existing artifacts are never
+overwritten. No commit, upload or flash occurs. Default release mode (`--commit
+EXACT_SOURCE_COMMIT`, no `--development`) preserves the prior contract and relies
+on the release workflow's exact-source validation. It creates
+`SmartUI_Developer_Kit_0.11.zip` with `stage=release`. Do not use it to label an
+arbitrarily changed development snapshot as an exact-source release kit.

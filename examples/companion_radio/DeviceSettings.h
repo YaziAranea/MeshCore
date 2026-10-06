@@ -59,6 +59,10 @@ struct DeviceSettingsHooks {
   void (*apply)(bool battery_changed) = nullptr;
   DeviceSettingsCaps (*caps)() = nullptr;
   uint16_t (*batteryMilliVolts)() = nullptr;
+  // Optional battery-only calibration source. Boards whose USB power path
+  // disturbs the live ADC return a cached sample, its multiplier and age.
+  bool (*batteryCalibrationSample)(uint16_t& millivolts, float& multiplier,
+                                   uint32_t& age_ms) = nullptr;
   float (*adcMultiplier)() = nullptr;
   uint32_t (*millis)() = nullptr;
   void (*testNotification)() = nullptr;

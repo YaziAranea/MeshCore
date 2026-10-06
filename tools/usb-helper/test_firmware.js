@@ -4,11 +4,11 @@ const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
 const {verify,PROFILES} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
-const VERSION = '0.10';
+const VERSION = '0.11';
 const sha = data => createHash('sha256').update(data).digest('hex');
 
-function application(profile, source = COMMIT.slice(0,8), appendedHash = true) {
-  const payload = Buffer.from(profile.marker + ' SmartUI ' + VERSION + '\0SmartUI-source:' + source + '\0','utf8');
+function application(profile, source = COMMIT.slice(0,8), appendedHash = true, version = VERSION) {
+  const payload = Buffer.from(profile.marker + ' SmartUI ' + version + '\0SmartUI-source:' + source + '\0','utf8');
   const end = Math.floor((32 + payload.length + 16)/16)*16;
   const app = Buffer.alloc(end + (appendedHash ? 32 : 0));
   app[0] = 0xe9; app[1] = 1; app[23] = appendedHash ? 1 : 0;
@@ -18,9 +18,9 @@ function application(profile, source = COMMIT.slice(0,8), appendedHash = true) {
   if(appendedHash) Buffer.from(sha(app.subarray(0,end)),'hex').copy(app,end);
   return app;
 }
-function uf2(profile) {
+function uf2(profile, version = VERSION) {
   const payload = Buffer.alloc(512);
-  Buffer.from(profile.marker + ' SmartUI ' + VERSION + '\0').copy(payload,0);
+  Buffer.from(profile.marker + ' SmartUI ' + version + '\0').copy(payload,0);
   Buffer.from('SmartUI-source:' + COMMIT.slice(0,8) + '\0').copy(payload,248);
   const raw = Buffer.alloc(1024);
   for(let index=0;index<2;++index) {
@@ -30,18 +30,18 @@ function uf2(profile) {
   }
   return raw;
 }
-function fixture(id='v3', merged=false, source) {
+function fixture(id='v3', merged=false, source, version=VERSION) {
   const profile = PROFILES.find(p=>p.id===id);
   let bytes;
-  if(profile.format==='uf2') bytes=uf2(profile);
+  if(profile.format==='uf2') bytes=uf2(profile,version);
   else {
-    const app=application(profile,source);
+    const app=application(profile,source,true,version);
     bytes=merged?Buffer.alloc(0x10000+app.length+256,0xff):app;
     if(merged) {bytes[0]=0xe9;app.copy(bytes,0x10000);}
   }
   const name = profile.id + (profile.format==='uf2'?'.uf2':merged?'-merged.bin':'-update.bin');
   const record = {name,bytes:bytes.length,sha256:sha(bytes),board:profile.label,environment:profile.environment,source_commit:COMMIT,image_kind:profile.format==='uf2'?'nrf52840-uf2-bootloader':merged?'esp32-fresh-install-merged':'esp32-application-update',flash_offset:profile.format==='uf2'?null:merged?'0x00000':'0x10000'};
-  const manifest = {schema_version:2,commit:COMMIT,version:VERSION,firmware:[record]};
+  const manifest = {schema_version:2,commit:COMMIT,version,firmware:[record]};
   return {profile,bytes,name,record,manifest, args(){return {name,bytes:this.bytes,manifestText:JSON.stringify(manifest),target:id,cryptoProvider:webcrypto};}};
 }
 
@@ -51,6 +51,13 @@ test('preflight validates all six profiles and reconstructs split UF2 markers', 
     const result=await verify({...f.args(),info:{board:profile.reported,build:COMMIT.slice(0,8)}});
     assert.equal(result.board,profile.label);assert.equal(result.matchedConnectedBoard,true);assert.equal(result.sameBuild,true);
     assert.match(result.integrityNotice,/не подлинность|а не подлинность/);
+  }
+});
+
+test('preflight retains 0.09 and 0.10 release compatibility for all six profiles', async()=>{
+  for(const version of ['0.09','0.10']) for(const profile of PROFILES) {
+    const result=await verify(fixture(profile.id,false,undefined,version).args());
+    assert.equal(result.board,profile.label);
   }
 });
 test('merged and update carry different explicit warnings, offsets and manual-model scope',async()=>{

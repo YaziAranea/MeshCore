@@ -22,7 +22,8 @@ def harness(source, flags):
     )
     # These are explicit in every tested public profile; fail if a flag vanishes.
     code = "\n".join(f"#define {n} {flags[n]}" for n in names) + "\n" + code
-    code = code.replace("class UITask {", "enum class UIMessageTransferState : uint8_t { queuedToCompanion };\nstruct MsgPreviewScreen { bool hasUnreadPreviews() { return false; } };\nclass UITask {")
+    code = (ROOT / "examples/companion_radio/SmartUiSync.h").read_text(encoding="utf-8").replace("#pragma once", "") + '\n' + code
+    code = code.replace("class UITask {", "enum class UIMessageTransferState : uint8_t { queuedToCompanion };\nstruct MsgPreviewScreen { bool hasUnreadPreviews() { return false; } int unreadPreviewCount() { return 1; } bool applyActionByGeneration(uint32_t,smartui::SyncAction,uint32_t) { return true; } };\nclass UITask {")
     code = code.replace("  void clearImportantNotify() { _important_notify_active=false; }", r'''
   void clearImportantNotify();
   void stopNotifyOutputs();
@@ -33,6 +34,8 @@ def harness(source, flags):
   void startImportantNotify(uint8_t,uint32_t);
   void msgRead(int,bool);
   void messageTransferState(uint32_t,uint8_t,UIMessageTransferState,int);
+  void dismissMessageNotification(uint32_t);
+  bool applyMessageAction(uint32_t,smartui::SyncAction,uint32_t=0);
   void stopMsgVibe() {}
   void gotoHomeScreen() {}
   void* curr=nullptr; void* msg_preview=nullptr;
@@ -40,6 +43,7 @@ def harness(source, flags):
   uint8_t _ble_smart_notify_flags=0;
   uint32_t _ble_smart_notify_generation=0;
   bool _ble_smart_notify_read_zero_seen=false;
+  bool _popup_pending=false;
   unsigned long _ble_smart_notify_due=0, _next_refresh=0;
 ''')
     code = code.replace("messageToneHandler(); importantNotifyHandler();", "messageToneHandler(); bleSmartNotifyHandler(); importantNotifyHandler();")
@@ -49,6 +53,7 @@ def harness(source, flags):
         "void UITask::scheduleBleSmartNotify(", "void UITask::bleSmartNotifyHandler()",
         "void UITask::startImportantNotify(", "void UITask::msgRead(int msgcount, bool",
         "void UITask::messageTransferState(",
+        "void UITask::dismissMessageNotification(", "bool UITask::applyMessageAction(",
     )
     code += "\n" + "\n".join(function(source, m) for m in methods)
     return code
@@ -176,6 +181,43 @@ int main() {
   assert(sounds()==2*notes(19) && !transferred._msg_tone_active &&
          transferred._important_notify_tone_next==0); ++checks;
 
+  // An opted-in app must explicitly mark the message read. Merely staying
+  // connected, draining the queue, or accepting a frame never stops repeats.
+  now=100; UITask explicit_read; fresh(explicit_read);
+  explicit_read.connected=true; explicit_read._explicit_read_policy=true;
+  explicit_read.startImportantNotify(UI_MSG_FLAG_DIRECT,400);
+  explicit_read.messageTransferState(400,UI_MSG_FLAG_DIRECT,
+                                     UIMessageTransferState::queuedToCompanion,0);
+  explicit_read.msgRead(0,false);
+  assert(explicit_read._ble_smart_notify_generation==400 && !explicit_read._ble_smart_notify_read_zero_seen);
+  tick(explicit_read,8000);
+  assert(explicit_read._important_notify_active && explicit_read._msg_tone_active);
+  tick(explicit_read,120001);
+  assert(explicit_read._important_notify_active && playedNotes()>2*notes(19));
+  explicit_read.messageTransferState(400,UI_MSG_FLAG_DIRECT,
+                                     UIMessageTransferState::queuedToCompanion,0);
+  assert(explicit_read._important_notify_active && !explicit_read._important_notify_tone_repeat_suppressed);
+  // Ending the opt-in restores legacy transfer behavior for this connection.
+  explicit_read._explicit_read_policy=false;
+  explicit_read.messageTransferState(400,UI_MSG_FLAG_DIRECT,
+                                     UIMessageTransferState::queuedToCompanion,0);
+  assert(!explicit_read._important_notify_active); ++checks;
+
+  // Shared read/snooze stops a currently playing series only for its owner.
+  now=100; UITask targeted; fresh(targeted); MsgPreviewScreen preview;
+  targeted.msg_preview=&preview; targeted.startImportantNotify(UI_MSG_FLAG_DIRECT,500);
+  assert(targeted._msg_tone_active && targeted._important_notify_active);
+  assert(targeted.applyMessageAction(499,smartui::SyncAction::Read));
+  assert(targeted._msg_tone_active && targeted._important_notify_generation==500);
+  targeted._ble_smart_notify_flags=UI_MSG_FLAG_DIRECT;
+  targeted._ble_smart_notify_generation=501;
+  assert(targeted.applyMessageAction(500,smartui::SyncAction::Snooze,900));
+  assert(!targeted._msg_tone_active && !targeted._important_notify_active &&
+         targeted._msg_tone_repeat_left==0 && targeted._msg_tone_next==0);
+  assert(targeted._ble_smart_notify_flags && targeted._ble_smart_notify_generation==501);
+  targeted.clearBleSmartNotify();
+  before=sounds(); tick(targeted,250000); assert(sounds()==before); ++checks;
+
   // millis wrap, including a next deadline that would equal the zero sentinel.
   for(uint32_t start : {uint32_t(0xffff0000),uint32_t(0U-120000U)}) {
     now=start; UITask wrap; fresh(wrap); wrap.startImportantNotify(UI_MSG_FLAG_DIRECT,206);
@@ -191,7 +233,7 @@ def main():
     source = UI.read_text(encoding="utf-8")
     loop = source[source.index("void UITask::loop()") :]
     assert loop.index("importantNotifyHandler();") < loop.index("if (_display != NULL && _display->isOn())")
-    assert "clearImportantNotify();" in loop[loop.index("if (c != 0 && curr)") : loop.index("userLedHandler();")]
+    assert "dismissCurrentMessageNotifications();" in loop[loop.index("if (c != 0 && curr)") : loop.index("userLedHandler();")]
     handler = function(source, "void UITask::importantNotifyHandler()")
     assert "_display" not in handler
     for board, env in BOARDS.items():

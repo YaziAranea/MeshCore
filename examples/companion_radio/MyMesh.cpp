@@ -436,6 +436,13 @@ bool MyMesh::Frame::isDisplayableDirectMsg() const {
 bool MyMesh::addToOfflineQueue(const uint8_t frame[], int len,
                                uint32_t ui_generation, uint8_t ui_flags) {
   if (frame == NULL || len <= 0 || len > MAX_FRAME_SIZE) return false;
+#if SMARTUI_CONNECTION_SELECTOR
+  // All transported frames get exact receipts. Only human messages enter
+  // the notification ledger; telemetry/CLI frames must not evict unread state.
+  if (ui_generation) noteSmartUiMessage(ui_generation, ui_flags);
+  else ui_generation = nextUiMessageGeneration();
+  if (!ui_generation) return false;  // never reuse an ID after counter exhaustion
+#endif
   if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {
     MESH_DEBUG_PRINTLN("WARN: offline_queue is full!");
     int pos = 0;
@@ -476,10 +483,28 @@ void MyMesh::commitOfflineQueue() {
 }
 
 uint32_t MyMesh::nextUiMessageGeneration() {
+  if (next_ui_message_generation == UINT32_MAX) return 0;
   ++next_ui_message_generation;
-  if (next_ui_message_generation == 0) ++next_ui_message_generation;
   return next_ui_message_generation;
 }
+
+#if SMARTUI_CONNECTION_SELECTOR
+int MyMesh::apiPeekOfflineFrame(uint8_t frame[], uint32_t& generation, uint8_t& flags) const {
+  return peekOfflineQueue(frame, generation, flags);
+}
+
+bool MyMesh::apiReceiveOfflineFrame(uint32_t generation) {
+  if (!generation) return false;
+  for (int index = 0; index < offline_queue_len; ++index) {
+    if (offline_queue[index].ui_generation != generation) continue;
+    --offline_queue_len;
+    for (int i = index; i < offline_queue_len; ++i) offline_queue[i] = offline_queue[i + 1];
+    // Receipt only: no messageTransferState legacy read heuristic here.
+    return true;
+  }
+  return false;
+}
+#endif
 
 void MyMesh::scheduleContactsSave() {
   if (!dirty_contacts.pending()) contacts_save_response_gate.clear();
@@ -930,11 +955,10 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
   memcpy(&out_frame[i], text, tlen);
   i += tlen;
 
-  bool should_display = false;
+  const bool should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   uint32_t ui_generation = 0;
-#ifdef DISPLAY_CLASS
+#if defined(DISPLAY_CLASS) || SMARTUI_CONNECTION_SELECTOR
   // CLI data remains available to the companion app but is not a UI event.
-  should_display = txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN;
   if (should_display) ui_generation = nextUiMessageGeneration();
 #endif
   const bool queued = addToOfflineQueue(
@@ -1066,11 +1090,10 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
   uint8_t ui_flags = textMentionsNodeName(mention_text, _prefs.node_name)
                          ? UI_MSG_FLAG_MENTION
                          : UI_MSG_FLAG_NONE;
-  const uint32_t ui_generation = nextUiMessageGeneration();
 #else
   const uint8_t ui_flags = UI_MSG_FLAG_NONE;
-  const uint32_t ui_generation = 0;
 #endif
+  const uint32_t ui_generation = nextUiMessageGeneration();
 
   const bool queued = addToOfflineQueue(out_frame, i, ui_generation, ui_flags);
 

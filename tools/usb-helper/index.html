@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
-  <title>SmartUI · USB помощник</title>
+  <title>SmartUI · Локальный центр управления</title>
   <style>
     :root { color-scheme: dark; --bg:#101722; --panel:#182230; --edge:#344355; --text:#edf2f7; --muted:#b0bfd0; --accent:#82dec8; --blue:#a9d0ff; --warn:#ffcf87; --error:#ffa9a9; }
     * { box-sizing:border-box; }
@@ -101,18 +101,63 @@
     @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
     @media(max-width:730px) { .settings-grid,.device-panel-wide #lights-settings { grid-template-columns:1fr; } .device-panel { padding:16px; } .section-heading { align-items:flex-start; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } }
     @media(max-width:730px) { main { padding:22px 16px 12px; } header { align-items:flex-start; flex-direction:column; gap:10px; } .grid { grid-template-columns:1fr; } .card { padding:20px; } }
+    :root { --bg:#0b111b; --panel:#131e2b; --edge:#2a3b4e; --accent:#8fe2cb; }
+    body { background:radial-gradient(ellipse at 80% 0,#16303a,transparent 48%),var(--bg); }
+    main { max-width:1440px; padding:32px 30px 24px 240px; }
+    header { margin-bottom:28px; align-items:flex-start; }
+    h1 { font-size:clamp(26px,3vw,36px); font-weight:650; }
+    .app-rail { position:fixed; top:0; bottom:0; left:max(0px,calc((100vw - 1440px)/2)); width:212px; padding:33px 18px; background:#101925; border-right:1px solid var(--edge); }
+    .rail-brand { font-size:23px; letter-spacing:-.6px; font-weight:750; margin:0 10px 4px; }
+    .rail-sub { color:var(--muted); font-size:12px; margin:0 10px 32px; }
+    .tool-nav { display:flex; flex-direction:column; gap:7px; }
+    .tool-nav a { border:0; border-radius:10px; background:transparent; padding:12px; }
+    .tool-nav a:hover,.tool-nav a[aria-current] { background:#233b47; color:var(--accent); }
+    .rail-foot { position:absolute; bottom:26px; padding:0 10px; color:var(--muted); font-size:12px; }
+    .transport-dock { display:grid; grid-template-columns:minmax(240px,1fr) auto; gap:16px; padding:20px 22px; margin:0 0 22px; border:1px solid #3f6268; border-radius:16px; background:linear-gradient(110deg,#1b303b,#142430); }
+    .transport-dock label { font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
+    .transport-dock select { width:100%; border-color:#537178; }
+    .transport-dock .buttons { margin:0; align-items:center; }
+    .transport-dock .state,.transport-dock .hint { grid-column:1/-1; margin:0; }
+    .transport-dock .state { font-size:14px; }
+    .connection-light { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:8px; }
+    .api-overview { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+    .stat-card { padding:20px; background:#111f2c; border:1px solid var(--edge); border-radius:12px; }
+    .stat-card dt { font-size:12px; }
+    .stat-card dd { font-size:25px; margin-top:8px; }
+    .stat-card small { color:var(--muted); font-size:12px; }
+    .api-workspace { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr); gap:18px; }
+    .inbox-list { display:grid; gap:12px; margin-top:20px; }
+    .message-card { background:#101d2a; padding:18px; border:1px solid #314857; border-radius:12px; }
+    .message-card[data-unread="true"] { border-left:3px solid var(--accent); }
+    .message-top { display:flex; justify-content:space-between; gap:14px; align-items:start; font-size:12px; color:var(--muted); }
+    .message-text { margin:12px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; }
+    .message-card .buttons button { font-size:13px; padding:7px 11px; min-height:44px; }
+    .empty-state { text-align:center; padding:35px 20px; border:1px dashed #395163; border-radius:12px; color:var(--muted); margin-top:18px; }
+    .empty-state strong { display:block; color:var(--text); font-size:18px; margin-bottom:7px; }
+    #api-events { list-style:none; padding:0; max-height:430px; overflow:auto; }
+    #api-events li { border-bottom:1px solid var(--edge); padding:10px 0; font-size:13px; }
+    .status-pill { font-size:12px; border:1px solid #46626a; border-radius:99px; padding:4px 8px; color:var(--accent); white-space:nowrap; }
+    #api-feedback { margin-bottom:18px; }
+    #api-settings-fields { display:grid; grid-template-columns:1fr 1fr; gap:0 25px; }
+    #api-command-result { white-space:pre-wrap; padding:14px; background:#0e1824; border-radius:8px; color:var(--muted); font-size:13px; }
+    #api-command { font-family:ui-monospace,Consolas,monospace; }
+    .privacy-note { border-top:1px solid var(--edge); padding-top:14px; color:var(--muted); font-size:12px; }
+    @media(min-width:1200px) { .grid { gap:20px; } }
+    @media(max-width:1000px) { main { padding-left:24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { flex-direction:row; flex-wrap:wrap; } .tool-nav a { background:#172733; } .api-workspace { grid-template-columns:1fr; } }
+    @media(max-width:730px) { main { padding:20px 15px; } .transport-dock { grid-template-columns:1fr; padding:17px; } .api-overview { grid-template-columns:1fr; } .stat-card { display:flex; align-items:center; justify-content:space-between; gap:12px; } .stat-card dd { font-size:22px; margin:0; } .stat-card small { display:none; } #api-settings-fields { grid-template-columns:1fr; } .tool-nav { gap:4px; } .tool-nav a { font-size:12px; padding:9px 11px; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">MESHCORE · SMARTUI</p><h1>Ваша нода. Ваши настройки.</h1><p class="subtitle">USB помощник — подключение, аккумулятор и уведомления.</p></div>
-    <div><span class="tag">Помощник 1.3 · SmartUI 0.08–0.10</span><p class="local-badge">Локально. Без аккаунта и облака.</p></div>
+    <div><p class="eyebrow">ВАША ЛОКАЛЬНАЯ СЕТЬ</p><h1>Нода под вашим контролем.</h1><p class="subtitle">Сообщения, уведомления и настройки — в одном месте.</p></div>
+    <div><span class="tag">Помощник 1.4 · SmartUI</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
-  <nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Подключение</a><a href="#device-section">Устройство</a><a href="#replies-section">Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a></nav>
+  <aside class="app-rail"><p class="rail-brand">SmartUI<span style="color:var(--accent)">.</span></p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#api-inbox" data-api-nav hidden>Сообщения</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство и радио</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#api-events-section" data-api-nav hidden>События</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
+  <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Сообщения и API (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
   <div class="notice"><strong>Перед подключением:</strong> нода должна работать в режиме <strong>Bluetooth или Wi-Fi</strong>. При наличии экрана выберите его в «Настройки → Подключение». Без экрана используйте вход ниже, если нода работает USB-компаньоном. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</div>
-  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.10 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
+  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.11 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   <div class="grid">
     <section id="connection-section" class="card" aria-labelledby="usb-title">
@@ -165,6 +210,7 @@
             <p id="adc-range" class="hint">Заводской множитель и границы появятся после чтения.</p>
             <label class="field" for="adc-measured">Напряжение мультиметра, В</label><input id="adc-measured" inputmode="decimal" type="text" autocomplete="off" placeholder="Например, 3,82" aria-describedby="adc-instructions" disabled>
             <p id="adc-instructions" class="hint">Измерьте напряжение непосредственно на аккумуляторе. Введите 2,500–4,500 В. Расчёт не меняет настройки.</p>
+            <p id="adc-source-warning" class="safety-note">ProMicro: при USB питание искажает замер АКБ. Запустите ноду от АКБ, дождитесь измерения, подключите USB без перезапуска и рассчитайте поправку в течение 2 минут. Прошивка использует сохранённый опорный замер, а не текущее напряжение USB.</p>
             <div class="buttons"><button id="adc-preview" disabled>Рассчитать поправку</button></div>
             <div id="adc-preview-box" class="preview-box" hidden><p id="adc-preview-result" role="status"></p><div class="buttons"><button id="adc-apply" class="primary" disabled>Сохранить калибровку</button></div><p class="hint">Расчёт действует до 60 секунд. Изменение другой настройки отменяет его.</p></div>
             <div class="buttons"><button id="adc-reset" disabled>Заводская калибровка ADC</button></div>
@@ -197,9 +243,9 @@
       <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
       <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
-      <p class="hint">При выборе USB-компаньона помощник перестанет работать: порт займёт приложение. Для возврата выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.10.</p>
+      <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Сообщения и API (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.11.</p>
       <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
-      <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Помощник только настраивает соединение; это не чат и не веб-флешер.</p></details>
+      <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Этот офлайн-помощник подключается только по USB, не по TCP, и не прошивает устройство.</p></details>
       <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>
       <details><summary>Служебные события и удаление сети</summary><p class="hint">Только понятные сообщения помощника. Пароли, имя сети и сырой вывод порта сюда не записываются.</p><ul id="events" aria-label="Журнал событий"></ul><div class="buttons"><button id="clear-events">Очистить журнал</button><button id="forget" class="danger" disabled>Удалить сеть с ноды</button></div></details>
     </section>
@@ -214,7 +260,13 @@
 /* SMARTUI_HELPER_FIRMWARE */
 </script>
 <script>
+/* SMARTUI_HELPER_API */
+</script>
+<script>
 /* SMARTUI_HELPER_APP */
+</script>
+<script>
+/* SMARTUI_HELPER_DASHBOARD */
 </script>
 </body>
 </html>

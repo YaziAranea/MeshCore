@@ -37,4 +37,40 @@ inline uint16_t saturatingBatteryMilliVolts(float millivolts) {
   return static_cast<uint16_t>(millivolts + 0.5f);
 }
 
+// Remembers a reading made before a transport changes the board's power path.
+// Unsigned subtraction intentionally keeps age correct across millis() wrap.
+class BatteryCalibrationSampleCache {
+  uint16_t _millivolts = 0;
+  float _multiplier = 0.0f;
+  uint32_t _sampled_at = 0;
+  bool _valid = false;
+
+public:
+  void capture(uint16_t millivolts, float multiplier, uint32_t sampled_at,
+               bool source_disturbed) {
+    if (source_disturbed || millivolts == 0 || !isfinite(multiplier) ||
+        multiplier <= 0.0f) return;
+    _millivolts = millivolts;
+    _multiplier = multiplier;
+    _sampled_at = sampled_at;
+    _valid = true;
+  }
+
+  void invalidate() {
+    _millivolts = 0;
+    _multiplier = 0.0f;
+    _sampled_at = 0;
+    _valid = false;
+  }
+
+  bool read(uint32_t now, uint16_t& millivolts, float& multiplier,
+            uint32_t& age_ms) const {
+    if (!_valid) return false;
+    millivolts = _millivolts;
+    multiplier = _multiplier;
+    age_ms = static_cast<uint32_t>(now - _sampled_at);
+    return true;
+  }
+};
+
 } // namespace mesh

@@ -138,6 +138,9 @@ class UITask : public AbstractUITask {
   uint8_t _low_batt_strikes;
   uint16_t _low_batt_threshold;
   mutable smartui::BatteryDisplayCache _battery_display;
+  mutable uint16_t _battery_sample_mv = 0;
+  mutable uint32_t _battery_sampled_at = 0;
+  mutable bool _battery_sample_valid = false;
   uint32_t next_backlight_btn_check = 0;
 #ifdef PIN_STATUS_LED
   int led_state = 0;
@@ -356,6 +359,12 @@ public:
   void showUnreadMessages();
   void dismissMessageNotification(uint32_t generation);
   void localMessageRead(uint32_t generation);
+  void localMessageDismiss(uint32_t generation);
+  void dismissCurrentMessageNotifications();
+  bool localMessageSnooze(uint32_t generation, uint32_t seconds);
+  bool applyMessageAction(uint32_t generation, smartui::SyncAction action,
+                          uint32_t snooze_seconds = 0) override;
+  bool canSnoozeMessage(uint32_t generation) const;
   void showAlert(const char* text, int duration_millis);
   int  getMsgCount() const { return _msgcount; }
   const char* getNodeName() const {
@@ -394,6 +403,9 @@ public:
   uint8_t getImportantNotifyMode() const;
   const char* getImportantNotifyModeName() const;
   bool hasImportantNotifyActive() const { return _important_notify_active; }
+  uint32_t notificationGeneration() const {
+    return _important_notify_active ? _important_notify_generation : _ble_smart_notify_generation;
+  }
   bool areNotificationsMuted() const { return _node_prefs != NULL && _node_prefs->notifications_muted != 0; }
   void toggleNotificationsMuted();
   void cycleImportantNotifyMode();
@@ -483,6 +495,7 @@ public:
   uint16_t getAdcPreviewMilliVolts(float draft_multiplier) const;
   bool setAdcMultiplier(float multiplier, bool save);
   uint16_t getBattMilliVolts() const override;
+  bool peekBatterySample(uint16_t& millivolts, uint32_t& sampled_at) const;
   uint64_t getUptimeSeconds() const { return _uptime_accumulated_ms / 1000ULL; }
   bool hasTrustedTime() const;
   int16_t getTimezoneOffsetMinutes() const;

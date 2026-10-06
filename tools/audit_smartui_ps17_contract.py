@@ -281,8 +281,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.10" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.10 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.11" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.11 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -1120,7 +1120,7 @@ check(
             for interval in re.findall(r"UI_BATTERY_SAMPLE_MILLIS=(\d+)", block))
     and has_all(
         between(uitask, "uint16_t UITask::getBattMilliVolts() const", "smartui::BatteryReading UITask::readSafetyBattery"),
-        ("_battery_display.read((uint32_t)millis(), UI_BATTERY_SAMPLE_MILLIS,",
+        ("_battery_display.read(now, UI_BATTERY_SAMPLE_MILLIS,",
          "_board ? _board->getBattMilliVolts() : 0"),
     )
     and "invalidateBatteryCache();" in wake_block
@@ -1325,9 +1325,10 @@ check(
             "uint32_t preview_id;",
             "MsgEntry opened_entry = {};",
             "opened_entry = unread[unreadIndexFromNewest(selectedOffset())];",
-            "removePreviewById(opened_entry.preview_id);",
+            "bool applyActionByGeneration(uint32_t generation, smartui::SyncAction action,",
+            "return removePreviewById(id);",
             "_task->localMessageRead(opened_entry.generation);",
-            "_task->dismissMessageNotification(opened_entry.generation);",
+            "_task->localMessageSnooze(opened_entry.generation, 15UL * 60UL)",
             "_task->replyToIncomingMessage(opened_entry.sender_id, opened_entry.sender_id_len, opened_entry.sender)",
             '"Напомнить 15м"',
             "drawFittedUnreadText",
@@ -1496,7 +1497,7 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.10")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.11")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(
