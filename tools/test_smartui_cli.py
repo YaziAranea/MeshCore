@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+"""Run production local CMD66 framing and MyMesh routing on the host."""
+from pathlib import Path
+import os
+import shutil
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def scope(source, signature):
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth, end = 1, brace + 1
+    while depth:
+        depth += (source[end] == "{") - (source[end] == "}")
+        end += 1
+    return source[start:end]
+
+
+def integration():
+    source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    header = (ROOT / "examples/companion_radio/MyMesh.h").read_text(encoding="utf-8")
+    main_source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
+    assert "#define FIRMWARE_VER_CODE 13" in header
+    assert 'vars.append("smartui_cli", "1")' in source
+    assert 'vars.append("smartui_api"' not in source
+    assert "handleSmartUiApiFrame(" not in source
+    assert "onCLICommandRecv(" not in source  # Remote execution was not backported.
+    # The archived command-201 implementation may remain as inactive source,
+    # but it must never regain a router, runtime ledger or UI callback in the
+    # production entry point. Local unread/reminder state belongs to UITask.
+    for archived_runtime in (
+        '#include "SmartUiApi.h"', '#include "SmartUiSyncApi.h"',
+        "static smartui::SmartUiApi", "static smartui::SmartUiSyncApi",
+        "static smartui::SmartUiSync smartui_sync", "executeSmartUiApi(",
+        "handleSmartUiApiFrame(", "noteSmartUiMessage(",
+        "serviceSmartUiSync(", "setSyncActionCallback(",
+    ):
+        assert archived_runtime not in main_source, archived_runtime
+    dispatch = scope(source, "void MyMesh::handleCmdFrame(")
+    dispatch = dispatch[:dispatch.index("\n  if (cmd_frame[0] == CMD_DEVICE_QUERY")]
+    dispatch += "\n  writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);\n}\n"
+    return r'''
+#include "SmartUiCli.h"
+#include "CompanionFrameValidation.h"
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+#define SMARTUI_CONNECTION_SELECTOR 1
+#define SMARTUI_VERSION "0.12"
+#define FIRMWARE_VERSION "v1.17.1"
+#define MAX_FRAME_SIZE 176
+#define PUB_KEY_SIZE 32
+#define MAX_PATH_SIZE 64
+#define MAX_PACKET_PAYLOAD 172
+#define ERR_CODE_ILLEGAL_ARG 6
+#define ERR_CODE_UNSUPPORTED_CMD 1
+#define MESH_DEBUG_PRINTLN(...) do {} while (0)
+static unsigned backend_calls;
+static std::string backend_reply = "OK", last_command;
+static bool backend_handled = true;
+bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
+  ++backend_calls; last_command = command;
+  snprintf(reply, capacity, "%s", backend_reply.c_str()); return backend_handled;
+}
+struct Board {
+  std::string name = "Test board";
+  const char* getManufacturerName() { return name.c_str(); }
+} board;
+struct Connection { unsigned arms = 0; void apiReplyQueued() { ++arms; } } connection_controller;
+struct Serial {
+  size_t accepted = static_cast<size_t>(-1);
+  std::vector<uint8_t> output;
+  size_t writeFrame(const uint8_t* bytes, size_t length) {
+    output.assign(bytes, bytes + length);
+    return accepted == static_cast<size_t>(-1) ? length : accepted;
+  }
+};
+struct MyMesh {
+  struct Prefs { char node_name[32] = "Node"; float freq = 869.161f, bw = 62.5f; uint8_t sf = 7, cr = 7; } _prefs;
+  uint8_t cmd_frame[177] = {}, out_frame[177] = {};
+  smartui::SmartUiCli _local_cli;
+  Serial* _serial;
+  explicit MyMesh(Serial* serial) : _serial(serial) {}
+  static bool executeLocalCli(void*, const char*, char*, size_t);
+  void handleLocalCliFrame(size_t);
+  void handleCmdFrame(size_t);
+  void writeErrFrame(uint8_t code) { const uint8_t frame[] = {1, code}; _serial->writeFrame(frame, 2); }
+};
+''' + "\n".join((scope(source, "bool MyMesh::executeLocalCli("),
+                    scope(source, "void MyMesh::handleLocalCliFrame("), dispatch)) + r'''
+static std::string send(MyMesh& mesh, Serial& serial, const std::string& command) {
+  assert(command.size() <= 175);
+  mesh.cmd_frame[0] = 66;
+  memcpy(mesh.cmd_frame + 1, command.data(), command.size());
+  mesh.handleCmdFrame(command.size() + 1);
+  assert(!serial.output.empty());
+  return std::string(serial.output.begin() + 1, serial.output.end());
+}
+int main() {
+  Serial serial; MyMesh mesh(&serial);
+  assert(send(mesh, serial, "board") == "Test board");
+  assert(send(mesh, serial, "AB|ver") == "AB|SmartUI 0.12; firmware=v1.17.1");
+  assert(send(mesh, serial, "get radio") == "> 869.161,62.500,7,7");
+  strcpy(mesh._prefs.node_name, "\xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
+  assert(send(mesh, serial, "get name") == "> \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
+  board.name = std::string(170, 'b');
+  assert(send(mesh, serial, "board") == "Error: response too long");
+  for (const char* command : {"erase", "rebuild", "set radio 869.161,62.5,7,7", "rm /prefs.json", "ui-extra", "ls"}) {
+    assert(send(mesh, serial, command) == "Unknown command");
+    assert(serial.output[0] == 29);
+  }
+  assert(backend_calls == 0);
+  assert(send(mesh, serial, "AA|ui caps") == "AA|OK");
+  assert(backend_calls == 1 && last_command == "ui caps");
+  backend_reply = "OK ui mode target=usb state=pending";
+  serial.accepted = 0;
+  send(mesh, serial, "AA|ui mode usb");
+  assert(connection_controller.arms == 0);
+  serial.accepted = 1;
+  send(mesh, serial, "AA|ui mode usb");
+  assert(connection_controller.arms == 0);
+  serial.accepted = static_cast<size_t>(-1);
+  send(mesh, serial, "ui wifi status");
+  assert(connection_controller.arms == 0);
+  send(mesh, serial, "AA|ui mode usb");
+  assert(connection_controller.arms == 1);
+  backend_reply = "ERR ui readonly";
+  send(mesh, serial, "ui mode usb");
+  assert(connection_controller.arms == 1);
+  const auto calls = backend_calls;
+  send(mesh, serial, std::string(160, 'x'));
+  assert((serial.output == std::vector<uint8_t>{1, 6}) && backend_calls == calls);
+  send(mesh, serial, std::string("ui\0caps", 7));
+  assert(serial.output[0] == 29 && backend_calls == calls);
+  mesh.cmd_frame[0] = 201; mesh.cmd_frame[1] = 'S';
+  mesh.handleCmdFrame(2);
+  assert((serial.output == std::vector<uint8_t>{1, 1}) && backend_calls == calls);
+  assert(connection_controller.arms == 1);
+  puts("PASS production MyMesh CLI read-only standards, namespace isolation, archive rejection and exact response-queue mode gate");
+}
+'''
+
+
+def main_dispatch_integration():
+    source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
+    body = "\n".join(scope(source, signature) for signature in (
+        "bool executeSmartUiCliCommand(", "void resetSmartUiCliSession("))
+    return r'''
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#define SMARTUI_VERSION "0.12"
+static unsigned controller_calls, controller_resets, backend_calls, backend_resets;
+static bool backend_allowed, backend_handled = true;
+static std::string last_command;
+struct Controller {
+  bool writable = true, busy = false;
+  bool deviceApiWritesAllowed() const { return writable; }
+  bool deviceApiBusy() const { return busy; }
+  bool handleCliCommand(const char* command, char* reply, size_t capacity, bool allowed) {
+    ++controller_calls;
+    if (strcmp(command, "ui connection") != 0) return false;
+    snprintf(reply, capacity, "OK ui connection write=%u", allowed ? 1U : 0U);
+    return true;
+  }
+  void resetApiSession() { ++controller_resets; }
+} connection_controller;
+struct Mesh {
+  bool pending = false;
+  bool hasPendingWork() const { return pending; }
+} the_mesh;
+struct Radio {
+  bool receiving = false, recv = true;
+  bool isReceiving() const { return receiving; }
+  bool isInRecvMode() const { return recv; }
+} radio_driver;
+namespace smartui {
+struct DeviceSettings { void resetSession() { ++backend_resets; } };
+bool handleSmartUiSettingsCli(DeviceSettings&, const char* command, char* reply,
+                              size_t capacity, bool allowed) {
+  ++backend_calls; backend_allowed = allowed; last_command = command;
+  if (backend_handled) snprintf(reply, capacity, "OK ui backend");
+  return backend_handled;
+}
+}
+static smartui::DeviceSettings cli_device_settings;
+''' + body + r'''
+static std::string call(const char* command, bool expected_handled = true) {
+  char reply[157] = {};
+  const bool handled = executeSmartUiCliCommand(command, reply, sizeof(reply));
+  assert(handled == expected_handled);
+  return reply;
+}
+static void fresh() {
+  connection_controller = Controller{}; the_mesh = Mesh{}; radio_driver = Radio{};
+  controller_calls = backend_calls = 0; backend_allowed = false;
+  backend_handled = true; last_command.clear();
+}
+int main() {
+  fresh(); connection_controller.writable = false;
+  assert(call("ui hello").find("write=0 sync=0 events=0") != std::string::npos);
+  assert(controller_calls == 0 && backend_calls == 0);
+  assert(call("ui connection") == "OK ui connection write=0");
+  assert(controller_calls == 1 && backend_calls == 0);
+
+  connection_controller.busy = true;
+  for (const char* command : {"ui caps v", "ui get battery_mv", "ui melody 0"}) {
+    assert(call(command) == "OK ui backend");
+    assert(last_command == command && !backend_allowed);
+  }
+  const unsigned reads = backend_calls;
+  assert(call("ui set volume 2") == "ERR ui busy" && backend_calls == reads);
+  assert(call("ui adc preview 3320") == "ERR ui busy" && backend_calls == reads);
+  assert(call("ui test") == "ERR ui busy" && backend_calls == reads);
+  connection_controller.busy = false;
+  assert(call("ui set volume 2") == "ERR ui readonly" && backend_calls == reads);
+
+  connection_controller.writable = true;
+  assert(call("ui test") == "OK ui backend" && backend_allowed);
+  const unsigned before_fem = backend_calls;
+  the_mesh.pending = true;
+  assert(call("ui set fem_lna 1") == "ERR ui busy" && backend_calls == before_fem);
+  the_mesh.pending = false; radio_driver.receiving = true;
+  assert(call("ui set fem_pa 1") == "ERR ui busy" && backend_calls == before_fem);
+  radio_driver.receiving = false; radio_driver.recv = false;
+  assert(call("ui set fem_lna 0") == "ERR ui busy" && backend_calls == before_fem);
+  radio_driver.recv = true;
+  assert(call("ui set fem_lna 1") == "OK ui backend" && backend_calls == before_fem + 1);
+
+  backend_handled = false;
+  call("ui unknown", false);
+  const unsigned old_backend_resets = backend_resets, old_controller_resets = controller_resets;
+  resetSmartUiCliSession();
+  assert(backend_resets == old_backend_resets + 1 &&
+         controller_resets == old_controller_resets + 1);
+  puts("PASS production main CMD66 dispatcher permissions, busy/FEM gates and session reset");
+}
+'''
+
+
+def queue_integration():
+    source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    queue = scope(source, "bool MyMesh::addToOfflineQueue(")
+    assert "noteSmartUiMessage" not in queue
+    return r'''
+#include <helpers/OfflineQueueSync.h>
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#define SMARTUI_CONNECTION_SELECTOR 1
+#define MAX_FRAME_SIZE 176
+#define OFFLINE_QUEUE_SIZE 8
+#define MESH_DEBUG_PRINTLN(...) do {} while (0)
+struct MyMesh {
+  struct Frame {
+    uint8_t len=0, buf[176]={}; uint32_t ui_generation=0; uint8_t ui_flags=0;
+    bool isChannelMsg() const { return buf[0] == 8; }
+  };
+  uint32_t before=0xfeedface;
+  Frame offline_queue[8];
+  uint32_t after=0xaabbccdd;
+  int offline_queue_len=0;
+  uint32_t next_ui_message_generation=0;
+  bool addToOfflineQueue(const uint8_t[], int, uint32_t=0, uint8_t=0);
+  int peekOfflineQueue(uint8_t[], uint32_t&, uint8_t&) const;
+  void commitOfflineQueue();
+  uint32_t nextUiMessageGeneration();
+};
+''' + "\n".join((queue, *(scope(source, signature) for signature in (
+        "int MyMesh::peekOfflineQueue(", "void MyMesh::commitOfflineQueue(",
+        "uint32_t MyMesh::nextUiMessageGeneration(")))) + r'''
+int main() {
+  MyMesh mesh; uint8_t frame[176]={7, 1, 2};
+  assert(!mesh.addToOfflineQueue(nullptr, 3));
+  assert(!mesh.addToOfflineQueue(frame, 0) && !mesh.addToOfflineQueue(frame, 177));
+  assert(mesh.next_ui_message_generation == 0);
+  auto id = mesh.nextUiMessageGeneration();
+  assert(mesh.addToOfflineQueue(frame, 176, id, 1));
+  assert(mesh.addToOfflineQueue(frame, 3));
+  assert(mesh.offline_queue[0].ui_generation == 1 && mesh.offline_queue[1].ui_generation == 2);
+  uint8_t output[178]; memset(output, 0xa5, sizeof(output)); uint32_t generation=0; uint8_t flags=0;
+  assert(mesh.peekOfflineQueue(output+1, generation, flags)==176 && generation==1 && flags==1);
+  assert(output[0]==0xa5 && output[177]==0xa5 && !memcmp(output+1, frame, 176));
+  assert(mesh.offline_queue_len==2);
+  mesh.commitOfflineQueue();
+  assert(mesh.peekOfflineQueue(output+1, generation, flags)==3 && generation==2 && flags==0);
+  mesh.commitOfflineQueue();
+  assert(mesh.peekOfflineQueue(output+1, generation, flags)==0 && generation==0 && flags==0);
+  for (unsigned i=0; i<8; ++i) assert(mesh.addToOfflineQueue(frame, 3));
+  assert(!mesh.addToOfflineQueue(frame, 3) && mesh.offline_queue_len==8);
+  const auto oldest=mesh.offline_queue[0].ui_generation;
+  mesh.offline_queue[3].buf[0]=8;
+  assert(mesh.addToOfflineQueue(frame, 3));
+  assert(mesh.offline_queue_len==8 && mesh.offline_queue[0].ui_generation==oldest);
+  assert(mesh.offline_queue[7].ui_generation==mesh.next_ui_message_generation);
+  mesh.next_ui_message_generation=UINT32_MAX;
+  assert(!mesh.addToOfflineQueue(frame, 3) && mesh.offline_queue_len==8);
+  assert(mesh.before==0xfeedface && mesh.after==0xaabbccdd);
+  puts("PASS production local UI/offline queue generations without archived API side effects");
+}
+'''
+
+
+def main():
+    with tempfile.TemporaryDirectory(prefix="smartui-cli-") as directory:
+        adapter = Path(directory) / "cli_integration.cpp"
+        adapter.write_text(integration(), encoding="utf-8")
+        main_adapter = Path(directory) / "cli_main_dispatch.cpp"
+        main_adapter.write_text(main_dispatch_integration(), encoding="utf-8")
+        queue = Path(directory) / "cli_queue.cpp"
+        queue.write_text(queue_integration(), encoding="utf-8")
+        compiler = shutil.which("g++") or shutil.which("clang++")
+        flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1"]
+        if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
+            flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
+        include = ROOT / "examples/companion_radio"
+        for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue):
+            output = Path(directory) / suite.stem
+            paths = [suite, include / "SmartUiCli.cpp"]
+            if compiler:
+                build = [compiler, *flags, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]
+                execute = [str(output)]
+            elif os.name == "nt":
+                def linux(path):
+                    return subprocess.check_output(["wsl", "--exec", "wslpath", "-a", str(path)], text=True).strip()
+                build = ["wsl", "--exec", "g++", *flags, "-I" + linux(include), "-I" + linux(ROOT / "src"), *map(linux, paths), "-o", linux(output)]
+                execute = ["wsl", "--exec", linux(output)]
+            else:
+                raise RuntimeError("Host C++ compiler required; no skipped test success")
+            subprocess.run(build, check=True)
+            subprocess.run(execute, check=True)
+
+
+if __name__ == "__main__":
+    main()

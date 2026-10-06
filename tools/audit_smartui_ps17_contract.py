@@ -114,6 +114,8 @@ rtc_sources = (
     + read("src/helpers/BaseChatMesh.cpp")
 )
 frame_validation = read("examples/companion_radio/CompanionFrameValidation.h")
+cli_header = read("examples/companion_radio/SmartUiCli.h")
+cli_router = read("examples/companion_radio/SmartUiCli.cpp")
 channel_busy_policy = read("examples/companion_radio/ChannelBusyPolicy.h")
 native_policy_tests = (
     read("test/test_ui_runtime_policy/test_ui_runtime_policy.cpp")
@@ -280,9 +282,9 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 
 for name, block in effective.items():
     check(
-        f"{name}: DM-only profile and development marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.11" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.11 marker",
+        f"{name}: DM-only profile and public release marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.12" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.12 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -958,6 +960,31 @@ check(
 )
 
 check(
+    "Local Companion CLI backport retains protocol 13 and rejects archived C9",
+    '#define FIRMWARE_VER_CODE 13' in mymesh_h
+    and 'vars.append("smartui_cli", "1")' in mymesh
+    and 'vars.append("smartui_api"' not in mymesh
+    and 'if (cmd_frame[0] == 201)' in companion_handler
+    and 'writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);' in companion_handler
+    and 'handleLocalCliFrame(len);' in companion_handler
+    and 'handleSmartUiApiFrame(' not in mymesh
+    and 'onCLICommandRecv(' not in mymesh,
+    "CMD66 is a local-only backport, not full v14/remote CLI or a second active C9 control protocol",
+)
+
+check(
+    "Local CLI framing is bounded, prefix-correlated and mode-response gated",
+    has_all(cli_header, ('COMMAND = 66', 'RESPONSE = 29', 'MAX_FRAME = 160',
+                         'MAX_COMMAND = 156', 'MAX_REPLY = 156'))
+    and has_all(cli_router, ('Error: invalid command', 'Error: invalid prefix',
+                            'validReplyText', 'resetSession();',
+                            'OK ui mode target=%s state=pending'))
+    and 'if (arm_mode && queued == reply_length)' in mymesh
+    and 'resetSmartUiCliSession();' in mymesh,
+    "malformed requests cannot execute, replies fit the transport, and only the exact queued mode response arms a switch",
+)
+
+check(
     "Channel-busy accounting is sampled, wrap-safe and rebased after sleep gaps",
     has_all(
         channel_busy_policy + mymesh,
@@ -1497,7 +1524,7 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.11")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.12")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(
@@ -1527,7 +1554,7 @@ check(
 
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"Smart UI 2.1 five-board baseline + V3 addon contract audit: {passed} passed, {failed} failed")
+print(f"SmartUI 0.12 six-board contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:

@@ -8,20 +8,20 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.11"
+VERSION = "0.12"
 ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}.zip"
 DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
     "LICENSE",
-    "docs/SMARTUI_API_EN.md",
-    "docs/SMARTUI_API_RU.md",
-    "tools/smartui-api/README.md",
-    "tools/smartui-api/inspect_device.py",
-    "tools/smartui-api/ecosystem.py",
-    "tools/smartui-api/smartui_api.py",
-    "tools/smartui-api/transports.py",
-    "tools/smartui-api/tests/test_smartui_api.py",
-    "tools/smartui-api/tests/test_ecosystem.py",
+    "docs/SMARTUI_CLI_RU.md",
+    "tools/smartui-cli/README.md",
+    "tools/smartui-cli/inspect_device.py",
+    "tools/smartui-cli/smartui_cli.py",
+    "tools/smartui-cli/transports.py",
+    "tools/smartui-cli/tests/test_smartui_cli.py",
+    "tools/usb-helper/api.js",
+    "tools/usb-helper/test_api.js",
+    "tools/usb-helper/test_api_fixture.js",
 )
 MANIFEST_NAME = "DEVELOPER-KIT-MANIFEST.json"
 
@@ -64,32 +64,33 @@ def package(output, commit, *, root=ROOT, development=False):
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 1.4"
+    helper = "USB Helper 1.5"
     payloads["README.md"] = (
         title + notice +
-        "[Русская инструкция](docs/SMARTUI_API_RU.md) · "
-        "[English protocol guide](docs/SMARTUI_API_EN.md) · "
-        "[Python SDK](tools/smartui-api/README.md)\n\n"
+        "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "
+        "[Python и JavaScript SDK](tools/smartui-cli/README.md)\n\n"
         "Это исходники SDK, документация и тесты, не прошивка устройства. "
         f"Для обычной настройки используйте {helper}. "
-        "Поддержку API проверяйте через discovery, не только по номеру прошивки.\n\n"
+        "Проверяйте smartui_cli:1 и ui hello. CMD66/RESP29; старый API201 и sync/events не поддерживаются.\n\n"
         "The source kit does not install dependencies or connect to a device automatically. "
         "Read the transport/security limits before connecting. "
         "Tests use simulated transports, not physical-device acceptance.\n\n"
         "Run from this extracted directory:\n\n"
-        "```sh\npython -B -m unittest discover -s tools/smartui-api/tests -v\n```\n"
+        "```sh\npython -B -m unittest discover -s tools/smartui-cli/tests -v\n```\n"
     ).encode("utf-8")
     if development:
         manifest = {
             "schema_version": 2, "stage": "development", "distribution": "local",
-            "api_version": 1, "base_firmware_version": VERSION, "base_source_commit": commit,
+            "cli_version": 1, "base_firmware_version": VERSION, "base_source_commit": commit,
             "source_snapshot": "working-tree", "exact_source_commit": False,
         }
     else:
         manifest = {
-            "schema_version": 1, "firmware_version": VERSION, "api_version": 1,
+            "schema_version": 1, "firmware_version": VERSION, "cli_version": 1,
             "source_commit": commit, "distribution": "public", "stage": "release",
         }
+    manifest.update(transport="companion-cli", command=66, response=29,
+                    companion_protocol_version=13, local_only=True, sync=False, events=False)
     manifest["files"] = [{"name": name, "bytes": len(raw), "sha256": digest(raw)}
                          for name, raw in sorted(payloads.items())]
     payloads[MANIFEST_NAME] = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")

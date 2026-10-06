@@ -12,7 +12,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="smartui-settings-") as directory:
         output = Path(directory) / "device_settings_test"
         paths = [ROOT / "tools/device_settings_test.cpp",
-                 ROOT / "examples/companion_radio/DeviceSettings.cpp"]
+                 ROOT / "examples/companion_radio/DeviceSettings.cpp",
+                 ROOT / "examples/companion_radio/SmartUiCliSettings.cpp"]
         includes = [ROOT / "src", ROOT / "examples/companion_radio"]
         compiler = shutil.which("g++") or shutil.which("clang++")
         if compiler:

@@ -1,4 +1,5 @@
 #include "DeviceSettings.h"
+#include "SmartUiCliSettings.h"
 #include <helpers/AdcCalibration.h>
 #include <cassert>
 #include <cmath>
@@ -105,6 +106,24 @@ static std::string command(const char* text, bool allowed = true) {
   CHECK(memchr(output.reply, 0, sizeof(output.reply)) != nullptr);
   CHECK(memcmp(output.guard, "!!!!!!!!", sizeof(output.guard)) == 0);
   for (const unsigned char* p = reinterpret_cast<const unsigned char*>(output.reply); *p; ++p)
+    CHECK(*p >= 0x20 && *p <= 0x7e);
+  return output.reply;
+}
+static std::string cliCommand(const char* text, bool allowed = true) {
+  struct {
+    char reply[SMARTUI_CLI_TEXT_MAX + 1];
+    char guard[8];
+  } output;
+  memset(&output, '!', sizeof(output));
+  CHECK(handleSmartUiSettingsCli(service, text, output.reply,
+                                 sizeof(output.reply), allowed));
+  const char* end = static_cast<const char*>(
+      memchr(output.reply, 0, sizeof(output.reply)));
+  CHECK(end != nullptr);
+  CHECK(static_cast<size_t>(end - output.reply) <= SMARTUI_CLI_TEXT_MAX);
+  CHECK(memcmp(output.guard, "!!!!!!!!", sizeof(output.guard)) == 0);
+  for (const unsigned char* p =
+           reinterpret_cast<const unsigned char*>(output.reply); *p; ++p)
     CHECK(*p >= 0x20 && *p <= 0x7e);
   return output.reply;
 }
@@ -446,6 +465,95 @@ int main() {
   token = preview();
   CHECK(command("api set fem_lna 1") == "OK api set key=fem_lna value=1");
   CHECK(applyToken(token) == "ERR settings stale");
+
+  // CMD66-facing UI facade exposes one bounded field at a time while keeping
+  // the existing transaction, capability and ADC-source guarantees.
+  fresh(4.9f);
+  CHECK(cliCommand("ui caps v") == "OK ui caps key=v value=1");
+  CHECK(cliCommand("ui caps fem_lna") == "OK ui caps key=fem_lna value=1");
+  CHECK(cliCommand("ui caps adc_min") == "OK ui caps key=adc_min value=3.675000");
+  CHECK(cliCommand("ui get battery_mv") == "OK ui get key=battery_mv value=4000");
+  CHECK(cliCommand("ui get fem_lna") == "OK ui get key=fem_lna value=0");
+  CHECK(saves == 0 && applies == 0);
+  CHECK(cliCommand("ui caps") == "ERR ui invalid");
+  CHECK(cliCommand("ui caps unknown") == "ERR ui invalid");
+  CHECK(cliCommand("ui get unknown") == "ERR ui invalid");
+  CHECK(cliCommand("ui get battery_mv extra") == "ERR ui invalid");
+  CHECK(cliCommand("ui set unknown 1") == "ERR ui invalid");
+  CHECK(cliCommand("ui set fem_lna -1") == "ERR ui invalid");
+  CHECK(cliCommand("ui set fem_lna 1 extra") == "ERR ui invalid");
+  CHECK(saves == 0 && applies == 0);
+
+  save_ok = false;
+  CHECK(cliCommand("ui set fem_lna 1") == "ERR ui storage");
+  CHECK(state.fem_lna == 0 && persisted.fem_lna == 0 && applies == 0);
+  save_ok = true;
+  CHECK(cliCommand("ui set fem_lna 1", false) == "ERR ui readonly");
+  CHECK(state.fem_lna == 0 && saves == 1 && applies == 0);
+  CHECK(cliCommand("ui set fem_lna 1") == "OK ui set key=fem_lna value=1");
+  CHECK(state.fem_lna == 1 && persisted.fem_lna == 1 && applies == 1);
+  caps.fem_lna = false;
+  CHECK(cliCommand("ui set fem_lna 0") == "ERR ui unsupported");
+  CHECK(state.fem_lna == 1);
+  CHECK(cliCommand("ui test", false) == "ERR ui readonly");
+  CHECK(tests == 0);
+  CHECK(cliCommand("ui test") == "OK ui test");
+  CHECK(tests == 1);
+  CHECK(cliCommand("ui test now") == "ERR ui invalid");
+
+  fresh(1.815f); calibration_source_enabled = calibration_source_valid = true;
+  multiplier = state.adc_override = 1.97f;
+  calibration_battery = 3100; calibration_multiplier = multiplier;
+  calibration_age_ms = 0; battery = 4400;
+  {
+    DeviceSettingsHooks hooks;
+    hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
+    hooks.caps = capabilities; hooks.batteryMilliVolts = readBattery;
+    hooks.batteryCalibrationSample = readCalibrationBattery;
+    hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
+    hooks.melodyName = melodyName;
+    service = DeviceSettings{}; service.begin(hooks);
+  }
+  const std::string cli_preview = cliCommand("ui adc preview 3320");
+  unsigned long cli_token = 0;
+  CHECK(sscanf(cli_preview.c_str(),
+      "OK ui adc_preview token=%lu sampled_mv=3100 measured_mv=3320 multiplier=2.109806",
+      &cli_token) == 1);
+  CHECK(cli_token != 0 && saves == 0 && applies == 0);
+  CHECK(cliCommand(("ui adc apply " + std::to_string(cli_token)).c_str(), false) ==
+        "ERR ui readonly");
+  CHECK(cliCommand(("ui adc apply " + std::to_string(cli_token)).c_str()) ==
+        "OK ui adc_apply");
+  CHECK(saves == 1 && applies == 1);
+  CHECK(cliCommand("ui adc reset") == "OK ui adc_reset");
+  calibration_source_valid = false;
+  CHECK(cliCommand("ui adc preview 3320") == "ERR ui source");
+  for (const char* invalid : {"ui adc preview", "ui adc preview -1",
+                              "ui adc apply 1 2", "ui adc reset 1",
+                              "ui melody -1", "ui melody 0 1"})
+    CHECK(cliCommand(invalid) == "ERR ui invalid");
+
+  fresh();
+  CHECK(cliCommand("ui melody 0") ==
+        "OK ui melody id=0 name_hex=5465737420746f6e65");
+  const std::string maximum_cli_name(DeviceSettings::MELODY_NAME_MAX, 'A');
+  melody_name = maximum_cli_name.c_str();
+  CHECK(cliCommand("ui melody 1").size() == 155);
+  char short_reply[32];
+  const auto before_short = state;
+  CHECK(handleSmartUiSettingsCli(service, "ui set fem_lna 1", short_reply,
+                                 sizeof(short_reply), true));
+  CHECK(strcmp(short_reply, "ERR ui buffer") == 0);
+  CHECK(memcmp(&state, &before_short, sizeof(state)) == 0 && saves == 0);
+  CHECK(!handleSmartUiSettingsCli(service, "ui hello", short_reply,
+                                  sizeof(short_reply), true));
+  CHECK(!handleSmartUiSettingsCli(service, "api get", short_reply,
+                                  sizeof(short_reply), true));
+  CHECK(cliCommand(("ui get " + std::string(150, 'a')).c_str()) ==
+        "ERR ui invalid");
+  std::string non_ascii = "ui get battery_mv";
+  non_ascii.push_back(static_cast<char>(0x80));
+  CHECK(cliCommand(non_ascii.c_str()) == "ERR ui invalid");
 
   // Worst-case numeric widths remain complete and within the 480-byte reply.
   fresh();

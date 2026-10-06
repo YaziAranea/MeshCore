@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Mesh.h>
 #include "AbstractUITask.h"
+#include "SmartUiCli.h"
 
 /*------------ Frame Protocol --------------*/
 #define FIRMWARE_VER_CODE 13
@@ -440,6 +441,9 @@ private:
   uint8_t app_target_ver;
 #if SMARTUI_CONNECTION_SELECTOR
   uint32_t last_local_session_generation = 0;
+  smartui::SmartUiCli _local_cli;
+  static bool executeLocalCli(void* context, const char* command, char* reply, size_t capacity);
+  void handleLocalCliFrame(size_t length);
 #endif
   uint8_t *sign_data;
   uint32_t sign_data_len;

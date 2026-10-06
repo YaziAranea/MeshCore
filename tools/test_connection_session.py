@@ -36,7 +36,7 @@ def main():
 #define RESP_CODE_END_OF_CONTACTS 4
 static unsigned freed=0;
 static unsigned api_resets=0;
-void resetSmartUiApiSession() { ++api_resets; }
+void resetSmartUiCliSession() { ++api_resets; }
 void checked_free(void* p) {
   for(unsigned i=0;i<4;++i) assert(static_cast<uint8_t*>(p)[i]==0);
   ++freed; std::free(p);
@@ -57,6 +57,7 @@ struct FakeUi {bool connected=true; void setHasConnection(bool b){connected=b;}}
 struct ContactInfo {uint32_t lastmod=0;};
 struct Iter {template<typename T> bool hasNext(T*,ContactInfo&){return false;}};
 struct MyMesh {
+  struct Cli { unsigned resets=0; void resetSession(){++resets;} } _local_cli;
   FakeSerial* _serial; FakeUi* _ui;
   uint32_t last_local_session_generation=1;
   bool _iter_started=true; uint32_t _iter_filter_since=9,_most_recent_lastmod=8;
@@ -78,7 +79,7 @@ struct MyMesh {
 '''
     harness += reset + "\n" + receive + r'''
 int main(){
-  FakeSerial serial; FakeUi ui; MyMesh m{&serial,&ui};
+  FakeSerial serial; FakeUi ui; MyMesh m; m._serial=&serial; m._ui=&ui;
   memset(m.out_frame,0xee,sizeof m.out_frame);
   memset(m.cmd_frame,0x16,sizeof m.cmd_frame);
   memset(m.send_scope.key,0xcc,sizeof m.send_scope.key);
@@ -86,6 +87,7 @@ int main(){
   memset(m.sign_data,0x77,4);
   m.resetLocalAppSession();
   assert(api_resets==1);
+  assert(m._local_cli.resets==api_resets);
   assert(freed==1 && !m.sign_data && m.sign_data_len==0);
   assert(!m._iter_started && m._iter_filter_since==0 && m._most_recent_lastmod==0);
   assert(m.app_target_ver==0 && m.pending==0 && !m.send_unscoped && !ui.connected);

@@ -28,10 +28,10 @@ import package_smartui_developer_kit as developer_kit
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.11"
-TAG = "smartui-0.11"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.11_RU.md"
-ARCHIVE_NAME = "SmartUI_0.11_all-boards.zip"
+VERSION = "0.12"
+TAG = "smartui-0.12"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.12_RU.md"
+ARCHIVE_NAME = "SmartUI_0.12_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 ASSET_COUNT = 17
 DISTRIBUTION = "public"
@@ -261,7 +261,9 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "experimental": False, "board_count": 6, "firmware_count": 9,
             "asset_count": ASSET_COUNT,
             "publication": dict(PUBLICATION),
-            "developer_kit": record(kit_path, source_commit=commit, api_version=1),
+            "developer_kit": record(kit_path, source_commit=commit, cli_version=1,
+                                    transport="companion-cli",
+                                    companion_protocol_version=13, local_only=True),
             "firmware": [record(stage / name, **firmware_metadata(name, commit))
                          for name in sorted(FIRMWARE_NAMES)],
             "files": [record(path) for path in payloads],

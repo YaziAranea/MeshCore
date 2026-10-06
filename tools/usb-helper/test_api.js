@@ -1,93 +1,87 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {ApiClient,ApiError,FrameDecoder,encode,decodePage,record,parsePush,decodeMessage}=require('./api');
-const {installApiMock}=require('./test_api_fixture');
-const enc=new TextEncoder();
-test('strict fragmented framing, limits and mixed console rejection',()=>{
-  for(let split=1;split<7;split++){const decoder=new FrameDecoder(),frame=Uint8Array.of(62,3,0,201,1,2,62,1,0,7);let packets=[];for(let i=0;i<frame.length;i+=split)packets.push(...decoder.feed(frame.slice(i,i+split)));assert.deepEqual(packets.map(p=>[...p]),[[201,1,2],[7]]);}
-  for(const bytes of [[65],[62,0,0],[62,177,0]])assert.throws(()=>new FrameDecoder().feed(Uint8Array.from(bytes)),ApiError);
-  assert.throws(()=>encode(0,1,enc.encode('api get')),ApiError);assert.throws(()=>encode(1,1,enc.encode('api get\n')),ApiError);
-  assert.throws(()=>decodePage(new Uint8Array(13)),ApiError);assert.throws(()=>record('OK api get a=1 a=2','OK api get'),ApiError);
+const api=require('./api'),{installApiMock}=require('./test_api_fixture');
+async function connected(options={}){
+  const port=installApiMock(options),events=[],client=new api.CliClient({timeout:40,closeTimeout:40,onEvent:e=>events.push(e)});
+  await client.connect(port);return {port,client,events};
+}
+test('CMD66/RESP29 exact tagged wire and max length; no C9',()=>{
+  const frame=api.encodeCommand('a9','ui get volume');assert.deepEqual(Array.from(frame.slice(0,4)),[66,97,57,124]);
+  assert.equal(frame.length,17);assert.equal(api.decodeReply(Uint8Array.from([29,...new TextEncoder().encode('a9|OK ui get key=volume value=7')]),'a9'),'OK ui get key=volume value=7');
+  assert.equal(api.encodeCommand('00','ui '+ 'x'.repeat(153)).length,160);
+  for(const command of ['ui '+ 'x'.repeat(154),'ui get\nvolume','ui имя','reboot','api hello'])assert.throws(()=>api.encodeCommand('00',command),{code:'INPUT'});
+  assert.throws(()=>api.encodeCommand('x|','ui hello'),{code:'INPUT'});
+  assert.equal(api.matches(frame,Uint8Array.of(1,6)),true);
+  assert.throws(()=>api.decodeReply(Uint8Array.of(1,6),'a9'),{code:'FAILED'});
 });
-test('real wire handshake, pagination and one binary reader; no inbox side effects',async()=>{
-  const port=installApiMock(),events=[],client=new ApiClient({onEvent:e=>events.push(e),timeout:200});
-  await client.connect(port);assert.equal(client.state.hello.sync,'1');assert.equal(port.readerCount,1);
-  assert.equal(client.state.hello.firmware,'0.11');assert.equal(client.state.hello.stage,'release');
-  const caps=record(await client.execute('api caps'),'OK api caps');assert.equal(caps.bridge,'1');
-  assert.ok(port.packets.some(p=>p[7]===2),'multi-page reply exercised');
-  assert.equal(port.commands.some(c=>/inbox|sync enable/.test(c)),false);
-  assert.ok(events.every(e=>!JSON.stringify(e).includes('api caps')),'audit has operation category only');
-  await client.disconnect();assert.equal(port.closed,true);assert.equal(port.maxOpen,1);
+test('strict discovery including absent, old protocol and duplicate marker',()=>{
+  const p=s=>Uint8Array.from([21,...new TextEncoder().encode(s)]);
+  api.discover(p('foo:2,smartui_cli:1'));
+  for(const s of ['smartui_api:1','smartui_cli:2','smartui_cli:1,smartui_cli:1','smartui_cli:1,smartui_cli:2'])assert.throws(()=>api.discover(p(s)),{code:'UNSUPPORTED'});
+});
+test('old 0.11 never receives CMD66/C9 and closes with archive guidance',async()=>{
+  const port=installApiMock({oldFirmware:true}),client=new api.CliClient({timeout:40});
+  await assert.rejects(client.connect(port),{code:'UNSUPPORTED'});assert.equal(port.closed,true);assert.deepEqual(port.packets.map(p=>p[0]),[22,40]);
+});
+test('fragmented stream, standard pushes and matching prefix; one reader',async()=>{
+  const f=await connected();try{
+    f.port.emit(Uint8Array.of(0x83));f.port.reply('ZZ','OK ui get key=volume value=99');
+    assert.equal(await f.client.execute('ui get volume'),'OK ui get key=volume value=7');
+    assert.equal(f.port.readerCount,1);assert.equal(f.port.maxOpen,1);assert.ok(f.port.packets.every(p=>[22,40,66].includes(p[0])));
+  }finally{await f.client.disconnect();}
+});
+test('known errors do not poison or retry; unsupported field stays readable',async()=>{
+  const f=await connected();try{
+    for(const reason of ['unsupported','readonly','storage','source','range','stale','invalid']){
+      f.port.errorNext='ERR ui '+reason;const before=f.port.commands.length;
+      await assert.rejects(f.client.execute('ui get volume'),e=>e.reason===reason);
+      assert.equal(f.port.commands.length,before+1);assert.equal(f.client.state.uncertain,false);
+    }
+    await f.client.execute('ui get volume');
+  }finally{await f.client.disconnect();}
+});
+test('timeout poisons writes; no automatic retry or write after disconnect',async()=>{
+  const f=await connected();f.port.drop=true;
+  await assert.rejects(f.client.execute('ui set volume 4',{mutate:true}),{code:'TIMEOUT'});
+  const count=f.port.packets.length;await assert.rejects(f.client.execute('ui get volume'),{code:'UNCERTAIN'});
+  assert.equal(f.port.packets.length,count);await f.client.disconnect();const reads=f.port.readCalls;
+  await assert.rejects(f.client.execute('ui get volume'),{code:'CLOSED'});await new Promise(r=>setTimeout(r,5));
+  assert.equal(f.port.packets.length,count);assert.equal(f.port.readCalls,reads);
+});
+test('wrong prefix cannot resolve request',async()=>{
+  const f=await connected();try{f.port.wrong=true;await assert.rejects(f.client.execute('ui get volume'),{code:'TIMEOUT'});assert.equal(f.client.state.uncertain,true);}
+  finally{await f.client.disconnect();}
+});
+test('busy guard prevents competing operations and read-only denies mutation',async()=>{
+  const f=await connected();try{f.port.drop=true;const pending=f.client.execute('ui get volume');await assert.rejects(f.client.execute('ui get volume'),{code:'BUSY'});await assert.rejects(pending,{code:'TIMEOUT'});}
+  finally{await f.client.disconnect();}
+  const r=await connected({readonly:true});try{const before=r.port.commands.length;await assert.rejects(r.client.execute('ui set volume 1',{mutate:true}),{code:'DENIED'});assert.equal(r.port.commands.length,before);}
+  finally{await r.client.disconnect();}
+});
+test('tags unique until exhaustion; no wrap in one session',()=>{
+  const tags=new Set();for(let i=0;i<3844;i++)tags.add(api.tagFor(i));assert.equal(tags.size,3844);assert.throws(()=>api.tagFor(3844),{code:'EXHAUSTED'});
+});
+test('record, UTF8 standard replies and malformed replies',()=>{
+  const reply=s=>Uint8Array.from([29,...new TextEncoder().encode('ab|'+s)]);
+  assert.equal(api.decodeReply(reply('Тестовая нода'),'ab',false),'Тестовая нода');
+  assert.throws(()=>api.decodeReply(reply('Тестовая нода'),'ab'),{code:'PROTOCOL'});
+  assert.throws(()=>api.decodeReply(reply('OK ui get x=1'),'zz'),{code:'PROTOCOL'});
+  assert.throws(()=>api.decodeReply(reply('OK ui x='+'x'.repeat(157)),'ab'),{code:'PROTOCOL'});
+  assert.throws(()=>api.record('OK ui get key=x key=y','OK ui get'),{code:'PROTOCOL'});
+  assert.throws(()=>api.decodeReply(reply('Unknown command'),'ab'),e=>e.reason==='unsupported');
+  assert.throws(()=>api.decodeReply(reply('Error: secret command rejected'),'ab'),e=>e.code==='FAILED'&&!e.message.includes('secret'));
 });
 
-test('0.10 release remains usable without ecosystem synchronization',async()=>{
-  const port=installApiMock({legacy:true}),client=new ApiClient({timeout:200});
-  await client.connect(port);
-  assert.equal(client.state.hello.firmware,'0.10');assert.equal(client.state.hello.stage,'release');
-  assert.equal(client.state.hello.sync,'0');assert.equal(client.state.hello.events,'0');
-  assert.equal(record(await client.execute('api caps'),'OK api caps').bridge,'1');
-  assert.equal(port.commands.some(c=>/inbox|sync enable/.test(c)),false);
-  await client.disconnect();
+test('notification test uses exact ui test and read-only inference',async()=>{
+  const f=await connected();try{assert.equal(await f.client.execute('ui test'),'OK ui test');}finally{await f.client.disconnect();}
+  const r=await connected({readonly:true});try{await assert.rejects(r.client.execute('ui test'),{code:'DENIED'});await assert.rejects(r.client.execute('ui set volume 4'),{code:'DENIED'});}finally{await r.client.disconnect();}
 });
-test('discovery absent: no C9 extension probe sent',async()=>{
-  const port=installApiMock({unsupported:true}),client=new ApiClient({timeout:100});
-  await assert.rejects(client.connect(port),e=>e.code==='UNSUPPORTED');assert.equal(port.packets.some(p=>p[0]===201),false);assert.equal(port.closed,true);
+test('reconnect renegotiates and credentials never enter diagnostic events',async()=>{
+  const f=await connected();await f.client.execute('ui wifi password 736563726574',{mutate:true});await f.client.disconnect();await f.client.connect(f.port);
+  assert.equal(f.client.state.uncertain,false);assert.equal(f.port.commands.filter(c=>c==='ui hello').length,2);
+  assert.doesNotMatch(JSON.stringify(f.events),/736563726574|password|secret|PIN/);await f.client.disconnect();
 });
-test('timeout becomes uncertain, never repeats write; requires reconnect',async()=>{
-  const port=installApiMock(),client=new ApiClient({timeout:25});await client.connect(port);port.drop=true;
-  await assert.rejects(client.execute('api set agc_reset 1',{mutate:true}),e=>e.code==='TIMEOUT');
-  assert.equal(client.state.uncertain,true);const n=port.packets.length;
-  await assert.rejects(client.execute('api get'),e=>e.code==='UNCERTAIN');assert.equal(port.packets.length,n);
-  await client.disconnect();port.drop=false;await client.connect(port);assert.equal(client.state.uncertain,false);await client.disconnect();
-});
-test('read-only permissions, concurrent requests and sanitised backend errors',async()=>{
-  const port=installApiMock({readonly:true}),client=new ApiClient({timeout:50});await client.connect(port);
-  await assert.rejects(client.execute('api set volume 1',{mutate:true}),e=>e.code==='DENIED');
-  await assert.rejects(client.execute('api unknown'),e=>e.code==='FAILED'&&!e.message.includes('unsupported'));
-  const p=client.execute('api get');await assert.rejects(client.execute('api get'),e=>e.code==='BUSY');await p;await client.disconnect();
-});
-test('push hints distinguished from replies and only bounded metadata exposed',async()=>{
-  const port=installApiMock(),pushes=[],client=new ApiClient({onPush:p=>pushes.push(p),timeout:100});await client.connect(port);
-  port.event(7,'00000000');await new Promise(r=>setTimeout(r,0));const hint=parsePush(pushes[0]);assert.equal(hint.boot,port.boot);assert.equal(hint.mask,'15');
-  const malformed=pushes[0].slice();malformed[5]=1;assert.equal(parsePush(malformed),null);await client.disconnect();
-});
-test('message parser preserves text as data and suppresses CLI/data payload',()=>{
-  const frame=Uint8Array.from([16,0,0,0,1,2,3,4,5,6,255,0,0,0,0,0,...enc.encode('<img src=x>Привет')]);
-  const hex=p=>Array.from(p,b=>b.toString(16).padStart(2,'0')).join('');assert.equal(decodeMessage(hex(frame)).text,'<img src=x>Привет');
-  frame[11]=1;assert.equal(decodeMessage(hex(frame)).text,'Служебное сообщение. Текст скрыт.');
-  assert.throws(()=>decodeMessage('10'),ApiError);assert.throws(()=>decodeMessage('zz'),ApiError);
-});
-test('disconnect cancels pending waiter, clears session and closes reader',async()=>{
-  const port=installApiMock(),client=new ApiClient({timeout:200});await client.connect(port);port.drop=true;
-  const pending=client.execute('api get');const rejected=assert.rejects(pending,e=>e.code==='CLOSED');await client.disconnect();await rejected;assert.equal(client.state.connected,false);assert.equal(port.closed,true);
-});
-test('wrong console, malformed pagination and serial loss fail closed',async()=>{
-  const port=installApiMock(),client=new ApiClient({timeout:30});await client.connect(port);
-  const original=port.respond;port.respond=function(request,text,status){if(request[7]===2){this.emit(Uint8Array.from([201,83,85,73,1,request[5],request[6],2,0,request[8],request[9],255,1,...new Uint8Array(2)]));return;}original.call(this,request,text,status);};
-  await assert.rejects(client.execute('api caps'),e=>e.code==='PROTOCOL');assert.equal(client.state.uncertain,true);await client.disconnect();
-  port.respond=original;await client.connect(port);port.controller.enqueue(enc.encode('Commands: help\r\n'));await new Promise(r=>setTimeout(r,10));assert.equal(client.state.connected,false);
-});
-test('open failures and dropped device information never leak raw errors',async()=>{
-  const client=new ApiClient({timeout:20});await assert.rejects(client.connect({open:async()=>{throw new Error('SECRET');}}),e=>e.safe&&!e.message.includes('SECRET'));assert.equal(client.state.connected,false);
-  const port=installApiMock();port.drop=true;await assert.rejects(client.connect(port),e=>e.code==='TIMEOUT');assert.equal(port.closed,true);
-});
-test('known backend reasons give precise safe guidance without exposing device text',async()=>{
-  const port=installApiMock(),client=new ApiClient({timeout:100});await client.connect(port);
-  const cases=[['gone',/больше не хранится/],['unsupported',/отсрочка напоминания недоступна/],['negotiate',/Включить синхронизацию/],['unavailable',/временно недоступен/],['source',/Запустите ProMicro от АКБ.*без перезапуска.*2 минут/]];
-  for(const [reason,expected]of cases){
-    port.command=request=>port.respond(request,'ERR api '+reason+' secret=PRIVATE_DEVICE_TEXT',7);
-    await assert.rejects(client.execute('api inbox snooze 0123456789abcdef 00000001 600',{mutate:true}),error=>error.reason===reason&&expected.test(error.message)&&!error.message.includes('PRIVATE_DEVICE_TEXT')&&error.safe);
-    assert.equal(client.state.uncertain,false,'known rejection is not a lost acknowledgement');
-  }
-  port.command=request=>port.respond(request,'ERR api future_secret PRIVATE_DEVICE_TEXT',7);
-  await assert.rejects(client.execute('api get'),error=>error.code==='FAILED'&&!error.reason&&!error.message.includes('PRIVATE_DEVICE_TEXT'));
-  await client.disconnect();
-});
-test('signed plain direct messages skip exactly four sender-prefix bytes in v2 and v3 frames',()=>{
-  const hex=p=>Array.from(p,b=>b.toString(16).padStart(2,'0')).join('');
-  for(const header of [[7],[16,0,0,0]]){
-    const frame=Uint8Array.from([...header,1,2,3,4,5,6,255,2,0,0,0,0,0xde,0xad,0xbe,0xef,...enc.encode('Подписанный текст')]);
-    assert.equal(decodeMessage(hex(frame)).text,'Подписанный текст');
-    assert.throws(()=>decodeMessage(hex(frame.slice(0,header.length+6+2+4+3))),ApiError);
-  }
+test('raw text and oversized stream frames rejected',()=>{
+  assert.throws(()=>new api.FrameDecoder().feed(new TextEncoder().encode('help\r\n')),{code:'MODE'});
+  assert.throws(()=>new api.FrameDecoder().feed(Uint8Array.of(62,177,0)),{code:'PROTOCOL'});
 });

@@ -1,5 +1,11 @@
 # SmartUI 0.11 API v1 — specification
 
+> **Archived protocol.** This document applies to release 0.11, preserved with its
+> Helper 1.4 and Developer Kit. SmartUI 0.12 does not advertise or accept opcode
+> 201 (0xC9); inbox sync and API events are not active. New settings integrations
+> should use [Companion CLI 0.12](SMARTUI_CLI_RU.md), CMD66/RESP29. This is a
+> deliberate compatibility break, not an automatic transport substitution.
+
 API v1 targets SmartUI 0.11. Discover `smartui_api:1` and inspect HELLO rather
 than relying on the version string alone. These files do not claim external
 publication or physical-device verification. The base protocol is unchanged.

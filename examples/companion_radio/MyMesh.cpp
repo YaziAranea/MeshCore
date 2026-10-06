@@ -4,13 +4,14 @@
 #include "ChannelBusyPolicy.h"
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 #include "ConnectionController.h"
-#include "SmartUiApi.h"
+#include "SmartUiCli.h"
 #endif
 
 #include <Arduino.h> // needed for PlatformIO
 #include <Mesh.h>
 #include "helpers/radiolib/RXPowerSaving.h"
 #include "helpers/radiolib/LoRaConfigValidation.h"
+#include <helpers/SmartUiBuildInfo.h>
 
 #define CMD_APP_START                 1
 #define CMD_SEND_TXT_MSG              2
@@ -437,10 +438,8 @@ bool MyMesh::addToOfflineQueue(const uint8_t frame[], int len,
                                uint32_t ui_generation, uint8_t ui_flags) {
   if (frame == NULL || len <= 0 || len > MAX_FRAME_SIZE) return false;
 #if SMARTUI_CONNECTION_SELECTOR
-  // All transported frames get exact receipts. Only human messages enter
-  // the notification ledger; telemetry/CLI frames must not evict unread state.
-  if (ui_generation) noteSmartUiMessage(ui_generation, ui_flags);
-  else ui_generation = nextUiMessageGeneration();
+  // Preserve local queue/UI generations without feeding the archived API.
+  if (!ui_generation) ui_generation = nextUiMessageGeneration();
   if (!ui_generation) return false;  // never reuse an ID after counter exhaustion
 #endif
   if (offline_queue_len >= OFFLINE_QUEUE_SIZE) {
@@ -1888,8 +1887,44 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
 }
 
 #if SMARTUI_CONNECTION_SELECTOR
+bool MyMesh::executeLocalCli(void* context, const char* command, char* reply, size_t capacity) {
+  MyMesh& self = *static_cast<MyMesh*>(context);
+  int written;
+  if (strcmp(command, "board") == 0) {
+    written = snprintf(reply, capacity, "%s", board.getManufacturerName());
+  } else if (strcmp(command, "ver") == 0) {
+    written = snprintf(reply, capacity, "SmartUI %s; firmware=%s", SMARTUI_VERSION, FIRMWARE_VERSION);
+  } else if (strcmp(command, "get name") == 0) {
+    written = snprintf(reply, capacity, "> %.31s", self._prefs.node_name);
+  } else if (strcmp(command, "get radio") == 0) {
+    written = snprintf(reply, capacity, "> %.3f,%.3f,%u,%u",
+        static_cast<double>(self._prefs.freq), static_cast<double>(self._prefs.bw),
+        static_cast<unsigned>(self._prefs.sf), static_cast<unsigned>(self._prefs.cr));
+  } else if (strcmp(command, "ui") == 0 || strncmp(command, "ui ", 3) == 0) {
+    return executeSmartUiCliCommand(command, reply, capacity);
+  } else {
+    return false;  // No rescue/raw CLI, filesystem, or remote-command fallback.
+  }
+  if (written < 0 || static_cast<size_t>(written) >= capacity)
+    snprintf(reply, capacity, "Error: response too long");
+  return true;
+}
+
+void MyMesh::handleLocalCliFrame(size_t length) {
+  bool arm_mode = false;
+  const size_t reply_length = _local_cli.handle(cmd_frame, length, out_frame,
+      sizeof(out_frame), executeLocalCli, this, arm_mode);
+  if (reply_length && _serial) {
+    const size_t queued = _serial->writeFrame(out_frame, reply_length);
+    // Only this exact successful mode response can arm a deferred switch.
+    // Prefix correlation is not an acknowledgement or a replay cache.
+    if (arm_mode && queued == reply_length) connection_controller.apiReplyQueued();
+  }
+}
+
 void MyMesh::resetLocalAppSession() {
-  resetSmartUiApiSession();
+  _local_cli.resetSession();
+  resetSmartUiCliSession();
   last_local_session_generation = _serial ? _serial->sessionGeneration() : 0;
   _iter_started = false;
   _iter_filter_since = 0;
@@ -1923,18 +1958,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     return;
   }
 
+  // SmartUI 0.11's fork-local API is archived, not a second active control
+  // protocol. Preserve the ordinary unsupported-command response for clients.
+  if (cmd_frame[0] == 201) {
+    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+    return;
+  }
+
 #if SMARTUI_CONNECTION_SELECTOR
-  if (cmd_frame[0] == smartui::SmartUiApi::COMMAND) {
-    const size_t reply_length = handleSmartUiApiFrame(cmd_frame, len, out_frame, sizeof(out_frame));
-    if (reply_length) {
-      const size_t queued = _serial->writeFrame(out_frame, reply_length);
-      // Only an accepted api mode reply arms the deferred switch. An unrelated
-      // later response must not turn an unacknowledged switch into an action.
-      if (queued == reply_length && len >= smartui::SmartUiApi::HEADER + 9 &&
-          cmd_frame[7] == 1 && out_frame[8] == smartui::SmartUiApi::OK &&
-          memcmp(cmd_frame + smartui::SmartUiApi::HEADER, "api mode ", 9) == 0)
-        connection_controller.apiReplyQueued();
-    }
+  if (cmd_frame[0] == smartui::SmartUiCli::COMMAND) {
+    handleLocalCliFrame(len);
     return;
   }
 #endif
@@ -2863,7 +2896,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
     smartui::CustomVarsWriter vars((char *)&out_frame[1], sizeof(out_frame) - 1);
 #if SMARTUI_CONNECTION_SELECTOR
-    vars.append("smartui_api", "1");
+    vars.append("smartui_cli", "1");
 #endif
 #if UI_PHONE_GPS == 1
     vars.append("gps_source", isPhoneGpsEnabled() ? "PHONE" : "HW");

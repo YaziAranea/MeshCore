@@ -46,6 +46,39 @@ public:
 static const uint8_t FILE_O_READ = 0;
 static const uint8_t FILE_O_WRITE = 1;
 
+#if defined(NRF52_PLATFORM)
+#include <cassert>
+using lfs_block_t = uint32_t;
+static constexpr int LFS_ERR_CORRUPT = -52;
+struct lfs_config { uint32_t block_count = 224; uint32_t block_size = 128; };
+struct lfs_info { uint32_t size = 0; };
+struct lfs_t {
+  const lfs_config* cfg = nullptr;
+  std::map<std::string, std::vector<uint8_t>>* files = nullptr;
+  std::vector<std::string>* inspected_paths = nullptr;
+  std::map<std::string, int> stat_errors;
+  std::vector<lfs_block_t> blocks = {0, 1, 2};
+  bool locked = false;
+  int error = 0;
+  unsigned calls = 0, locks = 0, unlocks = 0;
+};
+inline int lfs_traverse(lfs_t* fs, int (*callback)(void*, lfs_block_t), void* context) {
+  assert(fs->locked);
+  ++fs->calls;
+  for (auto block : fs->blocks) { const int error = callback(context, block); if (error) return error; }
+  return fs->error;
+}
+inline int lfs_stat(lfs_t* fs, const char* path, lfs_info* info) {
+  assert(fs->locked);
+  fs->inspected_paths->push_back(path);
+  if (fs->stat_errors.count(path)) return fs->stat_errors[path];
+  auto found = fs->files->find(path);
+  if (found == fs->files->end()) return -2;
+  info->size = static_cast<uint32_t>(found->second.size());
+  return 0;
+}
+#endif
+
 class File;
 class FakeFS {
 public:
@@ -62,13 +95,32 @@ public:
   std::string corrupt_rename_to;
   std::string permanent_remove_path;
   std::string permanent_write_open_path;
+  std::string fail_read_open_path;
+  std::string drop_flush_path;
+  std::string corrupt_primary_on_remove;
+  mutable std::vector<std::string> inspected_paths;
   unsigned write_open_count = 0;
   unsigned remove_attempt_count = 0;
   unsigned rename_attempt_count = 0;
+  unsigned file_read_count = 0;
+#if defined(NRF52_PLATFORM)
+  lfs_config config;
+  lfs_t lfs;
+  FakeFS() { lfs.cfg = &config; lfs.files = &files; lfs.inspected_paths = &inspected_paths; }
+  void _lockFS() { assert(!lfs.locked); lfs.locked = true; ++lfs.locks; }
+  void _unlockFS() { assert(lfs.locked); lfs.locked = false; ++lfs.unlocks; }
+  lfs_t* _getFS() { assert(lfs.locked); return &lfs; }
+#endif
 
   void checkpoint() { if (record_snapshots) snapshots.push_back(files); }
 
-  bool exists(const char* path) const { return files.count(path) != 0; }
+  bool exists(const char* path) const {
+#if defined(NRF52_PLATFORM)
+    assert(!lfs.locked);  // File/exists methods must never recursively lock.
+#endif
+    inspected_paths.push_back(path);
+    return files.count(path) != 0;
+  }
   bool remove(const char* path) {
     ++remove_attempt_count;
     if (permanent_remove_path == path) return false;
@@ -77,6 +129,10 @@ public:
       return false;
     }
     const bool removed = files.erase(path) != 0;
+    if (corrupt_primary_on_remove == path) {
+      corrupt_primary_on_remove.clear();
+      if (!files["/connection.cfg"].empty()) files["/connection.cfg"][0] ^= 0xff;
+    }
     if (removed) checkpoint();
     return removed;
   }
@@ -130,6 +186,7 @@ public:
   }
   int read(uint8_t* out, size_t len) {
     if (!open_) return 0;
+    ++fs_->file_read_count;
     auto& bytes = fs_->files[path_];
     const size_t count = std::min(len, bytes.size() - std::min(offset_, bytes.size()));
     if (count) std::memcpy(out, bytes.data() + offset_, count);
@@ -150,6 +207,11 @@ public:
     return len;
   }
   void flush() {
+    if (open_ && fs_->drop_flush_path == path_) {
+      fs_->drop_flush_path.clear();
+      fs_->files.erase(path_);
+      fs_->checkpoint();
+    }
     if (open_ && fs_->corrupt_flush_path == path_) {
       fs_->corrupt_flush_path.clear();
       auto& bytes = fs_->files[path_];
@@ -162,6 +224,8 @@ public:
 
 inline File FakeFS::open(const char* path, const char* mode, bool) {
   const bool write = mode && mode[0] == 'w';
+  if (!write) inspected_paths.push_back(path);
+  if (!write && fail_read_open_path == path) return File();
   if (write) ++write_open_count;
   if (write && permanent_write_open_path == path) return File();
   if (write && fail_write_open_path == path) {
@@ -174,6 +238,8 @@ inline File FakeFS::open(const char* path, const char* mode, bool) {
 
 inline File FakeFS::open(const char* path, uint8_t mode) {
   const bool write = mode == FILE_O_WRITE;
+  if (!write) inspected_paths.push_back(path);
+  if (!write && fail_read_open_path == path) return File();
   if (write) ++write_open_count;
   if (write && permanent_write_open_path == path) return File();
   if (write && fail_write_open_path == path) {
@@ -651,6 +717,339 @@ struct RecoveryFixture {
                      hooks());
   }
 };
+
+template <typename Fixture>
+static std::string storageDiagnostic(Fixture& fixture, const char* phase) {
+  pump(fixture.controller);  // Drain the unrelated initial console banner.
+  fixture.console.output.clear();
+  fixture.fs.inspected_paths.clear();
+  const auto before = fixture.fs.files;
+  const auto writes = fixture.fs.write_open_count;
+  const auto removes = fixture.fs.remove_attempt_count;
+  const auto renames = fixture.fs.rename_attempt_count;
+  const auto resets = reset_count;
+  const auto setting_calls = settings_calls;
+  send(fixture.controller, fixture.console, "storage status\n");
+  assert(fixture.fs.files == before);
+  assert(fixture.fs.write_open_count == writes);
+  assert(fixture.fs.remove_attempt_count == removes);
+  assert(fixture.fs.rename_attempt_count == renames);
+  assert(reset_count == resets && settings_calls == setting_calls);
+  for (const auto& path : fixture.fs.inspected_paths) {
+    assert(path == "/connection.cfg" || path == "/connection.cfg.tmp" ||
+           path == "/connection.cfg.bak" || path == "/connection.forgot");
+  }
+  const auto& line = fixture.console.output;
+  assert(line.find("Storage v=1 phase=" + std::string(phase) + " ") == 0);
+  assert(line.size() < 320 && line.substr(line.size() - 2) == "\r\n");
+  assert(line.find('\n') == line.size() - 1);
+  assert(line.find("private-network") == std::string::npos);
+  assert(line.find("private-password") == std::string::npos);
+  assert(line.find("unrelated-secret") == std::string::npos);
+  return line;
+}
+
+static void testStorageDiagnostics() {
+  const char* phases[] = {
+      "marker-open", "marker-verify", "clean-primary-remove", "clean-primary-open",
+      "clean-primary-write", "clean-primary-verify", "clean-temp", "clean-backup",
+      "clean-final-verify", "marker-remove", "recover-primary-remove",
+      "recover-primary-open", "recover-primary-write", "recover-primary-verify",
+      "recovery-blocked", "unavailable"};
+  for (unsigned fault = 0; fault < sizeof(phases) / sizeof(phases[0]); ++fault) {
+    RecoveryFixture f;
+    f.fs.files["/prefs.json"] = {'u', 'n', 'r', 'e', 'l', 'a', 't', 'e', 'd', '-', 's', 'e', 'c', 'r', 'e', 't'};
+    switch (fault) {
+      case 0: f.fs.fail_write_open_path = "/connection.forgot"; break;
+      case 1: f.fs.drop_flush_path = "/connection.forgot"; break;
+      case 2: f.fs.files["/connection.cfg"] = {1}; f.fs.permanent_remove_path = "/connection.cfg"; break;
+      case 3: f.fs.fail_write_open_path = "/connection.cfg"; break;
+      case 4: f.fs.short_write_path = "/connection.cfg"; break;
+      case 5: f.fs.corrupt_flush_path = "/connection.cfg"; break;
+      case 6: case 7: {
+        const char* path = fault == 6 ? "/connection.cfg.tmp" : "/connection.cfg.bak";
+        f.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+        f.fs.files[path] = configRecord(CompanionMode::BLE, true);
+        f.fs.permanent_remove_path = path;
+        break;
+      }
+      case 8:
+        f.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+        f.fs.files["/connection.cfg.tmp"] = configRecord(CompanionMode::BLE);
+        f.fs.corrupt_primary_on_remove = "/connection.cfg.tmp";
+        break;
+      case 9:
+        f.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+        f.fs.files["/connection.forgot"] = {};
+        f.fs.permanent_remove_path = "/connection.forgot";
+        break;
+      case 10: case 11: case 12: case 13:
+        f.fs.files["/connection.cfg"] = {1};
+        f.fs.files["/connection.cfg.tmp"] = configRecord(CompanionMode::BLE, true);
+        if (fault == 10) f.fs.permanent_remove_path = "/connection.cfg";
+        if (fault == 11) f.fs.fail_write_open_path = "/connection.cfg";
+        if (fault == 12) f.fs.short_write_path = "/connection.cfg";
+        if (fault == 13) f.fs.corrupt_flush_path = "/connection.cfg";
+        break;
+      case 14: quarantined = true; break;
+      case 15: f.store.available = false; break;
+    }
+    f.boot();
+    assert(f.controller.status().storageRecoveryRequired);
+    const auto first = storageDiagnostic(f, phases[fault]);
+    assert(first.find(fault == 14 ? " local=1 global=1 " : " local=1 global=0 ") != std::string::npos);
+    if (fault == 9) assert(first.find("marker=1:0:1") != std::string::npos);
+    if (fault == 15) assert(first.find(" fs=0 ") != std::string::npos);
+    // A refused mutation or repeated diagnostic must not replace the root cause.
+    assert(!f.controller.setMode(CompanionMode::USB));
+    assert(storageDiagnostic(f, phases[fault]) == first);
+    quarantined = false;
+  }
+
+  // Present-but-unreadable and malformed records are metadata, never echoed.
+  RecoveryFixture f;
+  f.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+  f.boot();
+  f.fs.files["/connection.cfg.tmp"] = configRecord(CompanionMode::BLE, true);
+  f.fs.files["/connection.cfg.bak"] = {1, 2, 3};
+  f.fs.files["/connection.forgot"] = {};
+  f.fs.fail_read_open_path = "/connection.cfg.tmp";
+  auto line = storageDiagnostic(f, "none");
+  assert(line == "Storage v=1 phase=none local=0 global=0 fs=1 primary=1:109:1 temp=1:-1:0 backup=1:3:0 marker=1:0:1\r\n");
+  f.fs.fail_read_open_path.clear();
+  line = storageDiagnostic(f, "none");
+  assert(line.find("temp=1:109:1") != std::string::npos);
+  f.fs.inspected_paths.clear();
+  send(f.controller, f.console, "storage status /prefs.json\n");
+  assert(f.fs.inspected_paths.empty());  // No caller-supplied path is accepted.
+  f.console.output.clear();
+  send(f.controller, f.console, "help\n");
+  assert(f.console.output.find("Commands: info | status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | reply get N | reply set N HEX | help\r\n") == 0);
+  assert(f.console.output.find("E:S:V=exists:size:valid") != std::string::npos);
+  assert(f.console.output.find("marker valid means readable presence, even empty.\r\n") != std::string::npos);
+  assert(f.console.output.find("storage usage | storage legacy: rc:size; -2=absent; -1=unknown.\r\n") != std::string::npos);
+
+  // Global quarantine can exist independently of a local config failure.
+  RecoveryFixture global;
+  global.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE, true);
+  quarantined = true;
+  global.boot();
+  assert(storageDiagnostic(global, "none").find(" local=0 global=1 ") != std::string::npos);
+  quarantined = false;
+
+  // Existing nonfatal cleanup behavior is unchanged, but its failure is visible.
+  RecoveryFixture leftover;
+  leftover.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE, true);
+  leftover.fs.files["/connection.cfg.tmp"] = configRecord(CompanionMode::BLE, true);
+  leftover.fs.permanent_remove_path = "/connection.cfg.tmp";
+  leftover.boot();
+  assert(!leftover.controller.status().storageRecoveryRequired);
+  storageDiagnostic(leftover, "recover-temp-cleanup");
+
+  // A successful explicit retry clears the live flag, not historical evidence.
+  RecoveryFixture retry;
+  retry.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+  retry.fs.files["/connection.forgot"] = {1};
+  retry.fs.permanent_remove_path = "/connection.forgot";
+  retry.boot();
+  storageDiagnostic(retry, "marker-remove");
+  retry.fs.permanent_remove_path.clear();
+  send(retry.controller, retry.console, "wifi forget\n");
+  assert(!retry.controller.status().storageRecoveryRequired);
+  assert(storageDiagnostic(retry, "marker-remove").find(" local=0 global=0 ") != std::string::npos);
+
+  const char* save_phases[] = {"save-temp-remove", "save-temp-open", "save-temp-write",
+      "save-temp-verify", "save-rotate", "save-publish", "save-final-verify"};
+  for (unsigned fault = 0; fault < sizeof(save_phases) / sizeof(save_phases[0]); ++fault) {
+    ModeChangeFixture save;
+    switch (fault) {
+      case 0: save.fs.files["/connection.cfg.tmp"] = {1}; save.fs.fail_remove_path = "/connection.cfg.tmp"; break;
+      case 1: save.fs.fail_write_open_path = "/connection.cfg.tmp"; break;
+      case 2: save.fs.short_write_path = "/connection.cfg.tmp"; break;
+      case 3: save.fs.corrupt_flush_path = "/connection.cfg.tmp"; break;
+      case 4: save.fs.fail_next_rename = true; break;
+      case 5: save.fs.fail_rename_from = "/connection.cfg.tmp"; break;
+      case 6: save.fs.corrupt_rename_to = "/connection.cfg"; break;
+    }
+    assert(!save.controller.setMode(CompanionMode::USB));
+    storageDiagnostic(save, save_phases[fault]);
+  }
+}
+
+static std::string storageUsage(RecoveryFixture& f) {
+  pump(f.controller);
+  f.console.output.clear();
+  f.fs.inspected_paths.clear();
+  const auto before = f.fs.files;
+  const auto writes = f.fs.write_open_count, removes = f.fs.remove_attempt_count;
+  const auto renames = f.fs.rename_attempt_count, reads = f.fs.file_read_count;
+  const auto resets = reset_count;
+  send(f.controller, f.console, "storage usage\n");
+  assert(f.fs.files == before && f.fs.write_open_count == writes);
+  assert(f.fs.remove_attempt_count == removes && f.fs.rename_attempt_count == renames);
+  assert(f.fs.file_read_count == reads && reset_count == resets);
+  for (const auto& path : f.fs.inspected_paths)
+    assert(path == "/prefs.json" || path == "/prefs.json.tmp" || path == "/prefs.json.bak" ||
+           path == "/new_prefs" || path == "/_main.id" || path == "/connection.forgot" ||
+           path == "/contacts3");
+  const auto& line = f.console.output;
+  assert(line.find("StorageUsage v=1 source=primary ") == 0);
+  assert(line.size() < 512 && line.substr(line.size() - 2) == "\r\n");
+  assert(line.find('\n') == line.size() - 1);
+  assert(line.find("private-password") == std::string::npos);
+#if defined(NRF52_PLATFORM)
+  assert(!f.fs.lfs.locked && f.fs.lfs.locks == f.fs.lfs.unlocks);
+#endif
+  return line;
+}
+
+static void testStorageUsage() {
+  RecoveryFixture f;
+  f.fs.fail_write_open_path = "/connection.forgot";
+  f.fs.files["/prefs.json"] = std::vector<uint8_t>(2200, 'P');
+  f.fs.files["/prefs.json.bak"] = std::vector<uint8_t>(2100, 'B');
+  f.fs.files["/new_prefs"] = std::vector<uint8_t>(872, 'L');
+  f.fs.files["/_main.id"] = std::vector<uint8_t>(152, 'I');
+  f.fs.files["/contacts3"] = std::vector<uint8_t>(7200, 'C');
+  f.boot();
+  assert(f.controller.status().storageRecoveryRequired);
+  std::string line = storageUsage(f);
+#if defined(NRF52_PLATFORM)
+  assert(line.find("mounted=1 result=ok block_size=128 total_blocks=224 used_blocks=3 error=0") != std::string::npos);
+  assert(line.find("heap_free=8000 heap_min=-1 marker=-2:-1 prefs=0:2200 prefs_tmp=-2:-1") != std::string::npos);
+  assert(f.fs.lfs.calls == 1 && f.fs.lfs.locks == 1);
+#else
+  assert(line.find("mounted=1 result=unsupported block_size=0 total_blocks=0 used_blocks=-1 error=0") != std::string::npos);
+  assert(line.find("heap_free=-1 heap_min=-1 marker=-1:-1 prefs=0:2200 prefs_tmp=-1:-1") != std::string::npos);
+#endif
+  assert(line.find("prefs_bak=0:2100 legacy=0:872 identity=0:152 contacts=0:7200") != std::string::npos);
+  storageDiagnostic(f, "marker-open");  // Usage cannot replace the recovery phase.
+#if defined(NRF52_PLATFORM)
+  f.fs.lfs.stat_errors["/prefs.json"] = -5;
+  f.fs.lfs.stat_errors["/connection.forgot"] = -52;
+  assert(storageUsage(f).find("marker=-52:-1 prefs=-5:-1 ") != std::string::npos);
+  f.fs.lfs.stat_errors.clear();
+  f.fs.files["/connection.forgot"] = {};
+  assert(storageUsage(f).find("marker=0:0 ") != std::string::npos);
+  f.fs.files.erase("/connection.forgot");
+#else
+  f.fs.fail_read_open_path = "/prefs.json";
+  assert(storageUsage(f).find("prefs=-1:-1 ") != std::string::npos);
+  f.fs.fail_read_open_path.clear();
+#endif
+  f.store.available = false;
+  assert(storageUsage(f).find("mounted=0 result=unavailable") != std::string::npos);
+  assert(f.fs.inspected_paths.empty());
+  f.store.available = true;
+
+#if defined(NRF52_PLATFORM)
+  f.fs.lfs.blocks = {0, 1, 1, 2, 2};
+  assert(storageUsage(f).find("used_blocks=3 error=0") != std::string::npos);
+  f.fs.lfs.error = -5;
+  assert(storageUsage(f).find("result=traverse-error block_size=128 total_blocks=224 used_blocks=-1 error=-5") != std::string::npos);
+  f.fs.lfs.error = 0;
+  f.fs.lfs.blocks = {224};  // Equal to block_count is already out of bounds.
+  assert(storageUsage(f).find("used_blocks=-1 error=-52") != std::string::npos);
+  f.fs.lfs.blocks = std::vector<lfs_block_t>(1000, 0);  // Corrupt cycle/visit limit.
+  assert(storageUsage(f).find("used_blocks=-1 error=-52") != std::string::npos);
+  const auto calls = f.fs.lfs.calls;
+  f.fs.config.block_count = 1025;
+  assert(storageUsage(f).find("result=geometry") != std::string::npos);
+  assert(f.fs.lfs.calls == calls && f.fs.inspected_paths.empty());
+  f.fs.lfs.cfg = nullptr;
+  assert(storageUsage(f).find("result=unavailable") != std::string::npos);
+  assert(f.fs.lfs.calls == calls && f.fs.inspected_paths.empty());
+  f.fs.lfs.cfg = &f.fs.config;
+  f.fs.config.block_count = 224;
+  f.fs.lfs.blocks.clear();
+  for (unsigned i = 0; i < 224; ++i) f.fs.lfs.blocks.push_back(i);
+  assert(storageUsage(f).find("total_blocks=224 used_blocks=224 error=0") != std::string::npos);
+#endif
+  // Global quarantine grants diagnostics, not write access.
+  RecoveryFixture global;
+  global.fs.files["/connection.cfg"] = configRecord(CompanionMode::BLE);
+  quarantined = true;
+  global.boot();
+  storageUsage(global);
+  assert(!global.controller.deviceApiWritesAllowed());
+  quarantined = false;
+  f.fs.inspected_paths.clear();
+  send(f.controller, f.console, "storage usage /anything\n");
+  assert(f.fs.inspected_paths.empty());
+}
+
+static std::string storageLegacy(RecoveryFixture& f) {
+  pump(f.controller);
+  f.console.output.clear();
+  f.fs.inspected_paths.clear();
+  const auto before = f.fs.files;
+  const auto writes = f.fs.write_open_count, removes = f.fs.remove_attempt_count;
+  const auto renames = f.fs.rename_attempt_count, reads = f.fs.file_read_count;
+  const auto resets = reset_count;
+  send(f.controller, f.console, "storage legacy\n");
+  assert(f.fs.files == before && f.fs.write_open_count == writes);
+  assert(f.fs.remove_attempt_count == removes && f.fs.rename_attempt_count == renames);
+  assert(f.fs.file_read_count == reads && reset_count == resets);
+  for (const auto& path : f.fs.inspected_paths)
+    assert(path == "/contacts3" || path == "/contacts3.tmp" || path == "/contacts3.bak" ||
+           path == "/channels2" || path == "/channels2.tmp" || path == "/channels2.bak" ||
+           path == "/_main.id.tmp" || path == "/_main.id.bak" || path == "/adv_blobs");
+  const auto& line = f.console.output;
+  assert(line.find("StorageLegacy v=1 source=primary ") == 0);
+  assert(line.size() < 448 && line.substr(line.size() - 2) == "\r\n");
+  assert(line.find('\n') == line.size() - 1);
+  assert(line.find("private-password") == std::string::npos);
+#if defined(NRF52_PLATFORM)
+  assert(!f.fs.lfs.locked && f.fs.lfs.locks == f.fs.lfs.unlocks);
+  assert(f.fs.lfs.calls == 0);  // No traversal or attempt to repair/mount.
+#endif
+  return line;
+}
+
+static void testStorageLegacy() {
+  RecoveryFixture f;
+  f.fs.fail_write_open_path = "/connection.forgot";
+  const char* paths[] = {"/contacts3", "/contacts3.tmp", "/contacts3.bak",
+      "/channels2", "/channels2.tmp", "/channels2.bak",
+      "/_main.id.tmp", "/_main.id.bak", "/adv_blobs"};
+  for (unsigned i = 0; i < 9; ++i) f.fs.files[paths[i]] = std::vector<uint8_t>(100 + i, 'P');
+  f.boot();
+  assert(f.controller.status().storageRecoveryRequired);
+  std::string line = storageLegacy(f);
+  assert(line.find("contacts=0:100 contacts_tmp=0:101 contacts_bak=0:102 channels=0:103 channels_tmp=0:104 channels_bak=0:105 identity_tmp=0:106 identity_bak=0:107 blobs=0:108") != std::string::npos);
+  storageDiagnostic(f, "marker-open");
+#if defined(NRF52_PLATFORM)
+  assert(line.find("mounted=1 result=ok ") != std::string::npos);
+  f.fs.lfs.stat_errors["/contacts3.tmp"] = -5;
+  f.fs.files.erase("/channels2.bak");
+  line = storageLegacy(f);
+  assert(line.find("contacts_tmp=-5:-1 ") != std::string::npos);
+  assert(line.find("channels_bak=-2:-1 ") != std::string::npos);
+  f.fs.config.block_count = 0;
+  assert(storageLegacy(f).find("result=geometry contacts=-1:-1 ") != std::string::npos);
+  assert(f.fs.inspected_paths.empty());
+  f.fs.config.block_count = 224;
+  f.fs.lfs.cfg = nullptr;
+  assert(storageLegacy(f).find("result=unavailable contacts=-1:-1 ") != std::string::npos);
+  assert(f.fs.inspected_paths.empty());
+  f.fs.lfs.cfg = &f.fs.config;
+#else
+  assert(line.find("mounted=1 result=unsupported ") != std::string::npos);
+  f.fs.fail_read_open_path = "/contacts3.tmp";
+  assert(storageLegacy(f).find("contacts_tmp=-1:-1 ") != std::string::npos);
+#endif
+  f.store.available = false;
+  assert(storageLegacy(f).find("mounted=0 result=unavailable ") != std::string::npos);
+  assert(f.fs.inspected_paths.empty());
+  f.store.available = true;
+  quarantined = true;
+  storageLegacy(f);
+  assert(!f.controller.deviceApiWritesAllowed());
+  quarantined = false;
+  f.fs.inspected_paths.clear();
+  send(f.controller, f.console, "storage legacy /private\n");
+  assert(f.fs.inspected_paths.empty());
+}
 
 static void assertNoCredentials(const FakeFS::State& files) {
   for (const auto& item : files) {
@@ -1162,6 +1561,160 @@ static std::string api(ConnectionController& controller, const char* command, bo
   return reply;
 }
 
+static std::string cli(ConnectionController& controller, const char* command, bool writable = true) {
+  char guarded[159];
+  memset(guarded, 0x5a, sizeof(guarded));
+  assert(controller.handleCliCommand(command, guarded + 1, 157, writable));
+  assert(guarded[0] == 0x5a && guarded[158] == 0x5a);
+  assert(std::strlen(guarded + 1) <= 156);
+  assert(!std::strchr(guarded + 1, '\r') && !std::strchr(guarded + 1, '\n'));
+  const std::string reply = guarded + 1;
+  assert(reply.find("api ") == std::string::npos);
+  assert(reply.find("testpass") == std::string::npos && reply.find("testnet") == std::string::npos);
+  return reply;
+}
+
+static void testCliConnectionControl() {
+  quarantined = cli_rescue = false;
+#if defined(ESP32)
+  WiFi = FakeWiFiClass();
+#endif
+  RecoveryFixture f;
+  f.boot();
+  auto& controller = f.controller;
+  f.ble.connected = true;
+  pump(controller);
+  const auto initial = f.fs.files;
+  assert(cli(controller, "ui connection") == "OK ui connection mode=ble client=ble caps=" +
+      std::to_string(controller.status().capabilities) + " write=1");
+  assert(cli(controller, "ui mode status", false) == "OK ui mode pending=none error=none");
+  assert(cli(controller, "ui wifi status", false).find("OK ui wifi state=idle supported=") == 0);
+  assert(cli(controller, "ui connection", false).find("write=0") != std::string::npos);
+  assert(f.fs.files == initial);
+  f.ble.connected = false;
+  assert(cli(controller, "ui connection").find("client=none") != std::string::npos);
+  f.ble.connected = true;
+
+  char reply[157] = {};
+  assert(!controller.handleCliCommand("ui caps", reply, sizeof(reply), true));
+  assert(!controller.handleCliCommand("ui mode_extra usb", reply, sizeof(reply), true));
+  assert(!controller.handleCliCommand(nullptr, reply, sizeof(reply), true));
+  assert(controller.handleCliCommand("ui mode usb", nullptr, 157, true));
+  for (size_t capacity : {size_t(0), size_t(1), size_t(15), size_t(156)}) {
+    assert(controller.handleCliCommand("ui mode usb", reply, capacity, true));
+    if (capacity >= 14) assert(strcmp(reply, "ERR ui buffer") == 0);
+    assert(!controller.deviceApiBusy() && f.fs.files == initial);
+  }
+  assert(cli(controller, "ui mode usb", false) == "ERR ui readonly");
+  assert(cli(controller, "ui mode") == "ERR ui invalid");
+  assert(cli(controller, "ui mode invalid") == "ERR ui invalid");
+  assert(cli(controller, ("ui wifi ssid " + std::string(160, '6')).c_str()) == "ERR ui invalid");
+  assert(cli(controller, "ui mode usb\n") == "ERR ui invalid");
+  assert(!controller.deviceApiBusy() && f.fs.files == initial);
+  quarantined = true;
+  assert(cli(controller, "ui connection").find("write=0") != std::string::npos);
+  assert(cli(controller, "ui mode usb") == "ERR ui readonly");
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=none error=none");
+  quarantined = false;
+
+  assert(cli(controller, "ui mode usb") == "OK ui mode target=usb state=pending");
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=usb error=none");
+  cli(controller, "ui wifi status");
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE && f.fs.files == initial);
+  fake_now += 2000;
+  pump(controller);
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=none error=timeout");
+  cli(controller, "ui mode usb");
+  controller.apiReplyQueued();
+  f.manager.pending_tx = true;
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  f.manager.pending_tx = false;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::USB);
+  f.usb.connected = true;
+  assert(cli(controller, "ui mode usb") == "OK ui mode target=usb state=active");
+  cli(controller, "ui mode ble");
+  controller.apiReplyQueued();
+  controller.resetApiSession();
+  fake_now += 200;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::USB);
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=none error=cancelled");
+  assert(controller.setMode(CompanionMode::BLE));
+  f.ble.connected = true;
+  cli(controller, "ui mode usb");
+  controller.apiReplyQueued();
+  ++f.manager.session_generation;
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=none error=cancelled");
+  cli(controller, "ui mode usb");
+  controller.apiReplyQueued();
+  f.fs.fail_write_open_path = "/connection.cfg.tmp";
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  assert(cli(controller, "ui mode status") == "OK ui mode pending=none error=storage");
+
+#if defined(ESP32)
+  assert(cli(controller, "ui wifi begin", false) == "ERR ui readonly");
+  assert(cli(controller, "ui mode wifi") == "ERR ui unconfigured");
+  assert(cli(controller, "ui wifi begin") == "OK ui wifi begin state=ssid");
+  assert(cli(controller, "ui wifi begin") == "ERR ui busy");
+  assert(cli(controller, "ui mode usb") == "ERR ui busy");
+  assert(cli(controller, "ui wifi status", false) == "OK ui wifi state=ssid supported=1 configured=0 associated=0 ip=none");
+  assert(cli(controller, "ui wifi ssid 00") == "ERR ui invalid");
+  assert(cli(controller, "ui wifi ssid 746573746e6574") == "OK ui wifi ssid state=password");
+  assert(cli(controller, "ui wifi password 7465737470617373") == "OK ui wifi password state=ready");
+  const auto before_test = f.fs.files;
+  assert(cli(controller, "ui wifi test") == "OK ui wifi test state=testing");
+  assert(WiFi.last_ssid == "testnet" && WiFi.last_password == "testpass");
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  assert(cli(controller, "ui wifi status") == "OK ui wifi state=test_ok supported=1 configured=0 associated=1 ip=192.0.2.7");
+  assert(f.fs.files == before_test);
+  f.fs.short_write_path = "/connection.cfg.tmp";
+  assert(cli(controller, "ui wifi save") == "ERR ui storage");
+  assert(!controller.status().wifiConfigured);
+  assert(cli(controller, "ui wifi save") == "OK ui wifi save");
+  assert(controller.status().wifiConfigured);
+  assert(cli(controller, "ui wifi status").find("state=saved") != std::string::npos);
+  cli(controller, "ui wifi begin");
+  cli(controller, "ui wifi ssid 61");
+  const std::string psk = "ui wifi password " + std::string(128, '6');
+  assert(cli(controller, psk.c_str()) == "OK ui wifi password state=ready");
+  controller.resetApiSession();
+  assert(cli(controller, "ui wifi save") == "ERR ui stale");
+  assert(!controller.deviceApiBusy());
+  cli(controller, "ui wifi begin");
+  cli(controller, "ui wifi ssid 61");
+  assert(cli(controller, "ui wifi password -") == "OK ui wifi password state=ready");
+  assert(cli(controller, "ui wifi cancel") == "OK ui wifi cancel");
+  assert(cli(controller, "ui wifi status").find("state=cancelled") != std::string::npos);
+  cli(controller, "ui wifi begin");
+  fake_now += 120001;
+  pump(controller);
+  assert(cli(controller, "ui wifi status").find("state=timeout") != std::string::npos);
+  assert(controller.setMode(CompanionMode::WiFi));
+  assert(cli(controller, "ui wifi begin") == "ERR ui transport");
+#else
+  assert(cli(controller, "ui wifi begin") == "ERR ui unsupported");
+  assert(cli(controller, "ui wifi status") == "OK ui wifi state=idle supported=0 configured=0 associated=0 ip=none");
+#endif
+  // Local recovery, independently of global quarantine, remains a write gate.
+  RecoveryFixture blocked;
+  blocked.fs.fail_write_open_path = "/connection.forgot";
+  blocked.boot();
+  assert(cli(blocked.controller, "ui connection").find("write=0") != std::string::npos);
+  assert(cli(blocked.controller, "ui mode usb") == "ERR ui readonly");
+  assert(cli(blocked.controller, "ui mode status") == "OK ui mode pending=none error=none");
+}
+
 static void testApiConnectionControl() {
   FakeFS fs;
   DataStore store(fs);
@@ -1643,6 +2196,9 @@ int main() {
   assert(blocked_console.max_write <= 7 && blocked_console.max_write <= 64);
 
   testModeChangeErrors();
+  testStorageDiagnostics();
+  testStorageUsage();
+  testStorageLegacy();
   testCleanBootDoesNotWrite();
   testNrfAppendSafeRecovery();
   testCredentialFreeRecovery();
@@ -1653,6 +2209,7 @@ int main() {
   testDeviceSettingsConsole();
   testPhysicalUsbServiceEntry();
   testApiConnectionControl();
+  testCliConnectionControl();
   return 0;
 }
 '''
@@ -1685,6 +2242,8 @@ def run_build(root: Path, platform: str) -> None:
         *[linux_path(source) for source in sources],
         "-o", linux_path(binary),
     ]
+    if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
+        arguments += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
     if os.name == "nt":
         build = ["wsl", "--exec", "g++", *arguments]
         run = ["wsl", "--exec", linux_path(binary)]
@@ -1725,9 +2284,11 @@ def main() -> None:
     arm = mesh_source.index("connection_controller.apiReplyQueued();")
     guard = mesh_source[max(0, arm - 500):arm]
     assert "queued == reply_length" in guard
-    assert "cmd_frame[7] == 1" in guard
-    assert "out_frame[8] == smartui::SmartUiApi::OK" in guard
-    assert '"api mode ", 9' in guard
+    assert "if (arm_mode && queued == reply_length)" in guard
+    cli_source = (CONTROLLER / "SmartUiCli.cpp").read_text(encoding="utf-8")
+    assert '"ui mode %s"' in cli_source
+    assert '"OK ui mode target=%s state=pending"' in cli_source
+    assert "strcmp(_command, command) == 0 && strcmp(_reply, reply) == 0" in cli_source
     with tempfile.TemporaryDirectory(prefix="smartui-connection-controller-") as raw:
         root = Path(raw)
         example = root / "examples/companion_radio"
@@ -1746,6 +2307,9 @@ def main() -> None:
         # Angle-bracket helper includes resolve through stubs first.
         shutil.copy2(source_helpers / "StorageTransaction.h", helpers / "StorageTransaction.h")
         (root / "stubs/Arduino.h").write_text(ARDUINO, encoding="utf-8")
+        (root / "stubs/Adafruit_LittleFS.h").write_text('#pragma once\n#include <Arduino.h>\n', encoding="utf-8")
+        (root / "stubs/utility").mkdir()
+        (root / "stubs/utility/debug.h").write_text('#pragma once\ninline int dbgHeapFree() { return 8000; }\n', encoding="utf-8")
         (helpers / "MultiSerialInterface.h").write_text(MULTI, encoding="utf-8")
         (root / "stubs/WiFi.h").write_text(WIFI, encoding="utf-8")
         (esp_helpers / "SerialWifiInterface.h").write_text(SERIAL_WIFI, encoding="utf-8")
@@ -1758,7 +2322,7 @@ def main() -> None:
         run_build(root, "esp32")
         run_build(root, "generic")
         run_build(root, "nrf52")
-    print("[PASS] ConnectionController generic/ESP32/nRF52 persistence, append-safe recovery, zero-write clean boot, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
+    print("[PASS] ConnectionController generic/ESP32/nRF52 persistence, append-safe recovery, zero-write clean boot, bounded read-only storage diagnostics, exact failure phases, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
 
 
 if __name__ == "__main__":

@@ -133,12 +133,10 @@ private:
       //def("cad", _parent->cad_enabled);
       //def("int_thr", _parent->interference_threshold);
       def("rxgain", _parent->rx_boosted_gain);
-    #if 0
-      // NOTE: these cannot be set (yet) so don't load/save until we can.
-      //       also, fem_rxgain WAS mapped to wrong JSON property previously
+      // Existing upstream radio keys. Missing keys in an older prefs.json keep
+      // board defaults; once changed, both FEM controls survive a reboot.
       def("fem_rxgain", _parent->radio_fem_rxgain);
       def("fem_txgain", _parent->radio_fem_txgain);
-    #endif
       def("tx", _parent->tx_power_dbm);
       def("af", _parent->airtime_factor);
       def("rxdelay", _parent->rx_delay_base);

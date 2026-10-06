@@ -46,6 +46,9 @@ public:
   bool deviceApiWritesAllowed() const { return _started && mutationAllowed(); }
   bool handleApiCommand(const char* command, char* reply, size_t capacity,
                         bool allow_mutation);
+  // Local CMD66 adapter. Same staged workflow/guards, replies <=156 bytes.
+  bool handleCliCommand(const char* command, char* reply, size_t capacity,
+                       bool allow_mutation);
   // Call only for a real companion session boundary, not USB console activity.
   void resetApiSession();
   // Confirm only a successfully queued reply to the pending api mode request.
@@ -69,6 +72,17 @@ private:
 
   enum class WifiApiResult : uint8_t { NONE, SAVED, CANCELLED, FAILED, TIMED_OUT };
 
+  // Last failed persistence step in this boot. Diagnostic reads never change
+  // this latch, retry recovery, or expose credential-bearing file contents.
+  enum class StoragePhase : uint8_t {
+    NONE, UNAVAILABLE, RECOVERY_BLOCKED, CLEAN_INVALID,
+    MARKER_OPEN, MARKER_VERIFY, CLEAN_REMOVE, CLEAN_OPEN, CLEAN_WRITE,
+    CLEAN_VERIFY, CLEAN_TEMP, CLEAN_BACKUP, CLEAN_FINAL_VERIFY, MARKER_REMOVE,
+    RECOVER_REMOVE, RECOVER_OPEN, RECOVER_WRITE, RECOVER_VERIFY, RECOVER_TEMP,
+    SAVE_TEMP_REMOVE, SAVE_OPEN, SAVE_WRITE, SAVE_VERIFY, SAVE_ROTATE,
+    SAVE_PUBLISH, SAVE_FINAL_VERIFY,
+  };
+
   struct Config {
     CompanionMode mode = CompanionMode::BLE;
     bool wifi_configured = false;
@@ -88,6 +102,7 @@ private:
   bool _started = false;
   bool _config_reset_notice = false;
   bool _config_storage_error = false;
+  StoragePhase _storage_phase = StoragePhase::NONE;
   bool _console_announced = false;
   bool _console_input_seen = false;
   uint32_t _console_last_input = 0;
@@ -129,7 +144,10 @@ private:
   bool modeAvailable(CompanionMode mode) const;
   bool applyMode(CompanionMode mode, bool reset_session);
   bool readConfigFile(const char* path, Config& config) const;
-  bool writeConfigFile(const char* path, const Config& config) const;
+  bool writeConfigFile(const char* path, const Config& config,
+                       StoragePhase open_failure, StoragePhase write_failure);
+  bool storageFailed(StoragePhase phase);
+  static const char* storagePhaseName(StoragePhase phase);
   bool configsEqual(const Config& first, const Config& second) const;
   bool loadConfig();
   bool saveConfig(const Config& config, ConnectionChangeError* error = nullptr);
@@ -147,6 +165,9 @@ private:
   void printConsole(const char* text);
   void printStatus();
   void printInfo();
+  void printStorageStatus();
+  void printStorageUsage();
+  void printStorageLegacy();
   void printHelp();
   void handleQuickReplyCommand(const char* line);
   void handleDeviceSettingsCommand(const char* line);
@@ -154,6 +175,7 @@ private:
   bool startWifiSetup();
   bool saveTestedWifi();
   void serviceApiMode();
+  const char* wifiStageName() const;
 };
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR

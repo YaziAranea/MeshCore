@@ -47,22 +47,26 @@ class DeveloperKitTests(unittest.TestCase):
             manifest = json.loads(archive.read(kit.MANIFEST_NAME))
             self.assertEqual(manifest["source_commit"], COMMIT)
             self.assertEqual(manifest["firmware_version"], release.VERSION)
-            self.assertEqual(manifest["api_version"], 1)
+            self.assertEqual(manifest["cli_version"], 1)
+            self.assertEqual(manifest["transport"], "companion-cli")
+            self.assertEqual((manifest["command"], manifest["response"]), (66, 29))
+            self.assertFalse(manifest["sync"])
+            self.assertFalse(manifest["events"])
             self.assertEqual(manifest["schema_version"], 1)
             self.assertEqual(manifest["distribution"], "public")
             self.assertEqual(manifest["stage"], "release")
             self.assertNotIn("base_source_commit", manifest)
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
-            self.assertIn("SmartUI 0.11", readme)
-            self.assertIn("USB Helper 1.4", readme)
+            self.assertIn("SmartUI 0.12", readme)
+            self.assertIn("USB Helper 1.5", readme)
             self.assertNotIn("LOCAL DEVELOPMENT", readme)
             self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md"})
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
-            for name in ("docs/SMARTUI_API_RU.md", "docs/SMARTUI_API_EN.md"):
-                self.assertIn("../../" + name, archive.read("tools/smartui-api/README.md").decode())
+            for name in ("docs/SMARTUI_CLI_RU.md",):
+                self.assertIn("../../" + name, archive.read("tools/smartui-cli/README.md").decode())
 
     def test_deterministic_bytes_and_exact_source_identity(self):
         first = kit.package(self.root / "one", COMMIT, root=self.source).read_bytes()
@@ -72,13 +76,13 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertNotEqual(first, other)
 
     def test_current_release_and_optional_development_names(self):
-        self.assertEqual(kit.VERSION, "0.11")
-        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.11.zip")
-        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.11-development.zip")
+        self.assertEqual(kit.VERSION, "0.12")
+        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.12.zip")
+        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.12-development.zip")
 
     def test_local_secrets_caches_and_unlisted_files_are_excluded(self):
-        for name in ("tools/smartui-api/.env", "tools/smartui-api/node_modules/test.js",
-                     "tools/smartui-api/__pycache__/test.pyc", "tools/smartui-api/local-notes.md"):
+        for name in ("tools/smartui-cli/.env", "tools/smartui-cli/node_modules/test.js",
+                     "tools/smartui-cli/__pycache__/test.pyc", "tools/smartui-cli/local-notes.md"):
             path = self.source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("local fixture, not for distribution", encoding="utf-8")
@@ -108,7 +112,7 @@ class DeveloperKitTests(unittest.TestCase):
 
     def test_development_manifest_and_name_do_not_claim_exact_release_source(self):
         # Simulate an edited working-tree file without creating a fake commit.
-        edited = self.source / "tools/smartui-api/ecosystem.py"
+        edited = self.source / "tools/smartui-cli/smartui_cli.py"
         edited.write_bytes(edited.read_bytes() + b"\n# local development fixture\n")
         path = kit.package(self.root / "dev", COMMIT, root=self.source, development=True)
         self.assertEqual(path.name, kit.DEVELOPMENT_ZIP_NAME)
@@ -124,12 +128,12 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertIs(manifest["exact_source_commit"], False)
             self.assertNotIn("source_commit", manifest)
             self.assertNotIn("firmware_version", manifest)
-            self.assertEqual(archive.read("tools/smartui-api/ecosystem.py"), edited.read_bytes())
-            self.assertIn("tools/smartui-api/tests/test_ecosystem.py", archive.namelist())
+            self.assertEqual(archive.read("tools/smartui-cli/smartui_cli.py"), edited.read_bytes())
+            self.assertIn("tools/smartui-cli/tests/test_smartui_cli.py", archive.namelist())
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 1.4", readme)
+            self.assertIn("USB Helper 1.5", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
@@ -149,13 +153,13 @@ class DeveloperKitTests(unittest.TestCase):
             kit.package(self.root / "bad", COMMIT + "+dirty", root=self.source, development=True)
 
     def test_development_includes_only_allowlist_and_requires_new_sdk_files(self):
-        secret = self.source / "tools/smartui-api/.env"
+        secret = self.source / "tools/smartui-cli/.env"
         secret.write_text("local fixture", encoding="utf-8")
         path = kit.package(self.root / "dev", COMMIT, root=self.source, development=True)
         with zipfile.ZipFile(path) as archive:
             self.assertEqual(set(archive.namelist()), set(kit.SOURCES) | {"README.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"})
-            self.assertNotIn("tools/smartui-api/.env", archive.namelist())
-        (self.source / "tools/smartui-api/ecosystem.py").unlink()
+            self.assertNotIn("tools/smartui-cli/.env", archive.namelist())
+        (self.source / "tools/smartui-cli/smartui_cli.py").unlink()
         with self.assertRaisesRegex(ValueError, "regular nonempty"):
             kit.package(self.root / "missing", COMMIT, root=self.source, development=True)
         self.assertFalse((self.root / "missing" / kit.DEVELOPMENT_ZIP_NAME).exists())
@@ -181,10 +185,15 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertEqual(set(archive.namelist()), expected)
             archive.extractall(extracted)  # Only the just-verified generated allowlist.
         result = subprocess.run(
-            [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/smartui-api/tests", "-q"],
+            [sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/smartui-cli/tests", "-q"],
             cwd=extracted, capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        javascript = subprocess.run(
+            ["node", "--test", "tools/usb-helper/test_api.js"], cwd=extracted,
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(javascript.returncode, 0, javascript.stdout + javascript.stderr)
 
     def test_release_contains_17_assets_and_kit_in_manifest_and_all_boards_zip(self):
         # Synthetic images only: hardware/image validators have their own tests.

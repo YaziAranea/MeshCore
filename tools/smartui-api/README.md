@@ -1,5 +1,10 @@
 # SmartUI 0.11 API — Python reference client
 
+> Archived with firmware 0.11. SmartUI 0.12 disables API201, sync and events.
+> New integrations use the [local Companion CLI SDK](../smartui-cli/README.md).
+> This directory is retained for reference; its firmware-integration tests must
+> be run against the preserved 0.11 source, not the active 0.12 dispatcher.
+
 API v1 targets SmartUI 0.11. Discover `smartui_api:1` and inspect HELLO rather
 than relying only on the firmware version. Source, protocol tests and examples
 are not a claim of physical-device verification or external publication.

@@ -69,6 +69,7 @@ enum CommandCode : uint8_t {
   kSetDefaultFloodScope = 63,
   kGetDefaultFloodScope = 64,
   kSendRawPacket = 65,
+  kRunCliCommand = 66,  // Local-only backport; firmware protocol stays v13.
   // Experimental SmartUI extension.  44 remains an opt-in legacy alias only
   // when phone-GPS support is explicitly compiled in.
   kSetPhoneGps = 200,
@@ -193,6 +194,7 @@ inline size_t minimumCommandFrameLength(uint8_t command, size_t public_key_size,
     case kSetPathHashMode: return 3;
     case kSendChannelData: return 5;
     case kSendRawPacket: return 4;
+    case kRunCliCommand: return 2;
     default: return 1;
   }
 }
@@ -211,6 +213,10 @@ inline FrameValidationResult validateCommandFrame(const uint8_t* data, size_t le
   }
 
   switch (command) {
+    case kRunCliCommand:
+      if (length > 160) return kFrameTooLarge;
+      break;
+
     case kGetContacts:
       // The optional "since" value is a complete uint32_t, never a fragment.
       if (length != 1 && length < 5) return kFrameInvalidShape;

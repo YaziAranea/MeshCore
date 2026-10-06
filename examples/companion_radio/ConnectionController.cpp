@@ -11,6 +11,11 @@
 
 #include "DataStore.h"
 
+#if defined(NRF52_PLATFORM)
+  #include <Adafruit_LittleFS.h>
+  #include <utility/debug.h>
+#endif
+
 #if defined(ESP32)
   #include <WiFi.h>
   #include <helpers/esp32/SerialWifiInterface.h>
@@ -44,6 +49,40 @@ static const uint32_t WIFI_SETUP_IDLE_TIMEOUT_MS = 120000UL;
 static const uint8_t CONSOLE_BYTES_PER_LOOP = 48;
 static const uint8_t CONSOLE_TX_BYTES_PER_LOOP = 64;
 
+#if defined(NRF52_PLATFORM)
+// Primary InternalFS has 224 blocks on published nRF52840 boards. Keep the
+// diagnostic bounded even if a future build supplies a different filesystem.
+static constexpr uint32_t STORAGE_DIAG_MAX_BLOCKS = 1024;
+struct StorageBlockCount {
+  uint32_t total = 0;
+  uint32_t used = 0;
+  uint32_t visits = 0;
+  uint8_t seen[STORAGE_DIAG_MAX_BLOCKS / 8] = {};
+};
+static int countStorageBlock(void* context, lfs_block_t block) {
+  auto& count = *static_cast<StorageBlockCount*>(context);
+  if (block >= count.total || ++count.visits > count.total * 4U + 16U)
+    return LFS_ERR_CORRUPT;
+  const uint8_t mask = static_cast<uint8_t>(1U << (block & 7U));
+  if (!(count.seen[block / 8] & mask)) {
+    count.seen[block / 8] |= mask;
+    ++count.used;
+  }
+  return 0;
+}
+// Caller holds the filesystem lock and has checked its mounted geometry.
+static void readStorageStat(lfs_t* fs, const char* path, char (&metadata)[24]) {
+  struct lfs_info info = {};
+  const int rc = lfs_stat(fs, path, &info);
+  if (rc == 0) {
+    snprintf(metadata, sizeof(metadata), "0:%lu",
+        static_cast<unsigned long>(static_cast<uint32_t>(info.size)));
+  } else {
+    snprintf(metadata, sizeof(metadata), "%d:-1", rc);
+  }
+}
+#endif
+
 static void secureZero(void* data, size_t len) {
   volatile uint8_t* bytes = static_cast<volatile uint8_t*>(data);
   while (len-- > 0) *bytes++ = 0;
@@ -66,6 +105,15 @@ static const char* modeName(CompanionMode mode) {
     case CompanionMode::WiFi: return "WiFi";
   }
   return "invalid";
+}
+
+static const char* modeToken(CompanionMode mode) {
+  switch (mode) {
+    case CompanionMode::BLE: return "ble";
+    case CompanionMode::USB: return "usb";
+    case CompanionMode::WiFi: return "wifi";
+  }
+  return "none";
 }
 
 static InterfaceType interfaceType(CompanionMode mode) {
@@ -279,11 +327,49 @@ bool ConnectionController::readConfigFile(const char* path, Config& config) cons
   return true;
 }
 
-bool ConnectionController::writeConfigFile(const char* path,
-                                            const Config& config) const {
-  if (!_store) return false;
+bool ConnectionController::storageFailed(StoragePhase phase) {
+  _storage_phase = phase;
+  return false;
+}
+
+const char* ConnectionController::storagePhaseName(StoragePhase phase) {
+  switch (phase) {
+    case StoragePhase::NONE: return "none";
+    case StoragePhase::UNAVAILABLE: return "unavailable";
+    case StoragePhase::RECOVERY_BLOCKED: return "recovery-blocked";
+    case StoragePhase::CLEAN_INVALID: return "clean-invalid";
+    case StoragePhase::MARKER_OPEN: return "marker-open";
+    case StoragePhase::MARKER_VERIFY: return "marker-verify";
+    case StoragePhase::CLEAN_REMOVE: return "clean-primary-remove";
+    case StoragePhase::CLEAN_OPEN: return "clean-primary-open";
+    case StoragePhase::CLEAN_WRITE: return "clean-primary-write";
+    case StoragePhase::CLEAN_VERIFY: return "clean-primary-verify";
+    case StoragePhase::CLEAN_TEMP: return "clean-temp";
+    case StoragePhase::CLEAN_BACKUP: return "clean-backup";
+    case StoragePhase::CLEAN_FINAL_VERIFY: return "clean-final-verify";
+    case StoragePhase::MARKER_REMOVE: return "marker-remove";
+    case StoragePhase::RECOVER_REMOVE: return "recover-primary-remove";
+    case StoragePhase::RECOVER_OPEN: return "recover-primary-open";
+    case StoragePhase::RECOVER_WRITE: return "recover-primary-write";
+    case StoragePhase::RECOVER_VERIFY: return "recover-primary-verify";
+    case StoragePhase::RECOVER_TEMP: return "recover-temp-cleanup";
+    case StoragePhase::SAVE_TEMP_REMOVE: return "save-temp-remove";
+    case StoragePhase::SAVE_OPEN: return "save-temp-open";
+    case StoragePhase::SAVE_WRITE: return "save-temp-write";
+    case StoragePhase::SAVE_VERIFY: return "save-temp-verify";
+    case StoragePhase::SAVE_ROTATE: return "save-rotate";
+    case StoragePhase::SAVE_PUBLISH: return "save-publish";
+    case StoragePhase::SAVE_FINAL_VERIFY: return "save-final-verify";
+  }
+  return "unknown";
+}
+
+bool ConnectionController::writeConfigFile(const char* path, const Config& config,
+                                          StoragePhase open_failure,
+                                          StoragePhase write_failure) {
+  if (!_store) return storageFailed(StoragePhase::UNAVAILABLE);
   FILESYSTEM* fs = _store->getPrimaryFS();
-  if (!fs) return false;
+  if (!fs) return storageFailed(StoragePhase::UNAVAILABLE);
 
   uint8_t raw[CONFIG_RECORD_SIZE] = {};
   memcpy(raw, CONFIG_MAGIC, sizeof(CONFIG_MAGIC));
@@ -304,13 +390,13 @@ bool ConnectionController::writeConfigFile(const char* path,
   File file = openConfigWrite(fs, path);
   if (!file) {
     secureZero(raw, sizeof(raw));
-    return false;
+    return storageFailed(open_failure);
   }
   const bool success = file.write(raw, sizeof(raw)) == sizeof(raw);
   file.flush();
   file.close();
   secureZero(raw, sizeof(raw));
-  return success;
+  return success ? true : storageFailed(write_failure);
 }
 
 bool ConnectionController::saveConfig(const Config& config, ConnectionChangeError* error) {
@@ -321,13 +407,21 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
   };
   const ConnectionChangeError blocked = mutationError();
   if (blocked != ConnectionChangeError::None) return fail(blocked);
-  if (!_store) return fail(ConnectionChangeError::StorageUnavailable);
+  if (!_store) {
+    storageFailed(StoragePhase::UNAVAILABLE);
+    return fail(ConnectionChangeError::StorageUnavailable);
+  }
   FILESYSTEM* fs = _store->getPrimaryFS();
-  if (!fs) return fail(ConnectionChangeError::StorageUnavailable);
+  if (!fs) {
+    storageFailed(StoragePhase::UNAVAILABLE);
+    return fail(ConnectionChangeError::StorageUnavailable);
+  }
   if (fs->exists(CONFIG_TEMP_PATH) && !fs->remove(CONFIG_TEMP_PATH)) {
+    storageFailed(StoragePhase::SAVE_TEMP_REMOVE);
     return fail(ConnectionChangeError::TempCleanup);
   }
-  if (!writeConfigFile(CONFIG_TEMP_PATH, config)) return fail(ConnectionChangeError::Write);
+  if (!writeConfigFile(CONFIG_TEMP_PATH, config, StoragePhase::SAVE_OPEN,
+                       StoragePhase::SAVE_WRITE)) return fail(ConnectionChangeError::Write);
 
   Config verified;
   const bool scratch_valid = readConfigFile(CONFIG_TEMP_PATH, verified) &&
@@ -335,6 +429,7 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
   secureZero(&verified, sizeof(verified));
   if (!scratch_valid) {
     fs->remove(CONFIG_TEMP_PATH);
+    storageFailed(StoragePhase::SAVE_VERIFY);
     return fail(ConnectionChangeError::VerifyTemp);
   }
 
@@ -345,11 +440,16 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
   bool rotated = false;
   if (had_primary && current_valid) {
     if (fs->exists(CONFIG_BACKUP_PATH) && !fs->remove(CONFIG_BACKUP_PATH)) {
+      storageFailed(StoragePhase::SAVE_ROTATE);
       return fail(ConnectionChangeError::Rotate);
     }
-    if (!fs->rename(CONFIG_PATH, CONFIG_BACKUP_PATH)) return fail(ConnectionChangeError::Rotate);
+    if (!fs->rename(CONFIG_PATH, CONFIG_BACKUP_PATH)) {
+      storageFailed(StoragePhase::SAVE_ROTATE);
+      return fail(ConnectionChangeError::Rotate);
+    }
     rotated = true;
   } else if (had_primary && !fs->remove(CONFIG_PATH)) {
+    storageFailed(StoragePhase::SAVE_ROTATE);
     return fail(ConnectionChangeError::Rotate);
   }
 
@@ -357,6 +457,7 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
     if (rotated && !fs->exists(CONFIG_PATH) && fs->exists(CONFIG_BACKUP_PATH)) {
       fs->rename(CONFIG_BACKUP_PATH, CONFIG_PATH);
     }
+    storageFailed(StoragePhase::SAVE_PUBLISH);
     return fail(ConnectionChangeError::Publish);
   }
 
@@ -364,6 +465,7 @@ bool ConnectionController::saveConfig(const Config& config, ConnectionChangeErro
   const bool success = readConfigFile(CONFIG_PATH, published) &&
       configsEqual(config, published);
   secureZero(&published, sizeof(published));
+  if (!success) storageFailed(StoragePhase::SAVE_FINAL_VERIFY);
   return success ? true : fail(ConnectionChangeError::VerifyFinal);
 }
 
@@ -390,9 +492,11 @@ bool ConnectionController::removeOrNeutralizeConfigFile(
 }
 
 bool ConnectionController::persistCleanConfig(const Config& clean) {
-  if (!mutationAllowed() || clean.wifi_configured || !_store) return false;
+  if (!mutationAllowed()) return storageFailed(StoragePhase::RECOVERY_BLOCKED);
+  if (clean.wifi_configured) return storageFailed(StoragePhase::CLEAN_INVALID);
+  if (!_store) return storageFailed(StoragePhase::UNAVAILABLE);
   FILESYSTEM* fs = _store->getPrimaryFS();
-  if (!fs) return false;
+  if (!fs) return storageFailed(StoragePhase::UNAVAILABLE);
 
   Config verified;
   bool primary_clean = readConfigFile(CONFIG_PATH, verified) &&
@@ -410,12 +514,12 @@ bool ConnectionController::persistCleanConfig(const Config& clean) {
   // A partial marker is intentional: its existence alone suppresses secrets.
   if (!fs->exists(CONFIG_FORGET_PATH)) {
     File marker = openConfigWrite(fs, CONFIG_FORGET_PATH);
-    if (!marker) return false;
+    if (!marker) return storageFailed(StoragePhase::MARKER_OPEN);
     const uint8_t value = 1;
     marker.write(&value, sizeof(value));
     marker.flush();
     marker.close();
-    if (!fs->exists(CONFIG_FORGET_PATH)) return false;
+    if (!fs->exists(CONFIG_FORGET_PATH)) return storageFailed(StoragePhase::MARKER_VERIFY);
   }
 
   if (!primary_clean) {
@@ -425,25 +529,27 @@ bool ConnectionController::persistCleanConfig(const Config& clean) {
     // appends instead of truncating.  The durable marker makes the gap safe.
     if (fs->exists(CONFIG_PATH)) {
       fs->remove(CONFIG_PATH);
-      if (fs->exists(CONFIG_PATH)) return false;
+      if (fs->exists(CONFIG_PATH)) return storageFailed(StoragePhase::CLEAN_REMOVE);
     }
-    if (!writeConfigFile(CONFIG_PATH, clean)) return false;
+    if (!writeConfigFile(CONFIG_PATH, clean, StoragePhase::CLEAN_OPEN,
+                         StoragePhase::CLEAN_WRITE)) return false;
     primary_clean = readConfigFile(CONFIG_PATH, verified) &&
         configsEqual(clean, verified);
     secureZero(&verified, sizeof(verified));
-    if (!primary_clean) return false;
+    if (!primary_clean) return storageFailed(StoragePhase::CLEAN_VERIFY);
   }
 
   const bool temporary_safe = removeOrNeutralizeConfigFile(CONFIG_TEMP_PATH, clean);
   const bool backup_safe = removeOrNeutralizeConfigFile(CONFIG_BACKUP_PATH, clean);
-  if (!temporary_safe || !backup_safe) return false;
+  if (!temporary_safe) return storageFailed(StoragePhase::CLEAN_TEMP);
+  if (!backup_safe) return storageFailed(StoragePhase::CLEAN_BACKUP);
   // Recheck the anchor before dropping the credential-recovery barrier.
   primary_clean = readConfigFile(CONFIG_PATH, verified) &&
       configsEqual(clean, verified);
   secureZero(&verified, sizeof(verified));
-  if (!primary_clean) return false;
+  if (!primary_clean) return storageFailed(StoragePhase::CLEAN_FINAL_VERIFY);
   if (fs->exists(CONFIG_FORGET_PATH)) fs->remove(CONFIG_FORGET_PATH);
-  return !fs->exists(CONFIG_FORGET_PATH);
+  return !fs->exists(CONFIG_FORGET_PATH) ? true : storageFailed(StoragePhase::MARKER_REMOVE);
 }
 
 bool ConnectionController::loadConfig() {
@@ -479,7 +585,8 @@ bool ConnectionController::loadConfig() {
   secureZero(&selected, sizeof(selected));
 
   if (!mutationAllowed()) {
-    return !forget_pending && choice != mesh::storage::RecoveryCandidate::NONE;
+    return !forget_pending && choice != mesh::storage::RecoveryCandidate::NONE
+        ? true : storageFailed(StoragePhase::RECOVERY_BLOCKED);
   }
   if (!_config.wifi_configured) {
     return persistCleanConfig(_config);
@@ -488,16 +595,18 @@ bool ConnectionController::loadConfig() {
     // Write the invalid/missing primary directly and preserve the source until
     // the new anchor is read back; normal saveConfig() consumes its scratch.
     // NRF FILE_O_WRITE does not necessarily truncate a malformed longer file.
-    if (fs->exists(CONFIG_PATH) && !fs->remove(CONFIG_PATH)) return false;
-    if (!writeConfigFile(CONFIG_PATH, _config)) return false;
+    if (fs->exists(CONFIG_PATH) && !fs->remove(CONFIG_PATH)) return storageFailed(StoragePhase::RECOVER_REMOVE);
+    if (!writeConfigFile(CONFIG_PATH, _config, StoragePhase::RECOVER_OPEN,
+                         StoragePhase::RECOVER_WRITE)) return false;
     Config verified;
     const bool recovered = readConfigFile(CONFIG_PATH, verified) && configsEqual(_config, verified);
     secureZero(&verified, sizeof(verified));
-    if (!recovered) return false;
-    if (fs->exists(CONFIG_TEMP_PATH)) fs->remove(CONFIG_TEMP_PATH);
+    if (!recovered) return storageFailed(StoragePhase::RECOVER_VERIFY);
+    if (fs->exists(CONFIG_TEMP_PATH) && !fs->remove(CONFIG_TEMP_PATH))
+      storageFailed(StoragePhase::RECOVER_TEMP);  // Existing best-effort cleanup remains nonfatal.
     return true;
   } else if (fs->exists(CONFIG_TEMP_PATH)) {
-    fs->remove(CONFIG_TEMP_PATH);
+    if (!fs->remove(CONFIG_TEMP_PATH)) storageFailed(StoragePhase::RECOVER_TEMP);
   }
   return true;
 }
@@ -600,6 +709,7 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   _quarantine_latched = false;
   _config_reset_notice = false;
   _config_storage_error = false;
+  _storage_phase = StoragePhase::NONE;
   _console_announced = false;
   secureZero(_console_line, sizeof(_console_line));
   _console_line_len = 0;
@@ -912,6 +1022,89 @@ void ConnectionController::serviceApiMode() {
   else _api_mode_error = _last_change_error == ConnectionChangeError::Apply ? "apply" : "storage";
 }
 
+const char* ConnectionController::wifiStageName() const {
+  if (_wifi_setup_stage == WifiSetupStage::WAIT_SSID) return "ssid";
+  if (_wifi_setup_stage == WifiSetupStage::WAIT_PASSWORD) return "password";
+  if (_wifi_setup_stage == WifiSetupStage::READY) return "ready";
+  if (_wifi_setup_stage == WifiSetupStage::TESTING) return "testing";
+  if (_wifi_setup_stage == WifiSetupStage::TEST_OK) return "test_ok";
+  if (_api_wifi_result == WifiApiResult::SAVED) return "saved";
+  if (_api_wifi_result == WifiApiResult::CANCELLED) return "cancelled";
+  if (_api_wifi_result == WifiApiResult::FAILED) return "failed";
+  if (_api_wifi_result == WifiApiResult::TIMED_OUT) return "timeout";
+  return "idle";
+}
+
+bool ConnectionController::handleCliCommand(const char* command, char* reply,
+                                            size_t capacity, bool allow_mutation) {
+  if (!command) return false;
+  const bool connection = strcmp(command, "ui connection") == 0;
+  const bool wifi = strcmp(command, "ui wifi") == 0 || strncmp(command, "ui wifi ", 8) == 0;
+  const bool mode = strcmp(command, "ui mode") == 0 || strncmp(command, "ui mode ", 8) == 0;
+  if (!connection && !wifi && !mode) return false;
+  if (!reply || capacity == 0) return true;
+  auto respond = [&](const char* text) { snprintf(reply, capacity, "%s", text); };
+  // Reject before staging credentials or mode changes. The wire adds its own
+  // optional three-byte prefix outside this 156-byte response contract.
+  if (capacity < 157) { respond("ERR ui buffer"); return true; }
+  size_t length = 0;
+  while (length <= 156 && command[length]) {
+    const uint8_t c = static_cast<uint8_t>(command[length]);
+    if (c < 0x20 || c > 0x7e) { respond("ERR ui invalid"); return true; }
+    ++length;
+  }
+  if (length > 156) { respond("ERR ui invalid"); return true; }
+  if (connection) {
+    const CompanionStatus current = status();
+    snprintf(reply, capacity, "OK ui connection mode=%s client=%s caps=%u write=%u",
+        modeToken(current.selected), current.clientConnected ? modeToken(current.connectedVia) : "none",
+        static_cast<unsigned>(current.capabilities),
+        allow_mutation && deviceApiWritesAllowed() ? 1U : 0U);
+    return true;
+  }
+  if (strcmp(command, "ui wifi status") == 0) {
+    const CompanionStatus current = status();
+    snprintf(reply, capacity,
+        "OK ui wifi state=%s supported=%u configured=%u associated=%u ip=%s",
+        wifiStageName(), (capabilities() & COMPANION_CAP_WIFI) ? 1U : 0U,
+        current.wifiConfigured ? 1U : 0U, current.wifiAssociated ? 1U : 0U,
+        current.wifiLocalIp[0] ? current.wifiLocalIp : "none");
+    return true;
+  }
+  if (strcmp(command, "ui mode status") == 0) {
+    snprintf(reply, capacity, "OK ui mode pending=%s error=%s",
+        _api_mode_pending ? modeToken(_api_mode_target) : "none", _api_mode_error);
+    return true;
+  }
+
+  // Namespace adaptation only: do not duplicate the tested transactional
+  // state machine, ownership, transport, timeout or response-drain policy.
+  char api_command[158];
+  char api_reply[256] = {};
+  memcpy(api_command, "api", 3);
+  memcpy(api_command + 3, command + 2, length - 1);  // Include terminating NUL.
+  const bool handled = handleApiCommand(api_command, api_reply, sizeof(api_reply), allow_mutation);
+  size_t reply_length = 0;
+  while (reply_length < sizeof(api_reply) && api_reply[reply_length]) ++reply_length;
+  if (!handled) respond("ERR ui invalid");
+  else if (reply_length >= sizeof(api_reply) || reply_length > 157) respond("ERR ui buffer");
+  else {
+    const char* status_token = nullptr;
+    const char* body = nullptr;
+    if (strncmp(api_reply, "OK api ", 7) == 0) { status_token = "OK"; body = api_reply + 7; }
+    else if (strncmp(api_reply, "ERR api ", 8) == 0) { status_token = "ERR"; body = api_reply + 8; }
+    if (!body) respond("ERR ui invalid");
+    else {
+      const int written = snprintf(reply, capacity, "%s ui %s", status_token, body);
+      if (written < 0 || written > 156 || static_cast<size_t>(written) >= capacity)
+        respond("ERR ui buffer");
+    }
+  }
+  secureZero(api_command, sizeof(api_command));
+  secureZero(api_reply, sizeof(api_reply));
+  return true;
+}
+
 bool ConnectionController::handleApiCommand(const char* command, char* reply,
                                             size_t capacity, bool allow_mutation) {
   if (!command) return false;
@@ -945,16 +1138,7 @@ bool ConnectionController::handleApiCommand(const char* command, char* reply,
   }
   if (strcmp(command, "api wifi status") == 0) {
     const CompanionStatus current = status();
-    const char* stage = "idle";
-    if (_wifi_setup_stage == WifiSetupStage::WAIT_SSID) stage = "ssid";
-    else if (_wifi_setup_stage == WifiSetupStage::WAIT_PASSWORD) stage = "password";
-    else if (_wifi_setup_stage == WifiSetupStage::READY) stage = "ready";
-    else if (_wifi_setup_stage == WifiSetupStage::TESTING) stage = "testing";
-    else if (_wifi_setup_stage == WifiSetupStage::TEST_OK) stage = "test_ok";
-    else if (_api_wifi_result == WifiApiResult::SAVED) stage = "saved";
-    else if (_api_wifi_result == WifiApiResult::CANCELLED) stage = "cancelled";
-    else if (_api_wifi_result == WifiApiResult::FAILED) stage = "failed";
-    else if (_api_wifi_result == WifiApiResult::TIMED_OUT) stage = "timeout";
+    const char* stage = wifiStageName();
     snprintf(reply, capacity,
         "OK api wifi state=%s owner=%s supported=%u configured=%u associated=%u ip=%s ssid_set=%u password_set=%u mode_pending=%s last_mode_error=%s",
         stage, _api_wifi_setup ? "api" : _wifi_setup_stage != WifiSetupStage::IDLE ? "console" : "none",
@@ -1126,6 +1310,8 @@ void ConnectionController::printHelp() {
   // Preserve the legacy help grammar; new helpers negotiate this extension.
   if (_hooks.handleDeviceSettings) printConsole("Settings protocol: 1\r\n");
   printConsole("Credential input is not echoed. WiFi is saved only after a passed test.\r\n");
+  printConsole("Read-only diagnostics: storage status; phase=last failure this boot; E:S:V=exists:size:valid, size=-1 if unreadable; marker valid means readable presence, even empty.\r\n");
+  printConsole("storage usage | storage legacy: rc:size; -2=absent; -1=unknown.\r\n");
 }
 
 void ConnectionController::handleDeviceSettingsCommand(const char* line) {
@@ -1237,7 +1423,7 @@ void ConnectionController::printStatus() {
 void ConnectionController::printInfo() {
   const uint8_t caps = capabilities();
   const char* board = _hooks.getBoardName ? _hooks.getBoardName() : nullptr;
-  char line[384];
+  char line[448];
   snprintf(line, sizeof(line),
       "SmartUI=%s core=%s build=%s upstream=%s capabilities=%s%s%s board=%.96s\r\n",
       SMARTUI_VERSION, SMARTUI_CORE_VERSION, SMARTUI_BUILD_SHA, SMARTUI_UPSTREAM_SHA,
@@ -1246,6 +1432,156 @@ void ConnectionController::printInfo() {
       (caps & COMPANION_CAP_WIFI) ? ((caps & (COMPANION_CAP_BLE | COMPANION_CAP_USB))
           ? ",WiFi" : "WiFi") : "",
       board && board[0] ? board : "unknown");
+  printConsole(line);
+}
+
+void ConnectionController::printStorageStatus() {
+  // Do not call loadConfig/persistCleanConfig here: even a diagnostic query
+  // during quarantine must not retry writes, clear the failure latch, or reset
+  // a companion session. Only these four fixed paths may be inspected.
+  FILESYSTEM* fs = _store ? _store->getPrimaryFS() : nullptr;
+  const char* paths[] = {CONFIG_PATH, CONFIG_TEMP_PATH, CONFIG_BACKUP_PATH, CONFIG_FORGET_PATH};
+  char metadata[4][32];
+  for (unsigned i = 0; i < 4; ++i) {
+    if (!fs || !fs->exists(paths[i])) {
+      strcpy(metadata[i], "0:0:0");
+      continue;
+    }
+    File file = openConfigRead(fs, paths[i]);
+    if (!file) {
+      strcpy(metadata[i], "1:-1:0");
+      continue;
+    }
+    const unsigned long size = static_cast<unsigned long>(file.size());
+    file.close();
+    Config checked;
+    // A forget barrier is deliberately valid even after an empty/partial write.
+    // Unlike the three records, its contents are never read or interpreted.
+    const bool valid = i == 3 || readConfigFile(paths[i], checked);
+    secureZero(&checked, sizeof(checked));
+    snprintf(metadata[i], sizeof(metadata[i]), "1:%lu:%u", size, valid ? 1U : 0U);
+  }
+  const bool quarantined = _hooks.isStorageQuarantined && _hooks.isStorageQuarantined();
+  char line[320];
+  snprintf(line, sizeof(line),
+      "Storage v=1 phase=%s local=%u global=%u fs=%u primary=%s temp=%s backup=%s marker=%s\r\n",
+      storagePhaseName(_storage_phase), _config_storage_error ? 1U : 0U,
+      quarantined ? 1U : 0U, fs ? 1U : 0U,
+      metadata[0], metadata[1], metadata[2], metadata[3]);
+  printConsole(line);
+}
+
+void ConnectionController::printStorageUsage() {
+  FILESYSTEM* fs = _store ? _store->getPrimaryFS() : nullptr;
+  // main.cpp halts on mount failure before begin(), as required by all existing
+  // controller file operations. No runtime unmount is allowed during queries.
+  const bool mounted = _started && fs;
+  bool inspect_files = fs && mounted;
+  const char* result = inspect_files ? "unsupported" : "unavailable";
+  uint32_t total = 0, block_size = 0;
+  long used = -1;
+  long heap_free = -1;
+  int error = 0;
+  const char* paths[] = {CONFIG_FORGET_PATH, "/prefs.json", "/prefs.json.tmp",
+      "/prefs.json.bak", "/new_prefs", "/_main.id", "/contacts3"};
+  char metadata[7][24];
+  for (auto& value : metadata) strcpy(value, "-1:-1");
+#if defined(NRF52_PLATFORM)
+  // This core uses heap_3/malloc, not FreeRTOS heap_4: minimum-ever free is
+  // unavailable. Free bytes do not prove a sufficiently large contiguous block.
+  heap_free = dbgHeapFree();
+  if (inspect_files) {
+    // This is a read-only traversal: never mount, repair, format, sync, or call
+    // File methods while holding the non-recursive filesystem lock.
+    fs->_lockFS();
+    lfs_t* lfs = fs->_getFS();
+    if (lfs && lfs->cfg) {
+      total = lfs->cfg->block_count;
+      block_size = lfs->cfg->block_size;
+      if (total && total <= STORAGE_DIAG_MAX_BLOCKS && block_size) {
+        StorageBlockCount count;
+        count.total = total;
+        error = lfs_traverse(lfs, countStorageBlock, &count);
+        result = error == 0 ? "ok" : "traverse-error";
+        if (!error) used = static_cast<long>(count.used);
+        // Direct stat retains exact errno; exists() would hide I/O/corruption as
+        // an absent file. Read metadata only, never open or read file contents.
+        for (unsigned i = 0; i < 7; ++i) readStorageStat(lfs, paths[i], metadata[i]);
+      } else {
+        result = "geometry";
+        inspect_files = false;
+      }
+    } else {
+      result = "unavailable";
+      inspect_files = false;
+    }
+    fs->_unlockFS();
+  }
+#else
+  // Generic adapters do not expose stat errno or filesystem geometry. Preserve
+  // that uncertainty instead of claiming exists(false) means LFS_ERR_NOENT.
+  if (inspect_files) for (unsigned i = 0; i < 7; ++i) {
+    if (fs->exists(paths[i])) {
+      File file = openConfigRead(fs, paths[i]);
+      if (file) {
+        snprintf(metadata[i], sizeof(metadata[i]), "0:%lu",
+            static_cast<unsigned long>(static_cast<uint32_t>(file.size())));
+        file.close();
+      }
+    }
+  }
+#endif
+  char line[512];
+  snprintf(line, sizeof(line),
+      "StorageUsage v=1 source=primary mounted=%u result=%s block_size=%lu total_blocks=%lu used_blocks=%ld error=%d heap_free=%ld heap_min=-1 marker=%s prefs=%s prefs_tmp=%s prefs_bak=%s legacy=%s identity=%s contacts=%s\r\n",
+      mounted ? 1U : 0U, result, static_cast<unsigned long>(block_size),
+      static_cast<unsigned long>(total), used, error, heap_free,
+      metadata[0], metadata[1], metadata[2], metadata[3], metadata[4],
+      metadata[5], metadata[6]);
+  printConsole(line);
+}
+
+void ConnectionController::printStorageLegacy() {
+  FILESYSTEM* fs = _store ? _store->getPrimaryFS() : nullptr;
+  const bool mounted = _started && fs;
+  const char* result = mounted ? "unsupported" : "unavailable";
+  // Fixed metadata allowlist only. Never enumerate names or read contents.
+  // Migration may retain primary siblings and failed/unequal bulk copies.
+  const char* paths[] = {"/contacts3", "/contacts3.tmp", "/contacts3.bak",
+      "/channels2", "/channels2.tmp", "/channels2.bak",
+      "/_main.id.tmp", "/_main.id.bak", "/adv_blobs"};
+  char metadata[9][24];
+  for (auto& value : metadata) strcpy(value, "-1:-1");
+#if defined(NRF52_PLATFORM)
+  if (mounted) {
+    fs->_lockFS();
+    lfs_t* lfs = fs->_getFS();
+    if (lfs && lfs->cfg) {
+      if (lfs->cfg->block_count && lfs->cfg->block_count <= STORAGE_DIAG_MAX_BLOCKS &&
+          lfs->cfg->block_size) {
+        result = "ok";
+        for (unsigned i = 0; i < 9; ++i) readStorageStat(lfs, paths[i], metadata[i]);
+      } else result = "geometry";
+    } else result = "unavailable";
+    fs->_unlockFS();
+  }
+#else
+  if (mounted) for (unsigned i = 0; i < 9; ++i) {
+    if (fs->exists(paths[i])) {
+      File file = openConfigRead(fs, paths[i]);
+      if (file) {
+        snprintf(metadata[i], sizeof(metadata[i]), "0:%lu",
+            static_cast<unsigned long>(static_cast<uint32_t>(file.size())));
+        file.close();
+      }
+    }
+  }
+#endif
+  char line[384];
+  snprintf(line, sizeof(line),
+      "StorageLegacy v=1 source=primary mounted=%u result=%s contacts=%s contacts_tmp=%s contacts_bak=%s channels=%s channels_tmp=%s channels_bak=%s identity_tmp=%s identity_bak=%s blobs=%s\r\n",
+      mounted ? 1U : 0U, result, metadata[0], metadata[1], metadata[2],
+      metadata[3], metadata[4], metadata[5], metadata[6], metadata[7], metadata[8]);
   printConsole(line);
 }
 
@@ -1307,7 +1643,8 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
       _hooks.isStorageQuarantined();
   const bool read_only_command = strcmp(line, "status") == 0 ||
       strcmp(line, "wifi status") == 0 || strcmp(line, "info") == 0 ||
-      strcmp(line, "help") == 0;
+      strcmp(line, "help") == 0 || strcmp(line, "storage status") == 0 ||
+      strcmp(line, "storage usage") == 0 || strcmp(line, "storage legacy") == 0;
   const bool reply_read = strncmp(line, "reply get ", 10) == 0;
   if ((quarantined || _config_storage_error) && !read_only_command && !reply_read &&
       (quarantined || strcmp(line, "wifi forget") != 0)) {
@@ -1316,6 +1653,12 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   }
   if (strcmp(line, "status") == 0 || strcmp(line, "wifi status") == 0) {
     printStatus();
+  } else if (strcmp(line, "storage status") == 0) {
+    printStorageStatus();
+  } else if (strcmp(line, "storage usage") == 0) {
+    printStorageUsage();
+  } else if (strcmp(line, "storage legacy") == 0) {
+    printStorageLegacy();
   } else if (strcmp(line, "info") == 0) {
     printInfo();
   } else if (strcmp(line, "help") == 0) {

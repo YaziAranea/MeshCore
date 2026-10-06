@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.4.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.5.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -465,14 +465,15 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
-const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.11');
-test('0.08 through 0.11 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.12');
+test('0.08 through 0.12 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
     {version:'0.10',maximum:30,named:true},
     {version:'0.11',maximum:30,named:true},
-    {version:'0.12',maximum:30,named:false},
+    {version:'0.12',maximum:30,named:true},
+    {version:'0.13',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},
@@ -516,7 +517,7 @@ test('headless settings save explicit fields with readback; ADC calculation and 
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.adc_multiplier),4.9);
     await noOverlap(f.page);
     await f.page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · тестовые данные. Физическая плата не подключена.';section.prepend(caption);});
-    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.4-settings-desktop.png')});
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.5-settings-desktop.png')});
     await f.page.locator('#simulation-caption').evaluate(caption=>caption.remove());
     await confirm(f.page,'#adc-apply',false);
     assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc apply'))),false);
@@ -554,7 +555,7 @@ test('mobile settings have accessible controls, separate LEDs and battery warnin
     assert.equal(await f.page.evaluate(()=>document.activeElement.id),'setting-melody'); // unchanged save buttons are disabled
     await noOverlap(f.page);
     await f.page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · тестовые данные. Физическая плата не подключена.';section.prepend(caption);});
-    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.4-settings-mobile.png')});
+    await f.page.locator('#device-section').screenshot({path:path.join(output,'helper-1.5-settings-mobile.png')});
     await f.page.locator('#simulation-caption').evaluate(caption=>caption.remove());
   } finally {await f.close();}
 });
