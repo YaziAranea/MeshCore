@@ -186,6 +186,8 @@ class MultiSerialInterface {
   }
 public:
   bool fail_next_select = false;
+  bool pending_tx = false;
+  bool hasPendingTx() const { return pending_tx; }
   bool addInterface(InterfaceType type, BaseSerialInterface* interface) {
     for (auto& item : items_) if (!item.interface) { item = {type, interface}; return true; }
     return false;
@@ -1003,6 +1005,160 @@ static void testPhysicalUsbServiceEntry() {
   assert(mesh._cli_rescue);
 }
 
+static std::string api(ConnectionController& controller, const char* command, bool writable = true) {
+  char reply[480] = {};
+  assert(controller.handleApiCommand(command, reply, sizeof(reply), writable));
+  assert(std::strchr(reply, '\n') == nullptr && std::strchr(reply, '\r') == nullptr);
+  return reply;
+}
+
+static void testApiConnectionControl() {
+  FakeFS fs;
+  DataStore store(fs);
+  FakeTransport ble, usb;
+  MultiSerialInterface manager;
+  FakeStream console;
+  ConnectionController controller;
+  manager.addInterface(InterfaceType::Bluetooth, &ble);
+  manager.addInterface(InterfaceType::USB, &usb);
+#if defined(ESP32)
+  WiFi = FakeWiFiClass();
+  SerialWifiInterface wifi;
+  manager.addInterface(InterfaceType::WiFi, &wifi);
+#endif
+  manager.enable();
+  controller.begin(store, manager, console,
+#if defined(ESP32)
+                   &wifi,
+#else
+                   nullptr,
+#endif
+                   hooks());
+  pump(controller);
+  ble.connected = true;
+  console.output.clear();
+  const auto initial = fs.files;
+  assert(api(controller, "api mode usb", false) == "ERR api readonly");
+  assert(api(controller, "api mode invalid") == "ERR api invalid");
+  assert(api(controller, "api mode usb").find("state=pending") != std::string::npos);
+  fake_now += 150;
+  api(controller, "api wifi status"); // Unrelated read must not arm a switch.
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE); // No queued ACK.
+  fake_now += 2000;
+  pump(controller);
+  assert(fs.files == initial);
+  assert(api(controller, "api wifi status").find("last_mode_error=timeout") != std::string::npos);
+  api(controller, "api mode usb");
+  controller.apiReplyQueued();
+  manager.pending_tx = true;
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  manager.pending_tx = false;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::USB);
+  usb.connected = true;
+  api(controller, "api mode ble");
+  controller.apiReplyQueued();
+  controller.resetApiSession();
+  fake_now += 200;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::USB);
+  assert(controller.setMode(CompanionMode::BLE));
+  ble.connected = true;
+  // Physical disconnect before the router's session-reset callback also cancels.
+  api(controller, "api mode usb");
+  controller.apiReplyQueued();
+  ble.connected = false;
+  fake_now += 150;
+  pump(controller);
+  assert(controller.status().selected == CompanionMode::BLE);
+  assert(api(controller, "api wifi status").find("last_mode_error=cancelled") != std::string::npos);
+  ble.connected = true;
+#if defined(ESP32)
+  assert(api(controller, "api mode wifi") == "ERR api unconfigured");
+  assert(api(controller, "api wifi begin", false) == "ERR api readonly");
+  assert(api(controller, "api wifi begin").find("state=ssid") != std::string::npos);
+  assert(controller.deviceApiWritesAllowed() && controller.deviceApiBusy());
+  assert(api(controller, "api wifi begin") == "ERR api busy");
+  assert(api(controller, "api wifi save") == "ERR api stale");
+  assert(api(controller, "api wifi ssid 0a") == "ERR api invalid");
+  assert(api(controller, "api wifi ssid 746573746e6574").find("state=password") != std::string::npos);
+  assert(api(controller, "api wifi password 00") == "ERR api invalid");
+  const std::string invalid_psk = "api wifi password " + std::string(128, '7'); // Decodes non-hex 'w'.
+  assert(api(controller, invalid_psk.c_str()) == "ERR api invalid");
+  assert(api(controller, "api wifi password 7465737470617373").find("state=ready") != std::string::npos);
+  assert(api(controller, "api wifi status").find("testpass") == std::string::npos);
+  assert(api(controller, "api wifi status").find("testnet") == std::string::npos);
+  const auto before_test = fs.files;
+  console.output.clear();
+  assert(api(controller, "api wifi test").find("state=testing") != std::string::npos);
+  assert(WiFi.last_ssid == "testnet" && WiFi.last_password == "testpass");
+  WiFi.status_code = WL_CONNECTED;
+  pump(controller);
+  assert(api(controller, "api wifi status").find("state=test_ok") != std::string::npos);
+  assert(fs.files == before_test); // Testing never persists candidate.
+  assert(console.output.find("WiFi test") == std::string::npos);
+  fs.short_write_path = "/connection.cfg.tmp";
+  assert(api(controller, "api wifi save") == "ERR api storage");
+  assert(!controller.status().wifiConfigured);
+  assert(api(controller, "api wifi save") == "OK api wifi save");
+  assert(controller.status().wifiConfigured && controller.status().selected == CompanionMode::BLE);
+  assert(!controller.deviceApiBusy());
+  assert(api(controller, "api wifi status").find("state=saved") != std::string::npos);
+  const auto saved = fs.files;
+  // USB API uses the same staged backend without writing console bytes.
+  assert(controller.setMode(CompanionMode::USB));
+  api(controller, "api wifi begin");
+  api(controller, "api wifi ssid 746573746e6574");
+  assert(api(controller, "api wifi password -").find("state=ready") != std::string::npos);
+  api(controller, "api wifi test");
+  controller.resetApiSession();
+  assert(!controller.deviceApiBusy() && !sleep_inhibited);
+  assert(api(controller, "api wifi save") == "ERR api stale");
+  assert(api(controller, "api wifi status").find("ssid_set=0") != std::string::npos);
+  // Test timeout restores saved configuration; no candidate survives.
+  api(controller, "api wifi begin");
+  api(controller, "api wifi ssid 746573746e6574");
+  api(controller, "api wifi password -");
+  api(controller, "api wifi test");
+  WiFi.status_code = WL_DISCONNECTED;
+  fake_now += 15001;
+  pump(controller);
+  assert(api(controller, "api wifi status").find("state=failed") != std::string::npos);
+  assert(!controller.deviceApiBusy());
+  api(controller, "api wifi begin");
+  fake_now += 120001;
+  pump(controller);
+  assert(api(controller, "api wifi status").find("state=timeout") != std::string::npos);
+  // A local text wizard cannot consume/overwrite an API candidate.
+  assert(controller.setMode(CompanionMode::BLE));
+  api(controller, "api wifi begin");
+  send(controller, console, "wifi setup\n");
+  assert(api(controller, "api wifi status").find("owner=api") != std::string::npos);
+  api(controller, "api wifi cancel");
+  assert(api(controller, "api wifi status").find("state=cancelled") != std::string::npos);
+  assert(controller.setMode(CompanionMode::WiFi));
+  assert(api(controller, "api wifi begin") == "ERR api transport");
+  assert(controller.status().wifiConfigured);
+  // A maximum-size PSK fits the command and is never echoed.
+  assert(controller.setMode(CompanionMode::BLE));
+  api(controller, "api wifi begin");
+  api(controller, "api wifi ssid 61");
+  const std::string full_psk = "api wifi password " + std::string(128, '6'); // 64 hexadecimal 'f' bytes.
+  assert(api(controller, full_psk.c_str()).find("state=ready") != std::string::npos);
+  api(controller, "api wifi cancel");
+  quarantined = true;
+  assert(api(controller, "api wifi begin") == "ERR api readonly");
+  quarantined = false;
+  (void)saved;
+#else
+  assert(api(controller, "api wifi begin") == "ERR api unsupported");
+  assert(api(controller, "api wifi status").find("supported=0") != std::string::npos);
+#endif
+}
+
 int main() {
   FakeFS fs;
   DataStore store(fs);
@@ -1331,6 +1487,7 @@ int main() {
   testInfoReadOnly();
   testDeviceSettingsConsole();
   testPhysicalUsbServiceEntry();
+  testApiConnectionControl();
   return 0;
 }
 '''
@@ -1396,6 +1553,13 @@ def main() -> None:
     assert "return Serial.dtr();" in main_source
     assert "if (connection_controller.status().usbConsoleEnabled)" in main_source
     assert main_source.index("connection_controller.loop();") < main_source.index("the_mesh.loop();")
+    mesh_source = (CONTROLLER / "MyMesh.cpp").read_text(encoding="utf-8")
+    arm = mesh_source.index("connection_controller.apiReplyQueued();")
+    guard = mesh_source[max(0, arm - 500):arm]
+    assert "queued == reply_length" in guard
+    assert "cmd_frame[7] == 1" in guard
+    assert "out_frame[8] == smartui::SmartUiApi::OK" in guard
+    assert '"api mode ", 9' in guard
     with tempfile.TemporaryDirectory(prefix="smartui-connection-controller-") as raw:
         root = Path(raw)
         example = root / "examples/companion_radio"
@@ -1425,7 +1589,7 @@ def main() -> None:
         (root / "controller_test.cpp").write_text(harness, encoding="utf-8")
         run_build(root, esp32=True)
         run_build(root, esp32=False)
-    print("[PASS] ConnectionController persistence, two-boot/crash recovery, Forget privacy, hidden setup, settings protocol/read-only/backpressure, physical USB service entry, retry, approval, quarantine")
+    print("[PASS] ConnectionController persistence, recovery, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
 
 
 if __name__ == "__main__":

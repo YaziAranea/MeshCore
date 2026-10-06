@@ -12601,13 +12601,33 @@ void UITask::setNotifyToneResonanceHz(uint16_t frequency) {
 #endif
 }
 
-void UITask::toggleNotifyToneBridge() {
+bool UITask::supportsNotifyToneBridge() const {
 #if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
-  if (_node_prefs == NULL) return;
+  return true;
+#else
+  return false;
+#endif
+}
 
-  const NodePrefs before = *_node_prefs;
+bool UITask::setNotifyToneBridgeEnabled(bool enable) {
+#if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
+  if (_node_prefs == NULL || the_mesh.isStorageRecoveryRequired() || the_mesh.isCLIRescue()) return false;
+  if (isNotifyToneBridgeEnabled() == enable) return true;
+
+  // Only these fields are touched. Avoid a full NodePrefs copy on the nRF
+  // loop stack, and do not reapply unrelated radio settings on rollback.
+  struct BridgeSnapshot {
+    double latitude, longitude;
+    uint8_t bridge;
+    int8_t gpio, tone, vibe;
+  };
+  const BridgeSnapshot before = {
+    _node_prefs->node_lat, _node_prefs->node_lon,
+    _node_prefs->notify_tone_bridge_enabled, _node_prefs->notify_gpio_pin,
+    _node_prefs->notify_tone_pin, _node_prefs->notify_vibe_pin
+  };
+  static_assert(sizeof(BridgeSnapshot) <= 32, "Keep bridge rollback off the large preferences stack");
   stopNotifyOutputs();
-  bool enable = !isNotifyToneBridgeEnabled();
   _node_prefs->notify_tone_bridge_enabled = enable ? 1 : 0;
 
   if (enable) {
@@ -12631,13 +12651,36 @@ void UITask::toggleNotifyToneBridge() {
     configureMsgTonePin(DEFAULT_NOTIFY_TONE_PIN);
   }
 
-  if (!commitUiPrefs(before)) {
+  if (!the_mesh.savePrefs()) {
+    _node_prefs->notify_tone_bridge_enabled = before.bridge;
+    _node_prefs->notify_gpio_pin = before.gpio;
+    _node_prefs->notify_tone_pin = before.tone;
+    _node_prefs->notify_vibe_pin = before.vibe;
+    _node_prefs->node_lat = before.latitude;
+    _node_prefs->node_lon = before.longitude;
     uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
 #ifdef PIN_MSG_ALERT
-    configureMsgAlertPin(before.notify_gpio_pin);
+    configureMsgAlertPin(before.gpio);
 #endif
-    configureMsgTonePin(before.notify_tone_pin);
-    configureMsgVibePin(before.notify_vibe_pin);
+    configureMsgTonePin(before.tone);
+    configureMsgVibePin(before.vibe);
+    _next_refresh = 0;
+    return false;
+  }
+  _next_refresh = 0;
+  return true;
+#else
+  (void)enable;
+  return false;
+#endif
+}
+
+void UITask::toggleNotifyToneBridge() {
+#if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
+  if (_node_prefs == NULL) return;
+  const bool enable = !isNotifyToneBridgeEnabled();
+  if (!setNotifyToneBridgeEnabled(enable)) {
+    showAlert(the_mesh.getPrefsSaveErrorText(), 1400);
     return;
   }
   char alert[48];

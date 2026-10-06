@@ -3,13 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-0.09
+      - smartui-0.10
       # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.09 as Latest after all six-board checks pass
+        description: Publish public SmartUI 0.10 as Latest after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -41,15 +41,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.09.uf2
+            uf2_name: T096_UI_0.10.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.09.uf2
+            uf2_name: T114_UI_0.10.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.09.uf2
+            uf2_name: ProMicro_RA62_UI_0.10.uf2
 
     steps:
       - name: Check out source
@@ -161,15 +161,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.09
+            stem: Heltec_V3_UI_0.10
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.09
+            stem: Heltec_V4.3_UI_0.10
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.09
+            stem: Paper_UI_0.10
 
     steps:
       - name: Check out source
@@ -346,7 +346,7 @@ jobs:
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \
             --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
-      - name: Upload the complete sixteen-asset release
+      - name: Upload the complete seventeen-asset release
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: smartui-public-release
@@ -498,6 +498,12 @@ jobs:
           python tools/test_device_settings.py
           python tools/test_headless_runtime.py
 
+      - name: Check SmartUI developer API, reference SDK and offline source kit
+        run: |
+          python tools/test_smartui_api.py
+          python -B -m unittest discover -s tools/smartui-api/tests -v
+          python tools/test_smartui_developer_kit.py
+
       - name: Check race-safe nRF BLE queues and runtime ESP32 sleep guard
         run: |
           python tools/test_nrf_ble_queue.py
@@ -607,12 +613,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-public-release:
-    name: Publish SmartUI 0.09
-    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.09'
+    name: Publish SmartUI 0.10
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.10'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-public-release-smartui-0.09
+      group: publish-public-release-smartui-0.10
       cancel-in-progress: false
     permissions:
       contents: write
@@ -631,7 +637,7 @@ jobs:
           name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.09 release page
+      - name: Create or resume the SmartUI 0.10 release page
         shell: bash
         run: |
           set -euo pipefail
@@ -643,9 +649,9 @@ jobs:
           }
           # Recheck live visibility before any tag, release or asset mutation.
           check_public_target
-          tag="smartui-0.09"
-          title="Smart UI 0.09"
-          notes="release/RELEASE_NOTES_SmartUI_0.09_RU.md"
+          tag="smartui-0.10"
+          title="Smart UI 0.10"
+          notes="release/RELEASE_NOTES_SmartUI_0.10_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.
@@ -770,7 +776,7 @@ jobs:
             exit 1
           fi
 
-          # New releases remain drafts until all 16 expected assets have arrived.
+          # New releases remain drafts until all 17 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
           # This public release becomes Latest only after the complete bundle passes.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
@@ -783,7 +789,7 @@ jobs:
           local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
           remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assets = {a["name"]: a for a in remote["assets"]}
-          assert len(local) == 16, f"Expected 16 local assets, got {len(local)}"
+          assert len(local) == 17, f"Expected 17 local assets, got {len(local)}"
           assert len(remote["assets"]) == len(assets), "Duplicate asset names"
           assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
           for name, path in local.items():

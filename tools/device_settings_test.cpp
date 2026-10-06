@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -13,12 +14,15 @@ static float multiplier;
 static uint16_t battery;
 static uint32_t now;
 static bool save_ok;
-static unsigned saves, applies, tests, battery_changes, checks;
+static unsigned writes, saves, applies, tests, battery_changes, checks, melody_reads;
+static const char* melody_name;
+static unsigned bridge_calls;
+static bool bridge_ok;
 static DeviceSettings service;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
 
 static DeviceSettingsState read() { return state; }
-static void write(const DeviceSettingsState& value) { state = value; }
+static void write(const DeviceSettingsState& value) { ++writes; state = value; }
 static bool save() {
   ++saves;
   if (!save_ok) return false;
@@ -39,33 +43,52 @@ static uint16_t readBattery() { return battery; }
 static float readAdc() { return multiplier; }
 static uint32_t readMillis() { return now; }
 static void testNotification() { ++tests; }
-static void fresh(float factory = 4.9f) {
+static const char* melodyName(uint8_t id) { ++melody_reads; CHECK(id <= caps.melody_max); return melody_name; }
+static bool setToneBridge(bool enabled) {
+  ++bridge_calls;
+  if (!bridge_ok) return false;
+  state.bridge = enabled ? 1 : 0;
+  persisted = state;
+  return true;
+}
+static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = true) {
   state = DeviceSettingsState{};
   state.notify_mode = state.important_notify_mode = 7;
   caps = DeviceSettingsCaps{};
   caps.adc = caps.sound = caps.board_led = caps.unread_led = true;
   caps.vibration = caps.gps = caps.battery_protection = true;
+  caps.agc_reset = caps.fem_lna = caps.fem_pa = true;
   caps.adc_default = multiplier = factory;
   caps.melody_max = 30;
   battery = 4000;
   now = 100;
   save_ok = true;
-  saves = applies = tests = battery_changes = 0;
+  writes = saves = applies = tests = battery_changes = melody_reads = 0;
+  melody_name = "Test tone";
+  bridge_calls = 0; bridge_ok = true;
   persisted = state;
   DeviceSettingsHooks hooks;
   hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
   hooks.caps = capabilities; hooks.batteryMilliVolts = readBattery;
   hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
   hooks.testNotification = testNotification;
+  hooks.melodyName = names ? melodyName : nullptr;
+  hooks.setToneBridge = bridge_hook ? setToneBridge : nullptr;
   service = DeviceSettings{};
   service.begin(hooks);
 }
 static std::string command(const char* text, bool allowed = true) {
-  char reply[DeviceSettings::REPLY_CAPACITY];
-  CHECK(service.handle(text, reply, sizeof(reply), allowed));
-  CHECK(strlen(reply) < sizeof(reply));
-  CHECK(strchr(reply, '\r') == nullptr && strchr(reply, '\n') == nullptr);
-  return reply;
+  struct {
+    char reply[DeviceSettings::REPLY_CAPACITY];
+    char guard[8];
+  } output;
+  memset(&output, '!', sizeof(output));
+  CHECK(service.handle(text, output.reply, sizeof(output.reply), allowed));
+  CHECK(memchr(output.reply, 0, sizeof(output.reply)) != nullptr);
+  CHECK(memcmp(output.guard, "!!!!!!!!", sizeof(output.guard)) == 0);
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(output.reply); *p; ++p)
+    CHECK(*p >= 0x20 && *p <= 0x7e);
+  return output.reply;
 }
 static uint32_t preview(const char* measured = "4120") {
   const auto reply = command((std::string("settings adc preview ") + measured).c_str());
@@ -200,5 +223,179 @@ int main() {
   char reply[DeviceSettings::REPLY_CAPACITY];
   CHECK(unavailable.handle("settings get", reply, sizeof(reply), true));
   CHECK(strcmp(reply, "ERR settings unavailable") == 0);
+
+  // Exact legacy records must not acquire the new API's fields or version.
+  fresh(4.0f);
+  const std::string legacy_caps = "OK settings caps v=1 adc=1 sound=1 board_led=1 unread_led=1 vibration=1 gps=1 battery_protection=1 display=0 melody_max=30 adc_min=3.000000 adc_max=5.000000";
+  const std::string legacy_get = "OK settings get battery_mv=4000 adc_multiplier=4.000000 adc_default=4.000000 sound_quiet=0 volume=10 melody=0 board_led=1 unread_led=1 vibration=1 gps=0 battery_protection=1 shutdown_mv=3200 muted=0";
+  CHECK(command("settings caps") == legacy_caps);
+  CHECK(command("settings get") == legacy_get);
+  CHECK(command("api caps", false) == "OK api " + legacy_caps.substr(12) +
+        " agc_reset=1 fem_lna=1 fem_pa=1 bridge=0 melody_names=1");
+  CHECK(command("api get", false) == "OK api " + legacy_get.substr(12) +
+        " agc_reset=0 fem_lna=0 fem_pa=0 bridge=0");
+  CHECK(command("settings set agc_reset 1") == "ERR settings invalid");
+  CHECK(command("settings set fem_lna 1") == "ERR settings invalid");
+  CHECK(command("settings set fem_pa 1") == "ERR settings invalid");
+  CHECK(writes == 0 && saves == 0 && applies == 0);
+  CHECK(!service.handle("apix get", reply, sizeof(reply), true));
+  CHECK(!service.handle("ap", reply, sizeof(reply), true));
+  CHECK(command("api") == "ERR api invalid");
+  CHECK(command("api what") == "ERR api invalid");
+  CHECK(command(("api set " + std::string(120, 'a')).c_str()) == "ERR api invalid");
+  CHECK(service.handle("api set gps 1", tiny, sizeof(tiny), true));
+  CHECK(tiny[3] == 0 && saves == 0);
+  CHECK(service.handle("api test", nullptr, 0, true));
+  CHECK(tests == 0);
+  CHECK(unavailable.handle("api get", reply, sizeof(reply), true));
+  CHECK(strcmp(reply, "ERR api unavailable") == 0);
+
+  // Existing API aliases preserve validation, mutation, and side effects.
+  for (const auto& setting : valid) {
+    fresh();
+    const auto legacy = command(("settings set " + setting).c_str());
+    const auto expected = state;
+    fresh();
+    CHECK(command(("api set " + setting).c_str()) == "OK api " + legacy.substr(12));
+    CHECK(memcmp(&state, &expected, sizeof(state)) == 0);
+    CHECK(saves == 1 && applies == 1);
+  }
+  for (const char* key : {"agc_reset", "fem_lna", "fem_pa"}) {
+    fresh();
+    state.profile = 7;
+    const auto initial = state;
+    const auto request = std::string("api set ") + key + " 1";
+    CHECK(command(request.c_str(), false) == "ERR api readonly");
+    CHECK(writes == 0 && saves == 0 && applies == 0);
+    save_ok = false;
+    CHECK(command(request.c_str()) == "ERR api storage");
+    CHECK(memcmp(&state, &initial, sizeof(state)) == 0);
+    CHECK(writes == 2 && saves == 1 && applies == 0 && battery_changes == 0);
+    save_ok = true;
+    CHECK(command(request.c_str()) == std::string("OK api set key=") + key + " value=1");
+    CHECK(state.profile == 0 && saves == 2 && applies == 1 && battery_changes == 0);
+    CHECK(memcmp(&state, &persisted, sizeof(state)) == 0);
+    CHECK(state.agc_reset == (strcmp(key, "agc_reset") == 0));
+    CHECK(state.fem_lna == (strcmp(key, "fem_lna") == 0));
+    CHECK(state.fem_pa == (strcmp(key, "fem_pa") == 0));
+    CHECK(command("api get").find(std::string(key) + "=1") != std::string::npos);
+    CHECK(command((std::string("api set ") + key + " 0").c_str()) ==
+          std::string("OK api set key=") + key + " value=0");
+  }
+  for (const char* key : {"agc_reset", "fem_lna", "fem_pa", "gps", "melody", "volume"}) {
+    for (const char* value : {"256", "257", "4294967295", "4294967296", "-1", "+1", "1x", "1 0", "1.0", "", " 1"}) {
+      fresh();
+      const auto initial = state;
+      CHECK(command((std::string("api set ") + key + " " + value).c_str()).find("ERR api ") == 0);
+      CHECK(writes == 0 && saves == 0 && applies == 0);
+      CHECK(memcmp(&state, &initial, sizeof(state)) == 0);
+    }
+  }
+  fresh();
+  caps.agc_reset = caps.fem_lna = caps.fem_pa = false;
+  for (const char* key : {"agc_reset", "fem_lna", "fem_pa", "bridge"}) {
+    CHECK(command((std::string("api set ") + key + " 1").c_str()) == "ERR api unsupported");
+  }
+  CHECK(writes == 0 && saves == 0 && applies == 0);
+
+  // Melody labels are bounded byte strings represented as ASCII-safe hex.
+  fresh();
+  CHECK(command("api melody 0", false) == "OK api melody id=0 name_hex=5465737420746f6e65");
+  melody_name = "\xd0\x97\xd0\xb2\xd1\x83\xd0\xba";
+  CHECK(command("api melody 30") == "OK api melody id=30 name_hex=d097d0b2d183d0ba");
+  CHECK(saves == 0 && applies == 0 && melody_reads == 2);
+  CHECK(command("api melody 31") == "ERR api range");
+  CHECK(command("api melody 256") == "ERR api range");
+  CHECK(command("api melody 4294967296") == "ERR api invalid");
+  CHECK(command("api melody -1") == "ERR api invalid");
+  CHECK(command("api melody 0 1") == "ERR api invalid");
+  CHECK(melody_reads == 2);
+  const std::string maximum_name(DeviceSettings::MELODY_NAME_MAX, 'A');
+  melody_name = maximum_name.c_str();
+  CHECK(command("api melody 1").size() == strlen("OK api melody id=1 name_hex=") + 2 * maximum_name.size());
+  const std::string oversized_name(DeviceSettings::MELODY_NAME_MAX + 1, 'A');
+  melody_name = oversized_name.c_str();
+  CHECK(command("api melody 0") == "ERR api internal");
+  melody_name = "";
+  CHECK(command("api melody 0") == "ERR api internal");
+  melody_name = nullptr;
+  CHECK(command("api melody 0") == "ERR api internal");
+  caps.sound = false;
+  CHECK(command("api melody 0") == "ERR api unsupported");
+  CHECK(command("api caps").find("melody_names=0") != std::string::npos);
+  fresh(4.9f, false);
+  CHECK(command("api melody 0") == "ERR api unsupported");
+  CHECK(command("api caps").find("sound=1") != std::string::npos);
+  CHECK(command("api caps").find("melody_names=0") != std::string::npos);
+  CHECK(melody_reads == 0);
+
+  // The bridge owns a separate checked pin transaction, never the generic
+  // preferences writer/apply hooks. Invalid or idempotent calls do no work.
+  fresh(); caps.bridge = true;
+  CHECK(command("api caps").find("bridge=1") != std::string::npos);
+  CHECK(command("settings set bridge 1") == "ERR settings invalid");
+  CHECK(command("api set bridge 1", false) == "ERR api readonly");
+  CHECK(bridge_calls == 0);
+  for (const char* value : {"2", "256", "4294967295", "4294967296", "-1", "+1", "1x", "1 0", "", " 1"}) {
+    CHECK(command((std::string("api set bridge ") + value).c_str()).find("ERR api ") == 0);
+  }
+  CHECK(bridge_calls == 0 && writes == 0 && saves == 0 && applies == 0);
+  CHECK(command("api set bridge 0") == "OK api set key=bridge value=0" && bridge_calls == 0);
+  token = preview();
+  bridge_ok = false;
+  CHECK(command("api set bridge 1") == "ERR api storage");
+  CHECK(state.bridge == 0 && bridge_calls == 1 && applies == 0 && saves == 0);
+  CHECK(applyToken(token) == "OK settings adc_apply");
+  token = preview(); bridge_ok = true;
+  const auto writes_before_bridge = writes, saves_before_bridge = saves, applies_before_bridge = applies;
+  CHECK(command("api set bridge 1") == "OK api set key=bridge value=1");
+  CHECK(state.bridge == 1 && persisted.bridge == 1 && bridge_calls == 2);
+  CHECK(writes == writes_before_bridge && saves == saves_before_bridge && applies == applies_before_bridge);
+  CHECK(command("api get").find("bridge=1") != std::string::npos);
+  CHECK(applyToken(token) == "ERR settings stale");
+  token = preview();
+  CHECK(command("api set bridge 1") == "OK api set key=bridge value=1" && bridge_calls == 2);
+  CHECK(applyToken(token) == "OK settings adc_apply");
+  CHECK(command("api set bridge 0") == "OK api set key=bridge value=0");
+  CHECK(state.bridge == 0 && bridge_calls == 3);
+  fresh(4.9f, true, false); caps.bridge = true;
+  CHECK(command("api caps").find("bridge=0") != std::string::npos);
+  CHECK(command("api set bridge 1") == "ERR api unsupported" && bridge_calls == 0);
+
+  // Reset invalidates both entry points, but does not recycle the next token.
+  fresh();
+  token = preview();
+  service.resetSession();
+  CHECK(applyToken(token) == "ERR settings stale");
+  const auto next_token = preview();
+  CHECK(next_token != token && next_token > token);
+  service.resetSession();
+  CHECK(command((std::string("api adc apply ") + std::to_string(next_token)).c_str()) == "ERR api stale");
+  unsigned long api_token = 0;
+  CHECK(sscanf(command("api adc preview 4120").c_str(), "OK api adc_preview token=%lu", &api_token) == 1);
+  CHECK(api_token > next_token);
+  save_ok = false;
+  CHECK(command((std::string("api adc apply ") + std::to_string(api_token)).c_str()) == "ERR api storage");
+  CHECK(state.adc_override == 0 && applies == 0);
+  save_ok = true;
+  CHECK(command((std::string("api adc apply ") + std::to_string(api_token)).c_str()) == "OK api adc_apply");
+  CHECK(command("api adc reset") == "OK api adc_reset");
+  CHECK(command("api test", false) == "ERR api readonly");
+  CHECK(command("api test") == "OK api test");
+  CHECK(tests == 1);
+  token = preview();
+  CHECK(command("api set fem_lna 1") == "OK api set key=fem_lna value=1");
+  CHECK(applyToken(token) == "ERR settings stale");
+
+  // Worst-case numeric widths remain complete and within the 480-byte reply.
+  fresh();
+  battery = UINT16_MAX;
+  caps.adc_default = multiplier = std::numeric_limits<float>::max() / 2;
+  caps.melody_max = UINT8_MAX;
+  state.volume = state.melody_system = state.board_led = state.unread_led = UINT8_MAX;
+  state.gps = state.battery_protection = state.muted = UINT8_MAX;
+  state.agc_reset = state.fem_lna = state.fem_pa = UINT8_MAX;
+  CHECK(command("api caps").find("melody_names=1") != std::string::npos);
+  CHECK(command("api get").find("agc_reset=255 fem_lna=255 fem_pa=255") != std::string::npos);
   printf("PASS %u production DeviceSettings transaction/protocol checks\n", checks);
 }

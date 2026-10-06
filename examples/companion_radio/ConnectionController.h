@@ -40,6 +40,16 @@ public:
   ConnectionChangeError lastChangeError() const { return _last_change_error; }
   bool resolveWifiClient(uint32_t request_id, bool approve);
   bool consoleActive(uint32_t now) const;
+  // Public API shares quarantine/rescue guards with the USB console. Busy is
+  // separate from permission so an API-owned Wi-Fi transaction can progress.
+  bool deviceApiBusy() const { return _wifi_setup_stage != WifiSetupStage::IDLE || _api_mode_pending; }
+  bool deviceApiWritesAllowed() const { return _started && mutationAllowed(); }
+  bool handleApiCommand(const char* command, char* reply, size_t capacity,
+                        bool allow_mutation);
+  // Call only for a real companion session boundary, not USB console activity.
+  void resetApiSession();
+  // Confirm only a successfully queued reply to the pending api mode request.
+  void apiReplyQueued();
 
 private:
   static const size_t WIFI_SSID_MAX = 32;
@@ -54,7 +64,10 @@ private:
     TESTING,
     TEST_OK,
     FAILED,
+    READY,
   };
+
+  enum class WifiApiResult : uint8_t { NONE, SAVED, CANCELLED, FAILED, TIMED_OUT };
 
   struct Config {
     CompanionMode mode = CompanionMode::BLE;
@@ -87,6 +100,13 @@ private:
   uint32_t _wifi_retry_delay = 0;
   uint32_t _wifi_setup_activity = 0;
   WifiSetupStage _wifi_setup_stage = WifiSetupStage::IDLE;
+  bool _api_wifi_setup = false;
+  WifiApiResult _api_wifi_result = WifiApiResult::NONE;
+  bool _api_mode_pending = false;
+  bool _api_mode_reply_queued = false;
+  CompanionMode _api_mode_target = CompanionMode::BLE;
+  uint32_t _api_mode_started = 0;
+  const char* _api_mode_error = "none";
   char _candidate_ssid[WIFI_SSID_MAX + 1] = {};
   char _candidate_password[WIFI_PASSWORD_MAX + 1] = {};
   uint8_t _candidate_ssid_len = 0;
@@ -132,6 +152,7 @@ private:
   void cancelWifiSetup(bool restore_selected_wifi);
   bool startWifiSetup();
   bool saveTestedWifi();
+  void serviceApiMode();
 };
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR

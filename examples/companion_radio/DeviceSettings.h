@@ -26,6 +26,10 @@ struct DeviceSettingsState {
   uint8_t muted = 0;
   uint8_t night_quiet = 0;
   uint8_t profile = 0;
+  uint8_t agc_reset = 0;
+  uint8_t fem_lna = 0;
+  uint8_t fem_pa = 0;
+  uint8_t bridge = 0;
 };
 
 struct DeviceSettingsCaps {
@@ -42,6 +46,10 @@ struct DeviceSettingsCaps {
   // Internal only; raw preference modes remain in the transaction snapshot.
   uint8_t effective_notify_mode = 0;
   float adc_default = 0;
+  bool agc_reset = false;
+  bool fem_lna = false;
+  bool fem_pa = false;
+  bool bridge = false;
 };
 
 struct DeviceSettingsHooks {
@@ -54,12 +62,21 @@ struct DeviceSettingsHooks {
   float (*adcMultiplier)() = nullptr;
   uint32_t (*millis)() = nullptr;
   void (*testNotification)() = nullptr;
+  // UTF-8 label for a build-local melody ID. At most MELODY_NAME_MAX bytes.
+  const char* (*melodyName)(uint8_t id) = nullptr;
+  // Dedicated checked transaction: fixed bridge pins and peripheral ownership
+  // cannot be safely represented by changing the preferences byte alone.
+  bool (*setToneBridge)(bool enabled) = nullptr;
 };
 
 class DeviceSettings {
 public:
   static constexpr size_t REPLY_CAPACITY = 480;
-  void begin(const DeviceSettingsHooks& hooks) { _hooks = hooks; _preview_token = 0; }
+  static constexpr size_t MELODY_NAME_MAX = 64;
+  void begin(const DeviceSettingsHooks& hooks) { _hooks = hooks; resetSession(); }
+  // The transport owner must call this when a client disconnects or changes.
+  // Do not recycle tokens between sessions within the same device boot.
+  void resetSession() { _preview_token = 0; }
   // Returns false only when the command is outside this protocol's namespace.
   // Replies have no newline; the serial console owns framing and backpressure.
   bool handle(const char* command, char* reply, size_t capacity, bool allow_mutation);
@@ -75,6 +92,7 @@ private:
 
   bool commit(const DeviceSettingsState& before, const DeviceSettingsState& after,
               bool battery_changed);
+  bool handleApi(const char* command, char* reply, size_t capacity, bool allow_mutation);
 };
 
 }  // namespace smartui

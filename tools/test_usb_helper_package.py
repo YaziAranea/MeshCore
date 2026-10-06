@@ -30,7 +30,7 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
         self.assertIn("Помощник 1.3", html)
-        self.assertIn("Помощник 1.3 · SmartUI 0.08–0.09", html)
+        self.assertIn("Помощник 1.3 · SmartUI 0.08–0.10", html)
         self.assertIn("Для новых настроек нужна SmartUI 0.08", html)
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)

@@ -24,14 +24,16 @@ import validate_release_fresh_spiffs as fresh_spiffs
 import validate_release_uf2 as uf2
 import validate_release_v3 as v3
 import package_usb_helper as usb_helper
+import package_smartui_developer_kit as developer_kit
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.09"
-TAG = "smartui-0.09"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.09_RU.md"
-ARCHIVE_NAME = "SmartUI_0.09_all-boards.zip"
+VERSION = "0.10"
+TAG = "smartui-0.10"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.10_RU.md"
+ARCHIVE_NAME = "SmartUI_0.10_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
+ASSET_COUNT = 17
 DISTRIBUTION = "public"
 PUBLICATION = {
     "draft": False, "prerelease": False, "make_latest": True,
@@ -236,6 +238,8 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             validate_source_identity(stage / name, commit)
         shutil.copy2(notes, stage / NOTES_NAME)
         usb_helper.package(stage)
+        require(developer_kit.VERSION == VERSION, "developer kit version differs from firmware")
+        kit_path = developer_kit.package(stage, commit)
         for suffix, name in ((".uf2", "SHA256SUMS.txt"), (".bin", "SHA256SUMS-ESP32.txt")):
             rows = [f"{digest(path)}  {path.name}" for path in sorted(stage.glob("*" + suffix))]
             (stage / name).write_text("\n".join(rows) + "\n", encoding="ascii", newline="\n")
@@ -247,7 +251,9 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "powersaving_upstream_commit": "a27e78e4da1389055b6dd16ce473112d25c8a5cd",
             "embedded_source_identity_verified": True,
             "experimental": False, "board_count": 6, "firmware_count": 9,
+            "asset_count": ASSET_COUNT,
             "publication": dict(PUBLICATION),
+            "developer_kit": record(kit_path, source_commit=commit, api_version=1),
             "firmware": [record(stage / name, **firmware_metadata(name, commit))
                          for name in sorted(FIRMWARE_NAMES)],
             "files": [record(path) for path in payloads],
@@ -264,7 +270,8 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
                 info.external_attr = 0o100644 << 16
                 zipped.writestr(info, path.read_bytes(), compresslevel=9)
         verify_archive(archive, archive_payloads)
-        require(len(list(stage.iterdir())) == 16, "release must contain exactly sixteen assets")
+        require(len(list(stage.iterdir())) == ASSET_COUNT,
+                "release must contain exactly seventeen assets")
         shutil.copytree(stage, output)
     return {"directory": str(output), "tag": TAG, "commit": commit,
             "assets": [record(path) for path in sorted(output.iterdir())]}

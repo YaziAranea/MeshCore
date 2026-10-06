@@ -50,6 +50,10 @@ bool DeviceSettings::commit(const DeviceSettingsState& before,
 
 bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
                             bool allow_mutation) {
+  if (command != nullptr && strncmp(command, "api", 3) == 0 &&
+      (command[3] == 0 || command[3] == ' ')) {
+    return handleApi(command, reply, capacity, allow_mutation);
+  }
   if (command == nullptr || strncmp(command, "settings", 8) != 0 ||
       (command[8] != 0 && command[8] != ' ')) return false;
   if (reply == nullptr || capacity < REPLY_CAPACITY) {
@@ -178,41 +182,40 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
   uint32_t minimum = 0;
   uint32_t maximum = 1;
   bool battery_changed = false;
+  enum class Setting {
+    SOUND_QUIET, VOLUME, MELODY, BOARD_LED, UNREAD_LED, VIBRATION, GPS,
+    BATTERY_PROTECTION, MUTED
+  } setting;
   if (strcmp(key, "sound_quiet") == 0) {
     supported = caps.sound;
-    after.sound_quiet = value;
-    setNotifyBit(after, TONE_MODE, value == 0);
+    setting = Setting::SOUND_QUIET;
   } else if (strcmp(key, "volume") == 0) {
     supported = caps.sound;
     minimum = 1;
     maximum = 10;
-    after.volume = value;
+    setting = Setting::VOLUME;
   } else if (strcmp(key, "melody") == 0) {
     supported = caps.sound;
     maximum = caps.melody_max;
-    after.melody = after.melody_dm = after.melody_mention = after.melody_system = value;
+    setting = Setting::MELODY;
   } else if (strcmp(key, "board_led") == 0) {
     supported = caps.board_led;
-    after.board_led = value;
+    setting = Setting::BOARD_LED;
   } else if (strcmp(key, "unread_led") == 0) {
     supported = caps.unread_led;
-    after.unread_led = value;
-    setNotifyBit(after, GPIO_MODE, value != 0);
+    setting = Setting::UNREAD_LED;
   } else if (strcmp(key, "vibration") == 0) {
     supported = caps.vibration;
-    after.vibe_quiet = value == 0;
-    setNotifyBit(after, VIBE_MODE, value != 0);
+    setting = Setting::VIBRATION;
   } else if (strcmp(key, "gps") == 0) {
     supported = caps.gps;
-    after.gps = value;
-    after.gps_source = 0;
+    setting = Setting::GPS;
   } else if (strcmp(key, "battery_protection") == 0) {
     supported = caps.battery_protection;
-    after.battery_protection = value;
+    setting = Setting::BATTERY_PROTECTION;
     battery_changed = true;
   } else if (strcmp(key, "muted") == 0) {
-    after.muted = value;
-    after.night_quiet = 0;
+    setting = Setting::MUTED;
   } else {
     response(reply, capacity, "ERR settings invalid");
     return true;
@@ -220,9 +223,156 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
   if (!supported) response(reply, capacity, "ERR settings unsupported");
   else if (value < minimum || value > maximum) response(reply, capacity, "ERR settings range");
   else {
+    // Validate the full-width input before narrowing it to a stored byte.
+    const uint8_t checked = static_cast<uint8_t>(value);
+    switch (setting) {
+      case Setting::SOUND_QUIET:
+        after.sound_quiet = checked;
+        setNotifyBit(after, TONE_MODE, checked == 0);
+        break;
+      case Setting::VOLUME: after.volume = checked; break;
+      case Setting::MELODY:
+        after.melody = after.melody_dm = after.melody_mention = after.melody_system = checked;
+        break;
+      case Setting::BOARD_LED: after.board_led = checked; break;
+      case Setting::UNREAD_LED:
+        after.unread_led = checked;
+        setNotifyBit(after, GPIO_MODE, checked != 0);
+        break;
+      case Setting::VIBRATION:
+        after.vibe_quiet = checked == 0;
+        setNotifyBit(after, VIBE_MODE, checked != 0);
+        break;
+      case Setting::GPS: after.gps = checked; after.gps_source = 0; break;
+      case Setting::BATTERY_PROTECTION: after.battery_protection = checked; break;
+      case Setting::MUTED: after.muted = checked; after.night_quiet = 0; break;
+    }
     after.profile = 0;
     if (!commit(before, after, battery_changed)) response(reply, capacity, "ERR settings storage");
     else snprintf(reply, capacity, "OK settings set key=%s value=%lu", key, static_cast<unsigned long>(value));
+  }
+  return true;
+}
+
+bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity,
+                               bool allow_mutation) {
+  static_assert(48 + 2 * MELODY_NAME_MAX < REPLY_CAPACITY, "Melody record must fit the response");
+  if (reply == nullptr || capacity < REPLY_CAPACITY) {
+    response(reply, capacity, "ERR api buffer");
+    return true;
+  }
+  if (!_hooks.read || !_hooks.write || !_hooks.save || !_hooks.apply ||
+      !_hooks.caps || !_hooks.batteryMilliVolts || !_hooks.adcMultiplier || !_hooks.millis) {
+    response(reply, capacity, "ERR api unavailable");
+    return true;
+  }
+  if (strncmp(command, "api melody ", 11) == 0) {
+    uint32_t id;
+    const DeviceSettingsCaps caps = _hooks.caps();
+    if (!unsignedNumber(command + 11, id)) response(reply, capacity, "ERR api invalid");
+    else if (!caps.sound || !_hooks.melodyName) response(reply, capacity, "ERR api unsupported");
+    else if (id > caps.melody_max) response(reply, capacity, "ERR api range");
+    else {
+      const char* name = _hooks.melodyName(static_cast<uint8_t>(id));
+      size_t length = 0;
+      if (name) while (length <= MELODY_NAME_MAX && name[length]) ++length;
+      if (length == 0 || length > MELODY_NAME_MAX) {
+        response(reply, capacity, "ERR api internal");
+      } else {
+        // Hex keeps arbitrary UTF-8 labels out of the ASCII record grammar.
+        static const char hex[] = "0123456789abcdef";
+        const int prefix = snprintf(reply, capacity, "OK api melody id=%lu name_hex=",
+                                    static_cast<unsigned long>(id));
+        size_t position = static_cast<size_t>(prefix);
+        for (size_t i = 0; i < length; ++i) {
+          const uint8_t byte = static_cast<uint8_t>(name[i]);
+          reply[position++] = hex[byte >> 4];
+          reply[position++] = hex[byte & 15];
+        }
+        reply[position] = 0;
+      }
+    }
+    return true;
+  }
+
+  if (strncmp(command, "api set ", 8) == 0) {
+    const char* key_start = command + 8;
+    const char* separator = strchr(key_start, ' ');
+    const size_t length = separator ? static_cast<size_t>(separator - key_start) : 0;
+    const bool agc = length == 9 && strncmp(key_start, "agc_reset", length) == 0;
+    const bool lna = length == 7 && strncmp(key_start, "fem_lna", length) == 0;
+    const bool pa = length == 6 && strncmp(key_start, "fem_pa", length) == 0;
+    const bool bridge = length == 6 && strncmp(key_start, "bridge", length) == 0;
+    if (agc || lna || pa || bridge) {
+      uint32_t value;
+      const DeviceSettingsCaps caps = _hooks.caps();
+      const bool supported = agc ? caps.agc_reset : lna ? caps.fem_lna : pa ? caps.fem_pa :
+                             caps.bridge && _hooks.setToneBridge;
+      if (!allow_mutation) response(reply, capacity, "ERR api readonly");
+      else if (!unsignedNumber(separator + 1, value)) response(reply, capacity, "ERR api invalid");
+      else if (!supported) response(reply, capacity, "ERR api unsupported");
+      else if (value > 1) response(reply, capacity, "ERR api range");
+      else if (bridge) {
+        const bool changed = (_hooks.read().bridge != 0) != (value != 0);
+        if (changed && !_hooks.setToneBridge(value != 0)) {
+          response(reply, capacity, "ERR api storage");
+        } else {
+          if (changed) _preview_token = 0;
+          snprintf(reply, capacity, "OK api set key=bridge value=%lu", static_cast<unsigned long>(value));
+        }
+      }
+      else {
+        const DeviceSettingsState before = _hooks.read();
+        DeviceSettingsState after = before;
+        const uint8_t checked = static_cast<uint8_t>(value);
+        if (agc) after.agc_reset = checked;
+        else if (lna) after.fem_lna = checked;
+        else after.fem_pa = checked;
+        after.profile = 0;
+        if (!commit(before, after, false)) response(reply, capacity, "ERR api storage");
+        else snprintf(reply, capacity, "OK api set key=%.*s value=%lu",
+                      static_cast<int>(length), key_start, static_cast<unsigned long>(value));
+      }
+      return true;
+    }
+  }
+
+  // Keep the v1 USB grammar and its side effects in one implementation. The
+  // separate namespace permits additive API metadata without changing legacy
+  // caps/get records, whose older clients deliberately reject extra fields.
+  char legacy_command[96];
+  const int command_length = snprintf(legacy_command, sizeof(legacy_command), "settings%s", command + 3);
+  if (command_length < 0 || static_cast<size_t>(command_length) >= sizeof(legacy_command)) {
+    response(reply, capacity, "ERR api invalid");
+    return true;
+  }
+  handle(legacy_command, reply, capacity, allow_mutation);
+  if (strncmp(reply, "OK settings ", 12) == 0) {
+    memmove(reply + 7, reply + 12, strlen(reply + 12) + 1);
+    memcpy(reply, "OK api ", 7);
+  } else if (strncmp(reply, "ERR settings ", 13) == 0) {
+    memmove(reply + 8, reply + 13, strlen(reply + 13) + 1);
+    memcpy(reply, "ERR api ", 8);
+  } else {
+    response(reply, capacity, "ERR api internal");
+    return true;
+  }
+  const size_t used = strlen(reply);
+  int added = 0;
+  if (strcmp(command, "api caps") == 0 && strncmp(reply, "OK ", 3) == 0) {
+    const DeviceSettingsCaps caps = _hooks.caps();
+    added = snprintf(reply + used, capacity - used,
+                     " agc_reset=%u fem_lna=%u fem_pa=%u bridge=%u melody_names=%u",
+                     caps.agc_reset, caps.fem_lna, caps.fem_pa,
+                     caps.bridge && _hooks.setToneBridge ? 1U : 0U,
+                     caps.sound && _hooks.melodyName ? 1U : 0U);
+  } else if (strcmp(command, "api get") == 0 && strncmp(reply, "OK ", 3) == 0) {
+    const DeviceSettingsState state = _hooks.read();
+    added = snprintf(reply + used, capacity - used, " agc_reset=%u fem_lna=%u fem_pa=%u bridge=%u",
+                     state.agc_reset, state.fem_lna, state.fem_pa, state.bridge);
+  }
+  if (added < 0 || static_cast<size_t>(added) >= capacity - used) {
+    response(reply, capacity, "ERR api internal");
   }
   return true;
 }

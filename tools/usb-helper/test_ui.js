@@ -458,11 +458,13 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
-test('0.09 retains verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+test('0.09 and 0.10 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.09',maximum:30,named:true},
-    {version:'0.10',maximum:30,named:false},
+    {version:'0.10',maximum:30,named:true},
+    {version:'0.11',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
+    {version:'0.10',maximum:29,named:false},
   ]) {
     const info=DEVICE_INFO.replace('SmartUI=0.08','SmartUI='+version);
     const f=await fixture({settings:true,info,settingsCaps:{melody_max:maximum}});

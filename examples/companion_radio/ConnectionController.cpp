@@ -104,6 +104,36 @@ static bool validSecretBytes(const uint8_t* value, size_t len) {
   return true;
 }
 
+#if defined(ESP32)
+static int hexNibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static bool decodeApiSecret(const char* hex, char* dest, size_t capacity,
+                            size_t minimum, size_t maximum, uint8_t& length) {
+  secureZero(dest, capacity);
+  length = 0;
+  const size_t count = strlen(hex);
+  if ((count & 1) || count / 2 < minimum || count / 2 > maximum || count / 2 >= capacity)
+    return false;
+  for (size_t i = 0; i < count / 2; ++i) {
+    const int high = hexNibble(hex[2 * i]);
+    const int low = hexNibble(hex[2 * i + 1]);
+    if (high < 0 || low < 0) { secureZero(dest, capacity); return false; }
+    dest[i] = static_cast<char>((high << 4) | low);
+  }
+  if (!validSecretBytes(reinterpret_cast<const uint8_t*>(dest), count / 2)) {
+    secureZero(dest, capacity);
+    return false;
+  }
+  length = static_cast<uint8_t>(count / 2);
+  return true;
+}
+#endif
+
 static bool zeroPadding(const uint8_t* value, size_t used, size_t capacity) {
   for (size_t i = used; i < capacity; ++i) {
     if (value[i] != 0) return false;
@@ -560,6 +590,10 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
   _console_swallow_lf = false;
   clearConsoleTx();
   _wifi_setup_stage = WifiSetupStage::IDLE;
+  _api_wifi_setup = false;
+  _api_wifi_result = WifiApiResult::NONE;
+  _api_mode_pending = _api_mode_reply_queued = false;
+  _api_mode_error = "none";
   _wifi_radio_on = false;
   _wifi_was_associated = false;
   _wifi_attempt_active = false;
@@ -592,6 +626,10 @@ void ConnectionController::begin(DataStore& store, MultiSerialInterface& interfa
 }
 
 bool ConnectionController::setMode(CompanionMode mode) {
+  if (_api_mode_pending) {
+    _api_mode_pending = _api_mode_reply_queued = false;
+    _api_mode_error = "cancelled";
+  }
   _last_change_error = ConnectionChangeError::None;
   if (!_started) {
     _last_change_error = ConnectionChangeError::NotStarted;
@@ -673,6 +711,8 @@ void ConnectionController::serviceWifi() {
     if (_wifi_setup_stage != WifiSetupStage::IDLE) {
       scrubCandidate();
       _wifi_setup_stage = WifiSetupStage::IDLE;
+      _api_wifi_setup = false;
+      _api_wifi_result = WifiApiResult::CANCELLED;
       stopWifiRadio(false);
     }
     // Quarantine/CLI rescue may keep an already approved client alive long
@@ -685,7 +725,8 @@ void ConnectionController::serviceWifi() {
   }
   if (_wifi_setup_stage != WifiSetupStage::IDLE &&
       elapsed(now, _wifi_setup_activity, WIFI_SETUP_IDLE_TIMEOUT_MS)) {
-    printConsole("WiFi setup timed out; credentials were not saved.\r\n");
+    if (_api_wifi_setup) _api_wifi_result = WifiApiResult::TIMED_OUT;
+    else printConsole("WiFi setup timed out; credentials were not saved.\r\n");
     cancelWifiSetup(true);
     return;
   }
@@ -706,11 +747,12 @@ void ConnectionController::serviceWifi() {
       _wifi_attempt_active = false;
       _wifi_setup_stage = WifiSetupStage::TEST_OK;
       _wifi_setup_activity = now;
-      printConsole("WiFi test passed. Type 'wifi save' to store it.\r\n");
+      if (!_api_wifi_setup) printConsole("WiFi test passed. Type 'wifi save' to store it.\r\n");
     } else if (_wifi_attempt_active &&
                elapsed(now, _wifi_attempt_started, WIFI_CONNECT_TIMEOUT_MS)) {
       _wifi_setup_stage = WifiSetupStage::FAILED;
-      printConsole("WiFi test failed; credentials were not saved.\r\n");
+      if (_api_wifi_setup) _api_wifi_result = WifiApiResult::FAILED;
+      else printConsole("WiFi test failed; credentials were not saved.\r\n");
       cancelWifiSetup(true);
     }
     return;
@@ -753,6 +795,7 @@ void ConnectionController::serviceWifi() {
 bool ConnectionController::startWifiSetup() {
 #if defined(ESP32)
   if (!mutationAllowed() || !(capabilities() & COMPANION_CAP_WIFI)) return false;
+  if (_api_wifi_setup) return false;
   if (_config.mode == CompanionMode::USB) return false;
   // A restarted wizard must not leave its previous candidate association or
   // sleep inhibit alive while waiting for new input.
@@ -773,6 +816,7 @@ void ConnectionController::cancelWifiSetup(bool restore_selected_wifi) {
   if (_wifi_setup_stage == WifiSetupStage::IDLE) return;
   scrubCandidate();
   _wifi_setup_stage = WifiSetupStage::IDLE;
+  _api_wifi_setup = false;
   _wifi_setup_activity = 0;
   if (restore_selected_wifi && _config.mode == CompanionMode::WiFi &&
       _config.wifi_configured) {
@@ -802,6 +846,7 @@ bool ConnectionController::saveTestedWifi() {
   secureZero(&next, sizeof(next));
   scrubCandidate();
   _wifi_setup_stage = WifiSetupStage::IDLE;
+  _api_wifi_setup = false;
   _wifi_setup_activity = 0;
   if (_config.mode == CompanionMode::WiFi) {
     _interfaces->selectExclusive(InterfaceType::WiFi);
@@ -812,6 +857,178 @@ bool ConnectionController::saveTestedWifi() {
   } else {
     stopWifiRadio(false);
   }
+  return true;
+}
+
+void ConnectionController::resetApiSession() {
+  if (_api_wifi_setup) cancelWifiSetup(true);
+  _api_wifi_result = WifiApiResult::NONE;
+  if (_api_mode_pending) _api_mode_error = "cancelled";
+  _api_mode_pending = _api_mode_reply_queued = false;
+}
+
+void ConnectionController::apiReplyQueued() {
+  if (_api_mode_pending) _api_mode_reply_queued = true;
+}
+
+void ConnectionController::serviceApiMode() {
+  if (!_api_mode_pending) return;
+  // Controller.loop runs before the companion router observes its session
+  // epoch. Never apply a switch in that gap after its original peer left.
+  if (!_interfaces || !_interfaces->isInterfaceConnected(interfaceType(_config.mode))) {
+    _api_mode_pending = _api_mode_reply_queued = false;
+    _api_mode_error = "cancelled";
+    return;
+  }
+  const uint32_t age = static_cast<uint32_t>(millis() - _api_mode_started);
+  if (age >= 2000U || !mutationAllowed()) {
+    _api_mode_error = age >= 2000U ? "timeout" : "readonly";
+    _api_mode_pending = _api_mode_reply_queued = false;
+    return;
+  }
+  if (!_api_mode_reply_queued || age < 100U || !_interfaces || _interfaces->hasPendingTx()) return;
+  const CompanionMode target = _api_mode_target;
+  _api_mode_pending = _api_mode_reply_queued = false;
+  if (setMode(target)) _api_mode_error = "none";
+  else _api_mode_error = _last_change_error == ConnectionChangeError::Apply ? "apply" : "storage";
+}
+
+bool ConnectionController::handleApiCommand(const char* command, char* reply,
+                                            size_t capacity, bool allow_mutation) {
+  if (!command) return false;
+  const bool mode_command = strncmp(command, "api mode ", 9) == 0;
+  if (!mode_command && strcmp(command, "api wifi") != 0 && strncmp(command, "api wifi ", 9) != 0)
+    return false;
+  if (!reply || capacity == 0) return true;
+  auto respond = [&](const char* text) { snprintf(reply, capacity, "%s", text); };
+  if (capacity < 256) { respond("ERR api buffer"); return true; }
+  if (mode_command) {
+    CompanionMode target;
+    if (strcmp(command + 9, "ble") == 0) target = CompanionMode::BLE;
+    else if (strcmp(command + 9, "usb") == 0) target = CompanionMode::USB;
+    else if (strcmp(command + 9, "wifi") == 0) target = CompanionMode::WiFi;
+    else { respond("ERR api invalid"); return true; }
+    if (!_started || !modeAvailable(target)) respond("ERR api unsupported");
+    else if (!allow_mutation || !mutationAllowed()) respond("ERR api readonly");
+    else if (deviceApiBusy()) respond("ERR api busy");
+    else if (target == CompanionMode::WiFi && !_config.wifi_configured) respond("ERR api unconfigured");
+    else if (target == _config.mode) snprintf(reply, capacity, "OK api mode target=%s state=active", command + 9);
+    else {
+      _api_mode_target = target;
+      _api_mode_pending = true;
+      _api_mode_reply_queued = false;
+      _api_mode_started = millis();
+      _api_mode_error = "none";
+      snprintf(reply, capacity, "OK api mode target=%s state=pending", command + 9);
+    }
+    return true;
+  }
+  if (strcmp(command, "api wifi status") == 0) {
+    const CompanionStatus current = status();
+    const char* stage = "idle";
+    if (_wifi_setup_stage == WifiSetupStage::WAIT_SSID) stage = "ssid";
+    else if (_wifi_setup_stage == WifiSetupStage::WAIT_PASSWORD) stage = "password";
+    else if (_wifi_setup_stage == WifiSetupStage::READY) stage = "ready";
+    else if (_wifi_setup_stage == WifiSetupStage::TESTING) stage = "testing";
+    else if (_wifi_setup_stage == WifiSetupStage::TEST_OK) stage = "test_ok";
+    else if (_api_wifi_result == WifiApiResult::SAVED) stage = "saved";
+    else if (_api_wifi_result == WifiApiResult::CANCELLED) stage = "cancelled";
+    else if (_api_wifi_result == WifiApiResult::FAILED) stage = "failed";
+    else if (_api_wifi_result == WifiApiResult::TIMED_OUT) stage = "timeout";
+    snprintf(reply, capacity,
+        "OK api wifi state=%s owner=%s supported=%u configured=%u associated=%u ip=%s ssid_set=%u password_set=%u mode_pending=%s last_mode_error=%s",
+        stage, _api_wifi_setup ? "api" : _wifi_setup_stage != WifiSetupStage::IDLE ? "console" : "none",
+        (capabilities() & COMPANION_CAP_WIFI) ? 1U : 0U, current.wifiConfigured ? 1U : 0U,
+        current.wifiAssociated ? 1U : 0U, current.wifiLocalIp[0] ? current.wifiLocalIp : "none",
+        _api_wifi_setup && _candidate_ssid_len ? 1U : 0U,
+        _api_wifi_setup && (_wifi_setup_stage == WifiSetupStage::READY ||
+            _wifi_setup_stage == WifiSetupStage::TESTING || _wifi_setup_stage == WifiSetupStage::TEST_OK) ? 1U : 0U,
+        !_api_mode_pending ? "none" : _api_mode_target == CompanionMode::BLE ? "ble" :
+            _api_mode_target == CompanionMode::USB ? "usb" : "wifi", _api_mode_error);
+    return true;
+  }
+  if (!_started || !(capabilities() & COMPANION_CAP_WIFI)) {
+    respond("ERR api unsupported");
+    return true;
+  }
+  if (!allow_mutation || !mutationAllowed()) {
+    respond("ERR api readonly");
+    return true;
+  }
+#if defined(ESP32)
+  // Testing candidate credentials disconnects Wi-Fi. Keep ownership on an
+  // independent BLE/USB session so test-before-save and cancellation are real.
+  if (_config.mode == CompanionMode::WiFi) {
+    respond("ERR api transport");
+    return true;
+  }
+  if (strcmp(command, "api wifi begin") == 0) {
+    if (deviceApiBusy()) respond("ERR api busy");
+    else {
+      stopWifiRadio(false);
+      scrubCandidate();
+      _api_wifi_setup = true;
+      _api_wifi_result = WifiApiResult::NONE;
+      _wifi_setup_stage = WifiSetupStage::WAIT_SSID;
+      _wifi_setup_activity = millis();
+      respond("OK api wifi begin state=ssid");
+    }
+    return true;
+  }
+  if (!_api_wifi_setup) {
+    respond(_wifi_setup_stage != WifiSetupStage::IDLE ? "ERR api busy" : "ERR api stale");
+    return true;
+  }
+  if (strcmp(command, "api wifi cancel") == 0) {
+    _api_wifi_result = WifiApiResult::CANCELLED;
+    cancelWifiSetup(true);
+    respond("OK api wifi cancel");
+  } else if (strncmp(command, "api wifi ssid ", 14) == 0) {
+    if (_wifi_setup_stage != WifiSetupStage::WAIT_SSID) respond("ERR api stale");
+    else if (!decodeApiSecret(command + 14, _candidate_ssid, sizeof(_candidate_ssid),
+                              1, WIFI_SSID_MAX, _candidate_ssid_len)) respond("ERR api invalid");
+    else {
+      _wifi_setup_stage = WifiSetupStage::WAIT_PASSWORD;
+      _wifi_setup_activity = millis();
+      respond("OK api wifi ssid state=password");
+    }
+  } else if (strncmp(command, "api wifi password ", 18) == 0) {
+    if (_wifi_setup_stage != WifiSetupStage::WAIT_PASSWORD) respond("ERR api stale");
+    else {
+      const bool open = strcmp(command + 18, "-") == 0;
+      bool valid = open;
+      if (open) { secureZero(_candidate_password, sizeof(_candidate_password)); _candidate_password_len = 0; }
+      else valid = decodeApiSecret(command + 18, _candidate_password, sizeof(_candidate_password),
+                                   8, WIFI_PASSWORD_MAX, _candidate_password_len);
+      if (valid && _candidate_password_len == 64) {
+        for (size_t i = 0; i < 64; ++i) {
+          if (hexNibble(_candidate_password[i]) < 0) { valid = false; break; }
+        }
+        if (!valid) { secureZero(_candidate_password, sizeof(_candidate_password)); _candidate_password_len = 0; }
+      }
+      if (!valid) respond("ERR api invalid");
+      else {
+        _wifi_setup_stage = WifiSetupStage::READY;
+        _wifi_setup_activity = millis();
+        respond("OK api wifi password state=ready");
+      }
+    }
+  } else if (strcmp(command, "api wifi test") == 0) {
+    if (_wifi_setup_stage != WifiSetupStage::READY) respond("ERR api stale");
+    else {
+      _wifi_setup_activity = millis();
+      startWifiAttempt(_candidate_ssid, _candidate_password, true);
+      respond("OK api wifi test state=testing");
+    }
+  } else if (strcmp(command, "api wifi save") == 0) {
+    if (_wifi_setup_stage != WifiSetupStage::TEST_OK || WiFi.status() != WL_CONNECTED)
+      respond("ERR api stale");
+    else if (!saveTestedWifi()) respond("ERR api storage");
+    else { _api_wifi_result = WifiApiResult::SAVED; respond("OK api wifi save"); }
+  } else respond("ERR api invalid");
+#else
+  respond("ERR api unsupported");
+#endif
   return true;
 }
 
@@ -1013,6 +1230,10 @@ void ConnectionController::printInfo() {
 }
 
 void ConnectionController::handleConsoleLine(char* raw_line) {
+  if (_api_wifi_setup) {
+    printConsole("WiFi setup is owned by the companion API; use that client to finish or cancel.\r\n");
+    return;
+  }
   if (_wifi_setup_stage == WifiSetupStage::WAIT_SSID) {
     if (strcmp(raw_line, "cancel") == 0) {
       cancelWifiSetup(true);
@@ -1150,7 +1371,7 @@ void ConnectionController::serviceConsole() {
     if (value < 0) break;
     _console_input_seen = true;
     _console_last_input = millis();
-    if (_wifi_setup_stage != WifiSetupStage::IDLE) {
+    if (_wifi_setup_stage != WifiSetupStage::IDLE && !_api_wifi_setup) {
       _wifi_setup_activity = millis();
     }
     const char c = static_cast<char>(value);
@@ -1201,11 +1422,14 @@ void ConnectionController::loop() {
       // Do not re-enable an old transport while recovery is terminal.
       scrubCandidate();
       _wifi_setup_stage = WifiSetupStage::IDLE;
+      _api_wifi_setup = false;
+      _api_wifi_result = WifiApiResult::CANCELLED;
       stopWifiRadio(false);
     }
     _quarantine_latched = true;
   }
   serviceWifi();
+  serviceApiMode();
   serviceConsole();
 }
 

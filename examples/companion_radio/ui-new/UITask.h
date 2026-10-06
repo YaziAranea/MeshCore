@@ -414,6 +414,8 @@ public:
   void toggleNotifyToneHighDrive();
   void cycleNotifyToneResonance();
   void toggleNotifyToneBridge();
+  bool supportsNotifyToneBridge() const;
+  bool setNotifyToneBridgeEnabled(bool enabled);
   bool hasToneAlert() const;
   void cycleNotifyMode();
   void previewNotifyMode();

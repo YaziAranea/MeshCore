@@ -4,6 +4,7 @@
 #include "ChannelBusyPolicy.h"
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 #include "ConnectionController.h"
+#include "SmartUiApi.h"
 #endif
 
 #include <Arduino.h> // needed for PlatformIO
@@ -1865,6 +1866,7 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
 
 #if SMARTUI_CONNECTION_SELECTOR
 void MyMesh::resetLocalAppSession() {
+  resetSmartUiApiSession();
   last_local_session_generation = _serial ? _serial->sessionGeneration() : 0;
   _iter_started = false;
   _iter_filter_since = 0;
@@ -1897,6 +1899,22 @@ void MyMesh::handleCmdFrame(size_t len) {
     if (_serial) writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     return;
   }
+
+#if SMARTUI_CONNECTION_SELECTOR
+  if (cmd_frame[0] == smartui::SmartUiApi::COMMAND) {
+    const size_t reply_length = handleSmartUiApiFrame(cmd_frame, len, out_frame, sizeof(out_frame));
+    if (reply_length) {
+      const size_t queued = _serial->writeFrame(out_frame, reply_length);
+      // Only an accepted api mode reply arms the deferred switch. An unrelated
+      // later response must not turn an unacknowledged switch into an action.
+      if (queued == reply_length && len >= smartui::SmartUiApi::HEADER + 9 &&
+          cmd_frame[7] == 1 && out_frame[8] == smartui::SmartUiApi::OK &&
+          memcmp(cmd_frame + smartui::SmartUiApi::HEADER, "api mode ", 9) == 0)
+        connection_controller.apiReplyQueued();
+    }
+    return;
+  }
+#endif
 
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
@@ -2821,6 +2839,9 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
     out_frame[0] = RESP_CODE_CUSTOM_VARS;
     smartui::CustomVarsWriter vars((char *)&out_frame[1], sizeof(out_frame) - 1);
+#if SMARTUI_CONNECTION_SELECTOR
+    vars.append("smartui_api", "1");
+#endif
 #if UI_PHONE_GPS == 1
     vars.append("gps_source", isPhoneGpsEnabled() ? "PHONE" : "HW");
     vars.append("phone_gps", !isPhoneGpsEnabled() ? "OFF" :

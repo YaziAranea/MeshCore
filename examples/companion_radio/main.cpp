@@ -35,6 +35,7 @@ MultiSerialInterface interface_manager;
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   #include "ConnectionController.h"
   #include "DeviceSettings.h"
+  #include "SmartUiApi.h"
 #endif
 
 // include bluetooth interface
@@ -129,6 +130,14 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 static smartui::DeviceSettings device_settings;
+// Separate preview-token domain: USB console tokens are not API tokens.
+static smartui::DeviceSettings api_device_settings;
+static smartui::SmartUiApi smartui_api;
+enum DeviceSettingEffect : uint8_t {
+  EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
+  EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
+};
+static uint8_t device_setting_effects = 0;
 
 static smartui::DeviceSettingsState readDeviceSettings() {
   const NodePrefs& p = *the_mesh.getNodePrefs();
@@ -151,11 +160,30 @@ static smartui::DeviceSettingsState readDeviceSettings() {
   s.muted = p.notifications_muted;
   s.night_quiet = p.night_quiet_active;
   s.profile = p.smart_profile_id;
+  s.agc_reset = p.agc_reset_enabled;
+  s.fem_lna = p.radio_fem_rxgain;
+  s.fem_pa = p.radio_fem_txgain;
+  s.bridge = p.notify_tone_bridge_enabled;
   return s;
 }
 
 static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
   NodePrefs& p = *the_mesh.getNodePrefs();
+  // Recomputed on each candidate/rollback. Persistence failure never applies
+  // these effects. Unrelated changes must not restart radio RX or AGC work.
+  device_setting_effects = 0;
+  if (p.adc_multiplier != s.adc_override) device_setting_effects |= EFFECT_ADC;
+  if (p.gps_enabled != s.gps || p.gps_source != s.gps_source) device_setting_effects |= EFFECT_GPS;
+  if (p.board_leds_enabled != s.board_led) device_setting_effects |= EFFECT_LED;
+  if (p.radio_fem_rxgain != s.fem_lna) device_setting_effects |= EFFECT_LNA;
+  if (p.radio_fem_txgain != s.fem_pa) device_setting_effects |= EFFECT_PA;
+  if (p.notify_mode != s.notify_mode || p.important_notify_mode != s.important_notify_mode ||
+      p.buzzer_quiet != s.sound_quiet || p.vibe_quiet != s.vibe_quiet ||
+      p.notify_tone_volume != s.volume || p.notify_tone_id != s.melody ||
+      p.notify_tone_dm_id != s.melody_dm || p.notify_tone_mention_id != s.melody_mention ||
+      p.notify_tone_system_id != s.melody_system || p.unread_led_enabled != s.unread_led ||
+      p.notifications_muted != s.muted || p.night_quiet_active != s.night_quiet)
+    device_setting_effects |= EFFECT_NOTIFY;
   p.adc_multiplier = s.adc_override;
   p.notify_mode = s.notify_mode;
   p.important_notify_mode = s.important_notify_mode;
@@ -174,16 +202,23 @@ static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
   p.notifications_muted = s.muted;
   p.night_quiet_active = s.night_quiet;
   p.smart_profile_id = s.profile;
+  p.agc_reset_enabled = s.agc_reset;
+  p.radio_fem_rxgain = s.fem_lna;
+  p.radio_fem_txgain = s.fem_pa;
 }
 
 static smartui::DeviceSettingsCaps deviceSettingsCapabilities() {
   smartui::DeviceSettingsCaps c;
+  c.agc_reset = the_mesh.supportsPeriodicAgcReset();
+  c.fem_lna = board.canControlLoRaFemLna();
+  c.fem_pa = board.canControlLoRaFemPaGain();
 #ifdef ADC_MULTIPLIER
   c.adc_default = ADC_MULTIPLIER;
   c.adc = c.adc_default > 0 && board.getAdcMultiplier() > 0;
 #endif
 #ifdef DISPLAY_CLASS
   c.display = ui_task.hasDisplay();
+  c.bridge = ui_task.supportsNotifyToneBridge();
   c.sound = ui_task.getNotifyTonePin() >= 0;
   c.unread_led = ui_task.getNotifyLedPin() >= 0;
   c.vibration = ui_task.getNotifyVibePin() >= 0;
@@ -225,9 +260,19 @@ static uint16_t deviceBatteryMilliVolts() { return board.getBattMilliVolts(); }
 static float deviceAdcMultiplier() { return board.getAdcMultiplier(); }
 static uint32_t deviceSettingsMillis() { return static_cast<uint32_t>(millis()); }
 static void applyDeviceSettings(bool battery_changed) {
-  the_mesh.applyUiPrefsRuntime();
+  const NodePrefs& p = *the_mesh.getNodePrefs();
+  const uint8_t effects = device_setting_effects;
+  device_setting_effects = 0;
+  if (effects & EFFECT_ADC) board.setAdcMultiplier(p.adc_multiplier);
+  if (effects & EFFECT_LED) meshcoreSetBoardLedsEnabled(p.board_leds_enabled != 0);
+  if (effects & EFFECT_LNA) board.setLoRaFemLnaEnabled(p.radio_fem_rxgain != 0);
+  if (effects & EFFECT_PA) board.setLoRaFemPaGainEnabled(p.radio_fem_txgain != 0);
+#if ENV_INCLUDE_GPS == 1
+  if (effects & EFFECT_GPS) the_mesh.applyGpsPrefs();
+#endif
 #ifdef DISPLAY_CLASS
-  ui_task.applyDeviceSettingsRuntime(battery_changed);
+  if (battery_changed || (effects & (EFFECT_NOTIFY | EFFECT_LED)))
+    ui_task.applyDeviceSettingsRuntime(battery_changed);
 #else
   (void)battery_changed;
 #endif
@@ -240,6 +285,89 @@ static void testDeviceNotification() {
 static bool handleCompanionDeviceSettings(const char* command, char* reply,
                                           size_t capacity, bool allow_mutation) {
   return device_settings.handle(command, reply, capacity, allow_mutation);
+}
+
+static const char* apiMelodyName(uint8_t id) {
+#ifdef DISPLAY_CLASS
+  return ui_task.getNotifyToneName(id);
+#else
+  (void)id;
+  return nullptr;
+#endif
+}
+
+static bool apiSetToneBridge(bool enabled) {
+#ifdef DISPLAY_CLASS
+  return ui_task.setNotifyToneBridgeEnabled(enabled);
+#else
+  (void)enabled;
+  return false;
+#endif
+}
+
+static const char* apiTransportName(CompanionMode mode) {
+  return mode == CompanionMode::WiFi ? "wifi" : mode == CompanionMode::USB ? "usb" : "ble";
+}
+
+static bool executeSmartUiApi(const char* command, char* reply, size_t capacity,
+                              bool allow_mutation) {
+  // The reusable service also speaks the USB legacy grammar. Never expose
+  // that grammar through this wire namespace (including commands with effects).
+  if (strncmp(command, "api ", 4) != 0) {
+    snprintf(reply, capacity, "ERR api unsupported");
+    return true;
+  }
+  const CompanionStatus status = connection_controller.status();
+  if (strcmp(command, "api hello") == 0) {
+    snprintf(reply, capacity,
+        "OK api hello v=1 firmware=%s stage=release max_command=152 max_reply=479 max_frame=160 transport=%s write=%u events=0 wifi_setup=%u",
+        SMARTUI_VERSION, apiTransportName(status.selected), allow_mutation ? 1U : 0U,
+        (status.capabilities & COMPANION_CAP_WIFI) && status.selected != CompanionMode::WiFi ? 1U : 0U);
+    return true;
+  }
+  if (strcmp(command, "api connection") == 0) {
+    snprintf(reply, capacity,
+        "OK api connection selected=%s via=%s caps=%u wifi_configured=%u wifi_associated=%u ip=%s readonly=%u",
+        apiTransportName(status.selected), status.clientConnected ? apiTransportName(status.connectedVia) : "none",
+        status.capabilities, status.wifiConfigured, status.wifiAssociated,
+        status.wifiLocalIp[0] ? status.wifiLocalIp : "none", allow_mutation ? 0U : 1U);
+    return true;
+  }
+  // This controller owns the staged Wi-Fi workflow and deferred mode switch.
+  // It must run before the ordinary settings busy guard, or its own pending
+  // transaction would block status/save/cancel forever.
+  if (connection_controller.handleApiCommand(command, reply, capacity, allow_mutation)) return true;
+  // No arbitrary CLI passthrough or raw GPIO writes. TCP retains the existing
+  // companion trust model: no extra authentication or TLS; trusted LAN only.
+  const bool read = strcmp(command, "api caps") == 0 || strcmp(command, "api get") == 0 ||
+                    strncmp(command, "api melody ", 11) == 0;
+  if (!read && connection_controller.deviceApiBusy()) {
+    snprintf(reply, capacity, "ERR api busy");
+    return true;
+  }
+  if (!read && !allow_mutation) {
+    snprintf(reply, capacity, "ERR api readonly");
+    return true;
+  }
+  // Do not change FEM gain during a packet, queued TX, or radio maintenance.
+  if (strncmp(command, "api set fem_", 12) == 0 &&
+      (the_mesh.hasPendingWork() || radio_driver.isReceiving() || !radio_driver.isInRecvMode())) {
+    snprintf(reply, capacity, "ERR api busy");
+    return true;
+  }
+  return api_device_settings.handle(command, reply, capacity, allow_mutation);
+}
+
+size_t handleSmartUiApiFrame(const uint8_t* request, size_t length,
+                            uint8_t* response, size_t capacity) {
+  const bool writable = connection_controller.deviceApiWritesAllowed();
+  return smartui_api.handle(request, length, response, capacity, writable);
+}
+
+void resetSmartUiApiSession() {
+  smartui_api.resetSession();
+  api_device_settings.resetSession();
+  connection_controller.resetApiSession();
 }
 
 static void resetCompanionSession() {
@@ -605,6 +733,10 @@ void setup() {
   settings_hooks.millis = deviceSettingsMillis;
   settings_hooks.testNotification = testDeviceNotification;
   device_settings.begin(settings_hooks);
+  settings_hooks.melodyName = apiMelodyName;
+  settings_hooks.setToneBridge = apiSetToneBridge;
+  api_device_settings.begin(settings_hooks);
+  smartui_api.begin(executeSmartUiApi);
 #endif
 
   board.onBootComplete();
