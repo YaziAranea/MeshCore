@@ -173,9 +173,31 @@ TEST(CompanionFrameValidation, EveryCommandAndInRangeLengthHasABoundedResult) {
       const companion::FrameValidationResult result = validate(frame, length);
       EXPECT_GE(result, companion::kFrameValid);
       EXPECT_LE(result, companion::kFrameInvalidShape);
-      EXPECT_NE(companion::kFrameTooLarge, result);
+      if (command == companion::kRunCliCommand && length > 160) {
+        EXPECT_EQ(companion::kFrameTooLarge, result);
+      } else {
+        EXPECT_NE(companion::kFrameTooLarge, result);
+      }
     }
   }
+}
+
+TEST(CompanionFrameValidation, LocalCliHasItsOwnBoundWithinTheTransportCapacity) {
+  uint8_t frame[kCapacity + 1] = {};
+  frame[0] = companion::kRunCliCommand;
+  EXPECT_EQ(companion::kFrameTooShort, validate(frame, 1));
+  EXPECT_EQ(companion::kFrameValid, validate(frame, 2));
+  EXPECT_EQ(companion::kFrameValid, validate(frame, 159));
+  EXPECT_EQ(companion::kFrameValid, validate(frame, 160));
+  EXPECT_EQ(companion::kFrameTooLarge, companion::validateCommandFrame(
+      frame, 160, 159, kPublicKeySize, kMaxPathSize, kMaxPacketPayload));
+  for (size_t length = 161; length <= sizeof(frame); ++length) {
+    EXPECT_EQ(companion::kFrameTooLarge, validate(frame, length)) << length;
+  }
+  // Other commands retain the wider transport limit.
+  frame[0] = companion::kGetDeviceTime;
+  EXPECT_EQ(companion::kFrameValid, validate(frame, kCapacity));
+  EXPECT_EQ(companion::kFrameTooLarge, validate(frame, sizeof(frame)));
 }
 
 TEST(ChannelBusyPolicy, PollsOnlyAtTheConfiguredWrapSafeInterval) {
