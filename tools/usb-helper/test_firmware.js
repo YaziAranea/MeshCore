@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
 const {verify,PROFILES,reportedProfile} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
-const VERSION = '0.13';
+const VERSION = '0.14';
 const sha = data => createHash('sha256').update(data).digest('hex');
 
 function application(profile, source = COMMIT.slice(0,8), appendedHash = true, version = VERSION) {
@@ -66,7 +66,7 @@ test('preflight retains 0.09 through 0.12 release compatibility for all six prof
 test('V4 R8 starts with 0.13 and remains distinct from ordinary V4.3 R2',async()=>{
   const r8=PROFILES.find(profile=>profile.id==='v4r8');
   assert.equal(r8.environment,'heltec_v4_r8_companion_radio_ble_femon_smartui');
-  assert.equal(r8.marker+' SmartUI '+VERSION,'V4 R8 SmartUI 0.13');
+  assert.equal(r8.marker+' SmartUI '+VERSION,'V4 R8 SmartUI 0.14');
   assert.equal(reportedProfile({board:'Heltec V4 R8 OLED'}),r8);
   assert.equal(reportedProfile({board:'Heltec V4.3 OLED'}).id,'v43');
   assert.equal(reportedProfile({board:'Heltec V4 R8 TFT'}),null);

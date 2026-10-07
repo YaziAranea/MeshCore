@@ -137,6 +137,7 @@ class UITask : public AbstractUITask {
   uint32_t _uptime_last_millis;
   uint8_t _low_batt_strikes;
   uint16_t _low_batt_threshold;
+  bool _adc_calibration_service_active = false;
   mutable smartui::BatteryDisplayCache _battery_display;
   mutable uint16_t _battery_sample_mv = 0;
   mutable uint32_t _battery_sampled_at = 0;
@@ -476,6 +477,7 @@ public:
   void cycleSmartProfile();
   void applyImportedPrefs() override;
   void applyDeviceSettingsRuntime(bool battery_changed);
+  void setAdcCalibrationServiceActive(bool active);
   const char* getHardwareTestStepName(uint8_t step) const;
   void runHardwareTestStep(uint8_t step);
 

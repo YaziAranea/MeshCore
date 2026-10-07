@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:url'),{chromium}=require('playwright');
 const {installApiMock}=require('./test_api_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_1.6.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_1.7.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -30,6 +30,60 @@ async function geometry(page){
     return result;
   });assert.deepEqual(problems,[]);
 }
+
+test('ADC service CLI explicit start, source expiry, save and disconnect with one writer',async()=>{
+  const f=await fixture({caps:{adc_service:1}});try{const p=f.page;await connect(p);
+    await p.locator('#api-adc summary').click();
+    assert.equal(await p.locator('#api-adc-service-box').isVisible(),true);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c==='ui adc service start')),false);
+    await p.locator('#api-adc-service-start').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c==='ui adc service start')),false);
+    await p.locator('#api-adc-service-start').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.match(await p.locator('#api-adc-service-status').textContent(),/Окно активно/);
+    await p.evaluate(()=>__apiMock.adcSourceMissing=true);
+    await p.locator('#api-adc-measured').fill('3.82');await p.locator('#api-adc-preview').click();await ready(p);
+    assert.match(await p.locator('#api-feedback').textContent(),/ProMicro.*2 минут/);
+    assert.equal(await p.locator('#api-adc-apply').isDisabled(),true);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui adc apply'))),false);
+    await p.evaluate(()=>{__apiMock.adcSourceMissing=false;__apiMock.adcServiceDeadline=Date.now()+31000;});
+    await p.locator('#api-adc-service-refresh').click();await ready(p);
+    assert.match(await p.locator('#api-adc-service-status').textContent(),/31 с/);
+    await p.locator('#api-adc-preview').click();await ready(p);await p.locator('#api-adc-apply').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.match(await p.locator('#api-adc-service-status').textContent(),/Окно выключено/);
+    assert.equal(await p.evaluate(()=>__apiMock.settings.battery_protection),1);
+    await p.locator('#api-adc-service-start').click();await p.locator('#confirm-yes').click();await ready(p);
+    await geometry(p);await p.locator('#api-adc').screenshot({path:path.join(output,'helper-1.7-cli-adc-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-adc').screenshot({path:path.join(output,'helper-1.7-cli-adc-mobile.png')});
+    await p.locator('#disconnect').click();await p.waitForFunction(()=>__apiMock.closed);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui adc service stop').length),1);
+    assert.equal(await p.locator('#api-adc-measured').inputValue(),'');
+  }finally{await f.close();}
+});
+
+test('ADC service CLI firmware timeout never resumes; unsupported capability stays hidden',async()=>{
+  const old=await fixture();try{await connect(old.page);assert.equal(await old.page.locator('#api-adc-service-box').isHidden(),true);
+    assert.equal(await old.page.evaluate(()=>__apiMock.commands.some(c=>c==='ui adc service')),false);
+  }finally{await old.close();}
+  const f=await fixture({caps:{adc_service:1},clock:true});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.locator('#api-adc-service-start').click();await p.locator('#confirm-yes').click();await ready(p);
+    await p.locator('#api-adc-measured').fill('3.82');await p.locator('#api-adc-preview').click();await ready(p);
+    await p.clock.fastForward(125000);await ready(p);
+    await p.waitForFunction(()=>document.getElementById('api-adc-service-status').textContent.includes('Окно выключено'));
+    assert.equal(await p.locator('#api-adc-apply').isDisabled(),true);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui adc service start').length),1);
+  }finally{await f.close();}
+});
+
+test('ADC preview expiring during confirmation cannot send a stale apply',async()=>{
+  const f=await fixture({caps:{adc_service:1},clock:true});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.locator('#api-adc-service-start').click();await p.locator('#confirm-yes').click();await ready(p);
+    await p.locator('#api-adc-measured').fill('3.82');await p.locator('#api-adc-preview').click();await ready(p);
+    await p.locator('#api-adc-apply').click();await p.clock.fastForward(125000);await ready(p);
+    await p.locator('#confirm-yes').click();
+    assert.match(await p.locator('#api-adc-result').textContent(),/Расчёт устарел/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui adc apply'))),false);
+  }finally{await f.close();}
+});
 
 test('CLI settings-only handshake, one reader, hidden unsupported hardware',async()=>{
   const f=await fixture();try{const p=f.page;await connect(p);

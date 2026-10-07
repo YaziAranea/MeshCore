@@ -35,6 +35,7 @@ MultiSerialInterface interface_manager;
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
   #include "ConnectionController.h"
   #include "DeviceSettings.h"
+  #include "AdcCalibrationService.h"
   #include "SmartUiCliSettings.h"
   #include "RadioSettings.h"
   #include "SmartUiSync.h"
@@ -135,6 +136,7 @@ static smartui::DeviceSettings device_settings;
 // Separate preview-token domains for the service console and Companion CLI.
 static smartui::DeviceSettings cli_device_settings;
 static smartui::RadioSettings radio_settings;
+static smartui::AdcCalibrationService adc_calibration_service;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
@@ -217,6 +219,7 @@ static smartui::DeviceSettingsCaps deviceSettingsCapabilities() {
 #ifdef ADC_MULTIPLIER
   c.adc_default = ADC_MULTIPLIER;
   c.adc = c.adc_default > 0 && board.getAdcMultiplier() > 0;
+  c.adc_service = c.adc && board.supportsConfirmedUsbPower();
 #endif
 #ifdef DISPLAY_CLASS
   c.display = ui_task.hasDisplay();
@@ -265,6 +268,89 @@ static bool deviceBatteryCalibrationSample(uint16_t& millivolts, float& multipli
 }
 static float deviceAdcMultiplier() { return board.getAdcMultiplier(); }
 static uint32_t deviceSettingsMillis() { return static_cast<uint32_t>(millis()); }
+
+static bool adcServiceUsbLinkPresent() {
+#if defined(NRF52_PLATFORM) && defined(ENABLE_USB_INTERFACE)
+  return Serial.dtr();
+#else
+  return false;  // No reliable VBUS/session contract on these targets yet.
+#endif
+}
+
+static bool adcServiceOwnerConnected(smartui::AdcCalibrationService::Owner owner) {
+  if (!adcServiceUsbLinkPresent()) return false;
+  if (owner == smartui::AdcCalibrationService::Owner::USB_CONSOLE)
+    return connection_controller.status().usbConsoleEnabled;
+  return owner == smartui::AdcCalibrationService::Owner::USB_COMPANION &&
+      interface_manager.getSelectedInterface() == InterfaceType::USB &&
+      interface_manager.isInterfaceConnected(InterfaceType::USB);
+}
+
+static uint32_t adcServiceSession(smartui::AdcCalibrationService::Owner owner) {
+  return owner == smartui::AdcCalibrationService::Owner::USB_COMPANION ?
+      interface_manager.getSessionGeneration() : 0;
+}
+
+static void serviceAdcCalibrationWindow() {
+  const auto owner = adc_calibration_service.owner();
+  if (owner == smartui::AdcCalibrationService::Owner::NONE) {
+#ifdef DISPLAY_CLASS
+    ui_task.setAdcCalibrationServiceActive(false);
+#endif
+    return;
+  }
+  const bool active = adc_calibration_service.update(millis(),
+      board.isUsbPowerConfirmed(), adcServiceOwnerConnected(owner),
+      adcServiceSession(owner), connection_controller.deviceApiWritesAllowed());
+#ifdef DISPLAY_CLASS
+  ui_task.setAdcCalibrationServiceActive(active);
+#endif
+}
+
+void stopSmartUiAdcCalibrationService() {
+  adc_calibration_service.stop();
+  serviceAdcCalibrationWindow();
+}
+
+static void handleAdcService(smartui::AdcCalibrationService::Owner requester,
+                             const char* action, char* reply, size_t capacity,
+                             bool writable) {
+  serviceAdcCalibrationWindow();
+  const bool supported = deviceSettingsCapabilities().adc_service;
+  const bool external = board.isUsbPowerConfirmed();
+  if (strcmp(action, "stop") == 0) stopSmartUiAdcCalibrationService();
+  else if (strcmp(action, "start") == 0) {
+    const auto result = adc_calibration_service.start(millis(), supported, writable,
+        external, adcServiceOwnerConnected(requester), requester, adcServiceSession(requester));
+    if (result != smartui::AdcCalibrationService::Result::OK) {
+      using Result = smartui::AdcCalibrationService::Result;
+      const char* error = result == Result::READONLY ? "readonly" :
+          result == Result::UNSUPPORTED ? "unsupported" :
+          result == Result::USB_REQUIRED ? "usb_required" : "busy";
+      snprintf(reply, capacity, "ERR settings %s", error);
+      return;
+    }
+  }
+  serviceAdcCalibrationWindow();
+  const uint32_t remaining = adc_calibration_service.remaining(millis());
+  snprintf(reply, capacity,
+      "OK settings adc_service supported=%u active=%u remaining_ms=%lu external=%u",
+      supported ? 1U : 0U, remaining ? 1U : 0U,
+      static_cast<unsigned long>(remaining), external ? 1U : 0U);
+}
+
+static void consoleAdcService(const char* action, char* reply, size_t capacity, bool writable) {
+  handleAdcService(smartui::AdcCalibrationService::Owner::USB_CONSOLE,
+                  action, reply, capacity, writable);
+}
+
+static void companionAdcService(const char* action, char* reply, size_t capacity, bool writable) {
+  // A BLE/TCP client remains remote even when someone plugs a USB power cable in.
+  const auto owner = interface_manager.getSelectedInterface() == InterfaceType::USB ?
+      smartui::AdcCalibrationService::Owner::USB_COMPANION :
+      smartui::AdcCalibrationService::Owner::NONE;
+  handleAdcService(owner, action, reply, capacity, writable);
+}
 static void applyDeviceSettings(bool battery_changed) {
   const NodePrefs& p = *the_mesh.getNodePrefs();
   const uint8_t effects = device_setting_effects;
@@ -364,7 +450,9 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
   if (radio_settings.handle(command, reply, capacity, writable)) return true;
   const bool read = strncmp(command, "ui caps ", 8) == 0 ||
                     strncmp(command, "ui get ", 7) == 0 ||
-                    strncmp(command, "ui melody ", 10) == 0;
+                    strncmp(command, "ui melody ", 10) == 0 ||
+                    strcmp(command, "ui adc service") == 0 ||
+                    strcmp(command, "ui adc service stop") == 0;
   if (!read && connection_controller.deviceApiBusy()) {
     snprintf(reply, capacity, "ERR ui busy");
     return true;
@@ -383,6 +471,8 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
 }
 
 void resetSmartUiCliSession() {
+  if (adc_calibration_service.owner() == smartui::AdcCalibrationService::Owner::USB_COMPANION)
+    stopSmartUiAdcCalibrationService();
   cli_device_settings.resetSession();
   connection_controller.resetApiSession();
 }
@@ -750,9 +840,12 @@ void setup() {
   settings_hooks.adcMultiplier = deviceAdcMultiplier;
   settings_hooks.millis = deviceSettingsMillis;
   settings_hooks.testNotification = testDeviceNotification;
+  settings_hooks.adcService = consoleAdcService;
+  settings_hooks.adcCommitted = stopSmartUiAdcCalibrationService;
   device_settings.begin(settings_hooks);
   settings_hooks.melodyName = apiMelodyName;
   settings_hooks.setToneBridge = apiSetToneBridge;
+  settings_hooks.adcService = companionAdcService;
   cli_device_settings.begin(settings_hooks);
   smartui::RadioSettingsHooks radio_hooks;
   radio_hooks.read = readRadioSettings;
@@ -843,6 +936,9 @@ void loop() {
   the_mesh.loop();
   interface_manager.loop();
   sensors.loop();
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+  serviceAdcCalibrationWindow();
+#endif
 #ifdef DISPLAY_CLASS
   ui_task.loop();
 #endif

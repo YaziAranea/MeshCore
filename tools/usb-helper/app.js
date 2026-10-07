@@ -40,7 +40,7 @@
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
   ];
-  // Exact public 0.08..0.13 notify_tones order; the package test checks source parity.
+  // Exact public 0.08..0.14 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
   const addOptions = (select, options) => {
@@ -73,9 +73,10 @@
     $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
     const names={adc:"ADC",sound:"звук",board_led:"LED платы",unread_led:"LED уведомлений",vibration:"вибрация",gps:"GPS",battery_protection:"защита АКБ"};
     $("settings-capabilities").textContent=caps ? "Поддержка сборки: "+Object.entries(names).filter(([key])=>caps[key]).map(([,name])=>name).join(", ")+". "+(caps.display ? "Драйвер экрана активен." : "Настройка без дисплея.") : "Новые настройки доступны в SmartUI 0.08 с протоколом Settings 1. Возможности определяются ответом ноды, не её названием.";
+    renderAdcService(readReady,ready);
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));
@@ -111,6 +112,17 @@
     $("adc-apply").disabled=!ready || !preview || Date.now()>=preview.expiresAt;
     if (preview) $("adc-preview-result").textContent="Расчёт, ещё не сохранён: "+preview.multiplier.toFixed(6)+". Опорный замер: "+(preview.sampled_mv/1000).toFixed(3)+" В; мультиметр — "+(preview.measured_mv/1000).toFixed(3)+" В.";
     $("settings-test").disabled=!ready || !(caps.sound || caps.unread_led || caps.vibration);
+  }
+  function renderAdcService(readReady,ready) {
+    const enabled=Boolean(state.settingsCaps?.adc_service), service=state.adcService;
+    $("adc-service-box").hidden=!enabled;
+    $("adc-service-start").disabled=!enabled||!ready||!service?.external||Boolean(service?.active);
+    $("adc-service-stop").disabled=!enabled||!readReady||!service?.active;
+    $("adc-service-refresh").disabled=!enabled||!readReady;
+    $("adc-service-status").textContent=!service ? "Состояние окна не подтверждено. Нажмите «Проверить окно»." : service.active
+      ? "Окно активно · осталось по данным ноды: "+Math.ceil(service.remaining_ms/1000)+" с. Проверяем каждые 5 секунд."
+      : service.external ? "Окно выключено. Обычная защита питания действует." : "Окно выключено. Нода не подтвердила питание USB.";
+    if (!state.connected) $("adc-measured").value="";
   }
   for (const profile of SmartUiFirmware.PROFILES) {
     const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.label; $("firmware-board").append(option);
@@ -223,6 +235,15 @@
     settingsDirty.clear(); await run(()=>client.loadDeviceSettings());
   };
   $("adc-measured").oninput=()=>client.clearAdcPreview();
+  $("adc-service-start").onclick=async()=>{
+    const session=client._session;
+    if (await confirmAction("На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB и свежий замер мультиметром. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.") && session===client._session && state.connected && state.verified) await run(()=>client.startAdcService({confirmed:true}));
+  };
+  $("adc-service-stop").onclick=()=>run(()=>client.stopAdcService());
+  $("adc-service-refresh").onclick=()=>run(()=>client.loadAdcService());
+  setInterval(()=>{
+    if (state.connected&&state.verified&&!state.busy&&!state.testPassed&&state.adcService?.active) void run(()=>client.loadAdcService());
+  },5000);
   $("adc-preview").onclick=()=>run(()=>client.previewAdc($("adc-measured").value));
   $("adc-apply").onclick=async()=>{
     if (await confirmAction("Сохранить рассчитанную калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Поправка влияет на оценку заряда и защиту питания.")) await run(()=>client.applyAdc({confirmed:true}));
@@ -286,7 +307,7 @@
   $("cancel").onclick = () => run(() => client.cancelWifi());
   for (const mode of Object.keys(modeNames)) $("mode-" + mode).onclick = async () => {
     if (state.status?.mode === mode) return;
-    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.13 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
+    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.14 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
     if (await confirmAction(message)) await run(() => client.setMode(mode));
   };
   $("forget").onclick = async () => {

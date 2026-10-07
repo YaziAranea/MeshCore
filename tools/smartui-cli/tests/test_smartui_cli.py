@@ -87,7 +87,7 @@ class CliTests(unittest.TestCase):
 
     def test_domain_errors_not_retried_or_poisoned(self):
         client, board = self.connected()
-        for reason in ("unsupported", "invalid", "storage", "source", "stale", "range", "busy"):
+        for reason in ("unsupported", "invalid", "storage", "source", "stale", "range", "busy", "usb_required"):
             before = len(board.requests)
             board.error = "ERR ui " + reason
             with self.assertRaises(CliError) as e:
@@ -111,13 +111,22 @@ class CliTests(unittest.TestCase):
         client, board = self.connected(readonly=True)
         for command in ("ui set volume 2", "ui test", "ui adc apply 7", "ui adc reset",
                         "ui wifi begin", "ui wifi password 74657374", "ui mode ble",
-                        "ui radio set 868731 62500 7 7 2", "ui advert set 120"):
+                        "ui radio set 868731 62500 7 7 2", "ui advert set 120", "ui adc service start"):
             before = len(board.requests)
             with self.assertRaises(CliError) as e:
                 client.execute(command)
             self.assertEqual(e.exception.code, "readonly")
             self.assertEqual(len(board.requests), before)
         self.assertEqual(client.field("get", "volume"), "7")
+
+    def test_adc_service_read_stop_are_allowed_readonly(self):
+        client, board = self.connected(readonly=True)
+        reply = "OK ui adc_service supported=1 active=0 remaining_ms=0 external=1"
+        for command in ("ui adc service", "ui adc service stop"):
+            board.error = reply
+            self.assertEqual(client.execute(command), reply)
+        board.error = "OK ui caps key=adc_service value=1"
+        self.assertEqual(client.field("caps", "adc_service"), "1")
 
     def test_timeout_poison_and_no_after_close_io(self):
         client, board = self.connected()

@@ -26,11 +26,16 @@ def main():
 #define LOW_BATTERY_SHUTDOWN_CHECK_MILLIS 1000
 uint32_t now=0;
 uint32_t millis() { return now; }
-struct Board { bool external=false; bool isExternalPowered() { return external; } };
+struct Board {
+  bool external=false, confirmed=false;
+  bool isExternalPowered() { return external; }
+  bool isUsbPowerConfirmed() { return confirmed; }
+};
 struct Task {
   Board board; Board* _board=&board;
   uint16_t threshold=3200, mv=3100, _low_batt_threshold=0;
   uint8_t _low_batt_strikes=0;
+  bool _adc_calibration_service_active=false, _storage_recovery_active=false;
   uint32_t next_batt_chck=0;
   int shutdowns=0;
   uint16_t getLowBatteryShutdownThreshold() { return threshold; }
@@ -72,6 +77,35 @@ int main() {
   CHECK(disabled.shutdowns==0);
   for(int i=0;i<3;++i) disabled.tick(2600,false);
   CHECK(disabled.shutdowns==1);
+
+  Task calibration;
+  calibration.board.confirmed=true;
+  calibration._adc_calibration_service_active=true;
+  calibration._low_batt_strikes=2;
+  for(int i=0;i<150;++i) calibration.tick(2600,true);
+  CHECK(calibration.shutdowns==0 && calibration._low_batt_strikes==0);
+  // The production service owner ends the window on timeout, abort or save.
+  calibration._adc_calibration_service_active=false;
+  calibration.tick(2600,true); CHECK(calibration._low_batt_strikes==1);
+  calibration.tick(2600,true); CHECK(calibration.shutdowns==0);
+  calibration.tick(2600,true); CHECK(calibration.shutdowns==1);
+  Task unconfirmed;
+  unconfirmed._adc_calibration_service_active=true;
+  for(int i=0;i<3;++i) unconfirmed.tick(2600,true);
+  CHECK(unconfirmed.shutdowns==1); // Fail-safe external=true is not affirmative USB evidence.
+  Task recovery_hold;
+  recovery_hold.board.confirmed=true;
+  recovery_hold._adc_calibration_service_active=true;
+  recovery_hold._storage_recovery_active=true;
+  for(int i=0;i<3;++i) recovery_hold.tick(2600,true);
+  CHECK(recovery_hold.shutdowns==1); // A service window never bypasses storage recovery safety.
+  Task lost_usb;
+  lost_usb.board.confirmed=true;
+  lost_usb._adc_calibration_service_active=true;
+  lost_usb.tick(2600,true); CHECK(lost_usb.shutdowns==0);
+  lost_usb.board.confirmed=false;
+  for(int i=0;i<3;++i) lost_usb.tick(2600,false);
+  CHECK(lost_usb.shutdowns==1);
 
   smartui::RecoveryBatteryGuard recovery;
   CHECK(!recovery.update(0,3100,true,3200));

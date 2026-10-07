@@ -11,7 +11,7 @@ const char* const CAP_KEYS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration",
     "gps", "battery_protection", "display", "melody_max", "adc_min",
     "adc_max", "agc_reset", "fem_lna", "fem_pa", "bridge",
-    "melody_names",
+    "melody_names", "adc_service",
 };
 
 const char* const GET_KEYS[] = {
@@ -257,7 +257,13 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
 
   const char* backend_prefix = nullptr;
   const char* value = nullptr;
-  if (strncmp(command, "ui adc preview", 14) == 0) {
+  if (strcmp(command, "ui adc service") == 0) {
+    backend_prefix = "api adc service";
+  } else if (strcmp(command, "ui adc service start") == 0) {
+    backend_prefix = "api adc service start";
+  } else if (strcmp(command, "ui adc service stop") == 0) {
+    backend_prefix = "api adc service stop";
+  } else if (strncmp(command, "ui adc preview", 14) == 0) {
     backend_prefix = "api adc preview ";
     value = command + 14;
   } else if (strncmp(command, "ui adc apply", 12) == 0) {

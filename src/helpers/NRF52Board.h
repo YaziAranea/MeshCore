@@ -57,6 +57,8 @@ public:
   virtual bool startOTAUpdate(const char *id, char reply[]) override;
   virtual void sleep(uint32_t secs) override;
   bool isExternalPowered() override;
+  bool supportsConfirmedUsbPower() const override { return true; }
+  bool isUsbPowerConfirmed() override;
 
 #ifdef NRF52_POWER_MANAGEMENT
   uint16_t getBootVoltage() override { return boot_voltage_mv; }

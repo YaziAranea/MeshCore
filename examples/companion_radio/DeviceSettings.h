@@ -50,6 +50,7 @@ struct DeviceSettingsCaps {
   bool fem_lna = false;
   bool fem_pa = false;
   bool bridge = false;
+  bool adc_service = false;
 };
 
 struct DeviceSettingsHooks {
@@ -71,6 +72,9 @@ struct DeviceSettingsHooks {
   // Dedicated checked transaction: fixed bridge pins and peripheral ownership
   // cannot be safely represented by changing the preferences byte alone.
   bool (*setToneBridge)(bool enabled) = nullptr;
+  void (*adcService)(const char* action, char* reply, size_t capacity,
+                     bool allow_mutation) = nullptr;
+  void (*adcCommitted)() = nullptr;
 };
 
 class DeviceSettings {

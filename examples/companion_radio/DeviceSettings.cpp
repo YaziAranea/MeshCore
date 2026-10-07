@@ -70,10 +70,11 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
   const DeviceSettingsState before = _hooks.read();
   if (strcmp(command, "settings caps") == 0) {
     snprintf(reply, capacity,
-        "OK settings caps v=1 adc=%u sound=%u board_led=%u unread_led=%u vibration=%u gps=%u battery_protection=%u display=%u melody_max=%u adc_min=%.6f adc_max=%.6f",
+        "OK settings caps v=1 adc=%u sound=%u board_led=%u unread_led=%u vibration=%u gps=%u battery_protection=%u display=%u melody_max=%u adc_min=%.6f adc_max=%.6f adc_service=%u",
         caps.adc, caps.sound, caps.board_led, caps.unread_led, caps.vibration, caps.gps,
         caps.battery_protection, caps.display, caps.melody_max,
-        mesh::adcCalibrationMinimum(caps.adc_default), mesh::adcCalibrationMaximum(caps.adc_default));
+        mesh::adcCalibrationMinimum(caps.adc_default), mesh::adcCalibrationMaximum(caps.adc_default),
+        caps.adc_service ? 1U : 0U);
     return true;
   }
   if (strcmp(command, "settings get") == 0) {
@@ -84,6 +85,19 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
         before.board_led, before.unread_led, (caps.effective_notify_mode & VIBE_MODE) ? 1U : 0U,
         before.gps_source == 0 ? before.gps : 0U, before.battery_protection,
         caps.battery_protection ? (before.battery_protection ? 3200U : 2700U) : 0U, before.muted);
+    return true;
+  }
+  if (strcmp(command, "settings adc service") == 0 ||
+      strncmp(command, "settings adc service ", 21) == 0) {
+    const char* action = command[20] ? command + 21 : "";
+    if (action[0] && strcmp(action, "start") != 0 && strcmp(action, "stop") != 0)
+      response(reply, capacity, "ERR settings invalid");
+    else if (strcmp(action, "start") == 0 && !allow_mutation)
+      response(reply, capacity, "ERR settings readonly");
+    else if (_hooks.adcService) _hooks.adcService(action, reply, capacity, allow_mutation);
+    else if (strcmp(action, "start") == 0) response(reply, capacity, "ERR settings unsupported");
+    else response(reply, capacity,
+        "OK settings adc_service supported=0 active=0 remaining_ms=0 external=0");
     return true;
   }
   if (strncmp(command, "settings adc preview ", 21) == 0) {
@@ -153,7 +167,9 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
     } else {
       after.adc_override = _preview_multiplier;
       after.profile = 0;
-      response(reply, capacity, commit(before, after, true) ?
+      const bool saved = commit(before, after, true);
+      if (saved && _hooks.adcCommitted) _hooks.adcCommitted();
+      response(reply, capacity, saved ?
           "OK settings adc_apply" : "ERR settings storage");
     }
     return true;
@@ -163,7 +179,9 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
     else {
       after.adc_override = 0;
       after.profile = 0;
-      response(reply, capacity, commit(before, after, true) ?
+      const bool saved = commit(before, after, true);
+      if (saved && _hooks.adcCommitted) _hooks.adcCommitted();
+      response(reply, capacity, saved ?
           "OK settings adc_reset" : "ERR settings storage");
     }
     return true;

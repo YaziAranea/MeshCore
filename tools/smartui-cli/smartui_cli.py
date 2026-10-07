@@ -94,7 +94,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return bool(re.match(r"ui (set |test$|(?:radio|advert) set |adc (apply |reset$)|wifi (?!status$)|mode (?!status$))", command))
+    return bool(re.match(r"ui (set |test$|(?:radio|advert) set |adc (apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:

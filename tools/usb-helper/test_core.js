@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReadableStream, WritableStream } = require('node:stream/web');
-const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, measuredMilliVolts } = require('./core.js');
+const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, measuredMilliVolts } = require('./core.js');
 
 const STATUS = 'Mode=BLE companion=idle via=none USB-service=on WiFi-config=no link=down IP=none approval=none';
 const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
@@ -29,6 +29,16 @@ test('radio/advert records bound every field and reject duplicate or hostile pay
   for(const value of [-1,1,14,16,65536])assert.equal(parseNetworkSetting('OK ui advert interval_min='+value,'advert','ui'),null);
 });
 
+test('ADC service strict capability/status records and old caps compatibility',()=>{
+  assert.equal(parseSettingsCaps(wireRecord('caps',SETTINGS_CAPS)).adc_service,undefined);
+  assert.equal(parseSettingsCaps(wireRecord('caps',{...SETTINGS_CAPS,adc_service:1})).adc_service,1);
+  assert.equal(parseSettingsCaps(wireRecord('caps',{...SETTINGS_CAPS,adc_service:2})),null);
+  const base={supported:1,active:1,remaining_ms:98765,external:1};
+  assert.deepEqual(parseAdcService(wireRecord('adc_service',base)),base);
+  assert.deepEqual(parseAdcService('OK ui adc_service supported=1 active=0 remaining_ms=0 external=0','ui'),{supported:1,active:0,remaining_ms:0,external:0});
+  for(const patch of [{remaining_ms:120001},{remaining_ms:0},{supported:0},{external:0},{active:0},{external:2},{extra:0}])assert.equal(parseAdcService(wireRecord('adc_service',{...base,...patch})),null);
+});
+
 class FakePort {
   constructor(options = {}) {
     this.options = options;
@@ -44,6 +54,7 @@ class FakePort {
     this.replies = Array(9).fill('');
     this.settingsCaps={...SETTINGS_CAPS,...options.settingsCaps};
     this.settingsState={...SETTINGS,...options.settingsState};
+    this.adcService={supported:1,active:0,remaining_ms:0,external:1};
   }
   async open(options) {
     if (this.options.openError) throw this.options.openError;
@@ -105,6 +116,15 @@ class FakePort {
     if (this.options.settings && command.startsWith('settings ')) {
       if (command==='settings caps') this.reply(wireRecord('caps',this.settingsCaps));
       else if (command==='settings get') this.reply(wireRecord('get',this.settingsState));
+      else if (command.startsWith('settings adc service')) {
+        if (!this.settingsCaps.adc_service) { this.reply('ERR settings unsupported'); return; }
+        if (command.endsWith(' start')) {
+          if (!this.adcService.external) { this.reply('ERR settings usb_required'); return; }
+          if (!this.adcService.active) Object.assign(this.adcService,{active:1,remaining_ms:120000});
+        }
+        if (command.endsWith(' stop')) Object.assign(this.adcService,{active:0,remaining_ms:0});
+        this.reply(wireRecord('adc_service',this.adcService));
+      }
       else if (command.startsWith('settings set ')) {
         const [, ,key,value]=command.split(' '); this.settingsState[key]=Number(value);
         this.settingsState.shutdown_mv=this.settingsState.battery_protection ? 3200 : 2700;
@@ -114,8 +134,10 @@ class FakePort {
         this.adcPreview={token:7,sampled_mv:this.settingsState.battery_mv,measured_mv:measured,multiplier:Number((this.settingsState.adc_multiplier*measured/this.settingsState.battery_mv).toFixed(6))};
         this.reply(wireRecord('adc_preview',this.adcPreview));
       } else if (command==='settings adc apply 7' && this.adcPreview) {
+        Object.assign(this.adcService,{active:0,remaining_ms:0});
         this.settingsState.adc_multiplier=this.adcPreview.multiplier;this.reply('OK settings adc_apply');
       } else if (command==='settings adc reset') {
+        Object.assign(this.adcService,{active:0,remaining_ms:0});
         this.settingsState.adc_multiplier=this.settingsState.adc_default;this.reply('OK settings adc_reset');
       } else if (command==='settings test') this.reply('OK settings test');
       else this.reply('ERR settings invalid');
@@ -923,6 +945,60 @@ test('Settings 1 can expose current values in recovery without allowing writes',
   await assert.rejects(f.instance.saveDeviceSetting('volume',5),code('READ_ONLY'));
   assert.equal(f.port.commands.length,before);
   await f.instance.loadDeviceSettings();
+  await f.instance.disconnect();
+});
+
+test('ADC service is discovered, explicit, fixed snapshot, and stopped on disconnect',async()=>{
+  const old=await connected({settings:true});
+  assert.equal(old.instance.state.adcService,null);
+  assert.equal(old.port.commands.some(c=>c.startsWith('settings adc service')),false);
+  await old.instance.disconnect();
+  const f=await connected({settings:true,settingsCaps:{adc_service:1}});
+  assert.equal(f.instance.state.adcService.active,0);
+  await assert.rejects(f.instance.startAdcService(),code('ADC_SERVICE_CONFIRM'));
+  assert.equal(f.port.commands.some(c=>c.endsWith('service start')),false);
+  await f.instance.startAdcService({confirmed:true});
+  f.port.adcService.remaining_ms=93210;await f.instance.loadAdcService();
+  assert.equal(f.instance.state.adcService.remaining_ms,93210);
+  assert.equal(f.port.commands.filter(c=>c.endsWith('service start')).length,1);
+  await f.instance.previewAdc('3.82');assert.ok(f.instance.state.adcPreview);
+  await f.instance.disconnect();
+  assert.equal(f.port.commands.filter(c=>c.endsWith('service stop')).length,1);
+  assert.equal(f.instance.state.adcService,null);assert.equal(f.instance.state.adcPreview,null);
+});
+
+test('ADC service save and expiration clear preview; USB denial does not retry',async()=>{
+  const f=await connected({settings:true,settingsCaps:{adc_service:1}});
+  f.port.adcService.external=0;
+  await assert.rejects(f.instance.startAdcService({confirmed:true}),code('ADC_USB_REQUIRED'));
+  assert.equal(f.instance.state.adcService,null);
+  f.port.adcService.external=1;await f.instance.startAdcService({confirmed:true});
+  await f.instance.previewAdc('3.82');await f.instance.applyAdc({confirmed:true});
+  assert.equal(f.instance.state.adcService.active,0);
+  assert.equal(f.instance.state.deviceSettings.battery_protection,1);
+  await f.instance.startAdcService({confirmed:true});await f.instance.previewAdc('3.82');
+  Object.assign(f.port.adcService,{active:0,remaining_ms:0});await f.instance.loadAdcService();
+  assert.equal(f.instance.state.adcPreview,null);await f.instance.disconnect();
+});
+
+test('lost ADC service start acknowledgement never retries or reports an invented timer',async()=>{
+  const f=await connected({settings:true,settingsCaps:{adc_service:1},onCommand(command,port){
+    if(command==='settings adc service start'){Object.assign(port.adcService,{active:1,remaining_ms:120000});return false;}
+  }});
+  await assert.rejects(f.instance.startAdcService({confirmed:true}),code('TIMEOUT'));
+  assert.equal(f.instance.state.adcService,null);
+  assert.equal(f.port.commands.filter(c=>c.endsWith('service start')).length,1);
+  assert.equal(f.instance.state.verified,false);
+  await assert.rejects(f.instance.loadAdcService(),code('NOT_VERIFIED'));
+  await f.instance.disconnect();
+});
+
+test('ADC service stop remains available under storage read-only',async()=>{
+  const f=await connected({settings:true,settingsCaps:{adc_service:1}});
+  await f.instance.startAdcService({confirmed:true});
+  f.instance._setStatus({...f.instance.state.status,readOnly:true});
+  await assert.rejects(f.instance.startAdcService({confirmed:true}),code('READ_ONLY'));
+  await f.instance.stopAdcService();assert.equal(f.instance.state.adcService.active,0);
   await f.instance.disconnect();
 });
 

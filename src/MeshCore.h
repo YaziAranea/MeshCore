@@ -96,6 +96,10 @@ public:
 
   // Power management interface (boards with power management override these)
   virtual bool isExternalPowered() { return false; }
+  // Safety bypasses require affirmative hardware evidence, not a fail-safe
+  // fallback from isExternalPowered() or a connected application transport.
+  virtual bool supportsConfirmedUsbPower() const { return false; }
+  virtual bool isUsbPowerConfirmed() { return false; }
   virtual uint16_t getBootVoltage() { return 0; }
   virtual uint32_t getResetReason() const { return 0; }
   virtual const char* getResetReasonString(uint32_t reason) { return "Not available"; }

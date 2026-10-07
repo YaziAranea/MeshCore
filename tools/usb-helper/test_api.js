@@ -58,6 +58,26 @@ test('busy guard prevents competing operations and read-only denies mutation',as
   const r=await connected({readonly:true});try{const before=r.port.commands.length;await assert.rejects(r.client.execute('ui set volume 1',{mutate:true}),{code:'DENIED'});assert.equal(r.port.commands.length,before);}
   finally{await r.client.disconnect();}
 });
+test('ADC service start is inferred mutation; stop remains allowed during read-only',async()=>{
+  const f=await connected({readonly:true,caps:{adc_service:1}});
+  try{
+    const before=f.port.commands.length;
+    await assert.rejects(f.client.execute('ui adc service start'),{code:'DENIED'});
+    assert.equal(f.port.commands.length,before);
+    assert.match(await f.client.execute('ui adc service stop'),/^OK ui adc_service supported=1 active=0/);
+  }finally{await f.client.disconnect();}
+});
+
+test('ADC acknowledgement followed by delayed USB write cannot restore closed-session state',async()=>{
+  const f=await connected({caps:{adc_service:1},delayWriteCommand:'ui adc service start'});
+  const pending=f.client.execute('ui adc service start');
+  const rejected=assert.rejects(pending,{code:'CLOSED'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(typeof f.port.releaseWrite,'function');
+  const closing=f.client.disconnect();f.port.releaseWrite();await closing;await rejected;
+  assert.equal(f.client.state.connected,false);assert.equal(f.client.state.phase,'disconnected');
+});
+
 test('tags unique until exhaustion; no wrap in one session',()=>{
   const tags=new Set();for(let i=0;i<3844;i++)tags.add(api.tagFor(i));assert.equal(tags.size,3844);assert.throws(()=>api.tagFor(3844),{code:'EXHAUSTED'});
 });

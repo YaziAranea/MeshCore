@@ -11939,6 +11939,14 @@ void UITask::applyDeviceSettingsRuntime(bool battery_changed) {
   _next_refresh = 0;
 }
 
+void UITask::setAdcCalibrationServiceActive(bool active) {
+  if (_adc_calibration_service_active == active) return;
+  _adc_calibration_service_active = active;
+  _low_batt_strikes = 0;
+  _low_batt_threshold = 0;
+  next_batt_chck = 0;  // Resume fresh measurements, never another boot grace.
+}
+
 void UITask::cycleSmartProfile() {
 #if UI_SMART_B11_EXTRAS == 1
   if (_node_prefs == NULL) return;
@@ -14921,7 +14929,9 @@ void UITask::loop() {
 #endif
 
 #if defined(AUTO_SHUTDOWN_MILLIVOLTS)
-  const uint16_t shutdownThreshold = smartui::effectiveBatteryShutdownThreshold(
+  const bool calibration_hold = _adc_calibration_service_active &&
+      !_storage_recovery_active && _board != NULL && _board->isUsbPowerConfirmed();
+  const uint16_t shutdownThreshold = calibration_hold ? 0 : smartui::effectiveBatteryShutdownThreshold(
       getLowBatteryShutdownThreshold(), LOW_BATTERY_SHUTDOWN_FLOOR_MILLIVOLTS,
       _board != NULL && _board->isExternalPowered());
   if (_low_batt_threshold != shutdownThreshold) {
@@ -15223,6 +15233,10 @@ bool UITask::setAdcMultiplier(float multiplier, bool save) {
       return false;
     }
     _low_batt_strikes = 0;  // Re-confirm safety against the newly committed scale.
+#if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
+    extern void stopSmartUiAdcCalibrationService();
+    stopSmartUiAdcCalibrationService();
+#endif
     notify(UIEventType::ack);
   }
   _next_refresh = 0;

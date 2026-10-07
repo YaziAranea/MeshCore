@@ -29,8 +29,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("navigator.serial.requestPort()", html)
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
-        self.assertIn("Помощник 1.6", html)
-        self.assertIn("Помощник 1.6 · MeshCore", html)
+        self.assertIn("Помощник 1.7", html)
+        self.assertIn("Помощник 1.7 · MeshCore", html)
         self.assertIn("SmartUiPresets", html)
         self.assertIn('id="preset-city"', html)
         self.assertIn('id="advert-interval"', html)
@@ -38,8 +38,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)
         self.assertIn("120 секунд", html)
-        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_1.6.html")
-        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_1.6.zip")
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_1.7.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_1.7.zip")
         self.assertIn("class CliClient", html)
         self.assertIn('id="helper-mode"', html)
         self.assertNotIn('id="api-inbox"', html)
@@ -63,11 +63,13 @@ class HelperPackageTests(unittest.TestCase):
                     helper.HTML_NAME, "README_RU.md", "PRESETS_SOURCE_RU.md", "LICENSE", "SHA256SUMS.txt",
                     "screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
                     "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
-                    "screenshots/city-desktop.png", "screenshots/city-mobile.png"})
+                    "screenshots/city-desktop.png", "screenshots/city-mobile.png",
+                    "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png"})
                 self.assertEqual(archive.read(helper.HTML_NAME), first[0].read_bytes())
                 for name in ("screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
                              "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
-                             "screenshots/city-desktop.png", "screenshots/city-mobile.png"):
+                             "screenshots/city-desktop.png", "screenshots/city-mobile.png",
+                             "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png"):
                     self.assertTrue(archive.read(name).startswith(b"\x89PNG\r\n\x1a\n"))
                 for line in archive.read("SHA256SUMS.txt").decode("ascii").splitlines():
                     digest, name = line.split("  ", 1)

@@ -31,6 +31,7 @@
     restore:'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
     repeat:'Включённая ретрансляция несовместима с выбранной частотой. Помощник не отключает её автоматически; измените настройку на ноде.',
     range:'Значение выходит за допустимые границы платы.',
+    usb_required:'Нода не подтвердила питание USB и локальное USB-подключение. Сервисное окно не включено.',
     transport:'Операция недоступна через этот транспорт. Настраивайте Wi-Fi по BLE или USB.',
     unconfigured:'Сначала настройте и сохраните подключение.',notready:'Нода ещё не готова к этой операции.',
     buffer:'Ответ не помещается в допустимый кадр.',internal:'Нода не смогла сформировать корректный ответ.'
@@ -172,7 +173,10 @@
       });promise.catch(()=>{});
       try{await this.bounded(s.writer.write(Uint8Array.from([60,request.length&255,request.length>>8,...request])));}
       catch(error){s.waiter?.finish(error instanceof CliError?error:fail('CLOSED'));}
-      return promise;
+      if(this.session!==s||s.stopped)throw fail('CLOSED');
+      const packet=await promise;
+      if(this.session!==s||s.stopped)throw fail('CLOSED');
+      return packet;
     }
     async command(command){
       const tag=tagFor(this.nextTag),request=encodeCommand(tag,command);this.nextTag++;
@@ -182,14 +186,15 @@
       if(this.state.busy||this.closing)throw fail('BUSY');
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
-      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |reset$)|wifi (?!status$)|mode (?!status$))/.test(command);
+      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
       if(mutate&&this.state.hello.write!=='1')throw fail('DENIED');
+      const session=this.session;
       validateCommand(command);this.update({busy:true});
-      try{const reply=await this.command(command);this.audit(mutate?'write':'read');return reply;}
+      try{const reply=await this.command(command);if(this.session!==session||session.stopped)throw fail('CLOSED');this.audit(mutate?'write':'read');return reply;}
       catch(error){const safe=error instanceof CliError?error:fail('PROTOCOL');
-        if(['TIMEOUT','PROTOCOL','CLOSED','MODE','EXHAUSTED'].includes(safe.code))this.update({uncertain:true,phase:'uncertain'});
+        if(this.session===session&&!session.stopped&&['TIMEOUT','PROTOCOL','CLOSED','MODE','EXHAUSTED'].includes(safe.code))this.update({uncertain:true,phase:'uncertain'});
         this.audit(mutate?'write':'read',safe.code);throw safe;
-      }finally{this.update({busy:false});}
+      }finally{if(this.session===session&&!session.stopped)this.update({busy:false});}
     }
     async disconnect(){
       if(this.closing)return;const s=this.session;

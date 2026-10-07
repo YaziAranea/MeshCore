@@ -51,7 +51,7 @@ def integration():
 #include <string>
 #include <vector>
 #define SMARTUI_CONNECTION_SELECTOR 1
-#define SMARTUI_VERSION "0.13"
+#define SMARTUI_VERSION "0.14"
 #define FIRMWARE_VERSION "v1.17.1"
 #define MAX_FRAME_SIZE 176
 #define PUB_KEY_SIZE 32
@@ -104,7 +104,7 @@ static std::string send(MyMesh& mesh, Serial& serial, const std::string& command
 int main() {
   Serial serial; MyMesh mesh(&serial);
   assert(send(mesh, serial, "board") == "Test board");
-  assert(send(mesh, serial, "AB|ver") == "AB|SmartUI 0.13; firmware=v1.17.1");
+  assert(send(mesh, serial, "AB|ver") == "AB|SmartUI 0.14; firmware=v1.17.1");
   assert(send(mesh, serial, "get radio") == "> 869.161,62.500,7,7");
   strcpy(mesh._prefs.node_name, "\xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
   assert(send(mesh, serial, "get name") == "> \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
@@ -155,7 +155,11 @@ def main_dispatch_integration():
 #include <cstdio>
 #include <cstring>
 #include <string>
-#define SMARTUI_VERSION "0.13"
+#include "AdcCalibrationService.h"
+#define SMARTUI_VERSION "0.14"
+static smartui::AdcCalibrationService adc_calibration_service;
+static unsigned adc_stops = 0;
+void stopSmartUiAdcCalibrationService() { adc_calibration_service.stop(); ++adc_stops; }
 static unsigned controller_calls, controller_resets, backend_calls, backend_resets;
 static bool backend_allowed, backend_handled = true;
 static std::string last_command;
@@ -222,16 +226,19 @@ int main() {
   assert(backend_calls == 0);
 
   connection_controller.busy = true;
-  for (const char* command : {"ui caps v", "ui get battery_mv", "ui melody 0"}) {
+  for (const char* command : {"ui caps v", "ui get battery_mv", "ui melody 0",
+                              "ui adc service", "ui adc service stop"}) {
     assert(call(command) == "OK ui backend");
     assert(last_command == command && !backend_allowed);
   }
   const unsigned reads = backend_calls;
   assert(call("ui set volume 2") == "ERR ui busy" && backend_calls == reads);
   assert(call("ui adc preview 3320") == "ERR ui busy" && backend_calls == reads);
+  assert(call("ui adc service start") == "ERR ui busy" && backend_calls == reads);
   assert(call("ui test") == "ERR ui busy" && backend_calls == reads);
   connection_controller.busy = false;
   assert(call("ui set volume 2") == "ERR ui readonly" && backend_calls == reads);
+  assert(call("ui adc service start") == "ERR ui readonly" && backend_calls == reads);
 
   connection_controller.writable = true;
   assert(call("ui test") == "OK ui backend" && backend_allowed);
@@ -251,6 +258,14 @@ int main() {
   resetSmartUiCliSession();
   assert(backend_resets == old_backend_resets + 1 &&
          controller_resets == old_controller_resets + 1);
+  using Owner = smartui::AdcCalibrationService::Owner;
+  adc_calibration_service.start(0, true, true, true, true, Owner::USB_CONSOLE, 0);
+  resetSmartUiCliSession();
+  assert(adc_calibration_service.owner() == Owner::USB_CONSOLE && adc_stops == 0);
+  adc_calibration_service.stop();
+  adc_calibration_service.start(0, true, true, true, true, Owner::USB_COMPANION, 1);
+  resetSmartUiCliSession();
+  assert(adc_calibration_service.owner() == Owner::NONE && adc_stops == 1);
   puts("PASS production main CMD66 dispatcher permissions, busy/FEM gates and session reset");
 }
 '''

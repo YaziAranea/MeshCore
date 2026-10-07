@@ -24,6 +24,8 @@ static unsigned writes, saves, applies, tests, battery_changes, checks, melody_r
 static const char* melody_name;
 static unsigned bridge_calls;
 static bool bridge_ok;
+static unsigned adc_commits, adc_service_calls;
+static bool adc_service_active;
 static DeviceSettings service;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
 
@@ -65,6 +67,15 @@ static bool setToneBridge(bool enabled) {
   persisted = state;
   return true;
 }
+static void adcCommitted() { ++adc_commits; adc_service_active = false; }
+static void adcService(const char* action, char* reply, size_t capacity, bool writable) {
+  ++adc_service_calls;
+  if (strcmp(action, "start") == 0) { CHECK(writable); adc_service_active = true; }
+  if (strcmp(action, "stop") == 0) adc_service_active = false;
+  snprintf(reply, capacity,
+      "OK settings adc_service supported=1 active=%u remaining_ms=%u external=1",
+      adc_service_active ? 1U : 0U, adc_service_active ? 120000U : 0U);
+}
 static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = true) {
   state = DeviceSettingsState{};
   state.notify_mode = state.important_notify_mode = 7;
@@ -84,6 +95,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   writes = saves = applies = tests = battery_changes = melody_reads = 0;
   melody_name = "Test tone";
   bridge_calls = 0; bridge_ok = true;
+  adc_commits = adc_service_calls = 0; adc_service_active = false;
   persisted = state;
   DeviceSettingsHooks hooks;
   hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
@@ -93,6 +105,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   hooks.testNotification = testNotification;
   hooks.melodyName = names ? melodyName : nullptr;
   hooks.setToneBridge = bridge_hook ? setToneBridge : nullptr;
+  hooks.adcCommitted = adcCommitted;
   service = DeviceSettings{};
   service.begin(hooks);
 }
@@ -151,6 +164,51 @@ int main() {
   CHECK(tests == 0);
   CHECK(!service.handle("settingsx get", tiny, sizeof(tiny), true));
   CHECK(!service.handle(nullptr, tiny, sizeof(tiny), true));
+
+  CHECK(command("settings adc service", false) ==
+        "OK settings adc_service supported=0 active=0 remaining_ms=0 external=0");
+  CHECK(command("settings adc service stop", false).find("active=0") != std::string::npos);
+  CHECK(command("settings adc service start") == "ERR settings unsupported");
+  CHECK(command("settings adc service start", false) == "ERR settings readonly");
+  CHECK(cliCommand("ui caps adc_service") == "OK ui caps key=adc_service value=0");
+  CHECK(cliCommand("ui adc service", false).find("OK ui adc_service") == 0);
+  CHECK(cliCommand("ui adc service stop", false).find("active=0") != std::string::npos);
+  CHECK(cliCommand("ui adc service start") == "ERR ui unsupported");
+  CHECK(cliCommand("ui adc service unknown") == "ERR ui invalid");
+  CHECK(command("settings adc service unknown") == "ERR settings invalid");
+
+  {
+    DeviceSettingsHooks hooks;
+    hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
+    hooks.caps = capabilities; hooks.batteryMilliVolts = readBattery;
+    hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
+    hooks.adcService = adcService; hooks.adcCommitted = adcCommitted;
+    caps.adc_service = true;
+    service.begin(hooks);
+    CHECK(command("settings adc service start", false) == "ERR settings readonly");
+    CHECK(adc_service_calls == 0);
+    CHECK(command("settings adc service start").find("active=1") != std::string::npos);
+    CHECK(cliCommand("ui adc service", false).find("active=1") != std::string::npos);
+    CHECK(cliCommand("ui caps adc_service") == "OK ui caps key=adc_service value=1");
+    CHECK(adc_service_active && saves == 0);
+    auto token = preview();
+    save_ok = false;
+    CHECK(applyToken(token) == "ERR settings storage");
+    CHECK(adc_service_active && adc_commits == 0);
+    save_ok = true;
+    CHECK(applyToken(token) == "OK settings adc_apply");
+    CHECK(!adc_service_active && adc_commits == 1);
+    CHECK(cliCommand("ui adc service start").find("active=1") != std::string::npos);
+    save_ok = false;
+    CHECK(cliCommand("ui adc reset") == "ERR ui storage");
+    CHECK(adc_service_active && adc_commits == 1);
+    save_ok = true;
+    CHECK(cliCommand("ui adc reset") == "OK ui adc_reset");
+    CHECK(!adc_service_active && adc_commits == 2);
+    CHECK(cliCommand("ui adc service start").find("active=1") != std::string::npos);
+    CHECK(cliCommand("ui adc service stop", false).find("active=0") != std::string::npos);
+    CHECK(!adc_service_active && adc_commits == 2);
+  }
 
   for (float factory : {4.9f, 8.4f, 1.815f, 1.73f}) {
     fresh(factory);
@@ -303,9 +361,9 @@ int main() {
   CHECK(unavailable.handle("settings get", reply, sizeof(reply), true));
   CHECK(strcmp(reply, "ERR settings unavailable") == 0);
 
-  // Exact legacy records must not acquire the new API's fields or version.
+  // Legacy keys remain stable; 0.14 adds one optional service capability.
   fresh(4.0f);
-  const std::string legacy_caps = "OK settings caps v=1 adc=1 sound=1 board_led=1 unread_led=1 vibration=1 gps=1 battery_protection=1 display=0 melody_max=30 adc_min=3.000000 adc_max=5.000000";
+  const std::string legacy_caps = "OK settings caps v=1 adc=1 sound=1 board_led=1 unread_led=1 vibration=1 gps=1 battery_protection=1 display=0 melody_max=30 adc_min=3.000000 adc_max=5.000000 adc_service=0";
   const std::string legacy_get = "OK settings get battery_mv=4000 adc_multiplier=4.000000 adc_default=4.000000 sound_quiet=0 volume=10 melody=0 board_led=1 unread_led=1 vibration=1 gps=0 battery_protection=1 shutdown_mv=3200 muted=0";
   CHECK(command("settings caps") == legacy_caps);
   CHECK(command("settings get") == legacy_get);

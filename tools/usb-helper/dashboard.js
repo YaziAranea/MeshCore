@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
-  let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false;
+  let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null;
   const settingEdits=new Map(),melodyNames=new Map();
   let radioState=null,advertState=null,radioSupport=null,advertSupport=null,networkRunning=false;
   const catalog=globalThis.SmartUiPresets;
@@ -26,9 +26,13 @@
       <section class="card wide"><h2>Журнал действий</h2><p class="hint">Статусы операций помощника, не события ноды. Без команд, значений и секретов.</p><ul id="api-log" class="hint" aria-label="Журнал действий"></ul><button id="api-log-clear">Очистить</button></section>
     </div>`;
   $('firmware-section').before(workspace);
-  const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names'];
+  const serviceBox=$('adc-service-box').cloneNode(true);
+  for(const element of [serviceBox,...serviceBox.querySelectorAll('[id]')])element.id='api-'+element.id;
+  $('api-adc-value').after(serviceBox);
+  $('api-adc-source-warning').textContent=$('adc-source-warning').textContent;
+  const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service'];
   const GET_KEYS=['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted','agc_reset','fem_lna','fem_pa','bridge'];
-  const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
+  const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
   function note(text,kind='info'){$('api-feedback').textContent=text;$('api-feedback').className='notice'+(kind==='error'?' error':kind==='warning'?' warning':'');}
   function log(text){const li=document.createElement('li');li.textContent=new Date().toLocaleTimeString('ru-RU')+' · '+text;$('api-log').prepend(li);while($('api-log').children.length>40)$('api-log').lastChild.remove();}
   const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing&&!networkRunning;
@@ -53,6 +57,13 @@
     $('api-adc-preview').disabled=!available()||caps?.adc!=='1';
     $('api-adc-reset').disabled=!writable()||caps?.adc!=='1';
     $('api-adc-apply').disabled=!writable()||!preview||Date.now()>=preview.expires;
+    $('api-adc-service-box').hidden=caps?.adc_service!=='1';
+    $('api-adc-service-start').disabled=!writable()||caps?.adc_service!=='1'||!adcService?.external||Boolean(adcService?.active);
+    $('api-adc-service-stop').disabled=!available()||!adcService?.active;
+    $('api-adc-service-refresh').disabled=!available()||caps?.adc_service!=='1';
+    $('api-adc-service-status').textContent=!adcService?'Состояние окна не подтверждено. Нажмите «Проверить окно».':adcService.active
+      ?'Окно активно · осталось по данным ноды: '+Math.ceil(adcService.remaining_ms/1000)+' с. Проверяем каждые 5 секунд.'
+      :adcService.external?'Окно выключено. Обычная защита питания действует.':'Окно выключено. Нода не подтвердила питание USB.';
     renderNetworkControls();
   }
   async function run(operation){
@@ -63,11 +74,21 @@
     }finally{running=false;renderShell();}
   }
   const client=new api.CliClient({
-    onState(next){binaryState=next;if(!next.connected){$('api-password').value='';preview=null;if(next.uncertain)acknowledgedLoss=true;}renderShell();},
+    onState(next){binaryState=next;if(!next.connected){$('api-password').value='';$('api-adc-measured').value='';preview=null;adcService=null;caps=null;settings=null;settingEdits.clear();melodyNames.clear();if(next.uncertain)acknowledgedLoss=true;}if(next.uncertain){adcService=null;preview=null;}renderShell();},
     onEvent({action,result}){log(result==='ok'?(action==='write'?'Ответ на изменение получен; проверяем результат.':action==='connect'?'Локальный CLI подключён.':'Ответ на чтение получен.'):'Операция не подтверждена.');}
   });
   const rec=async(command,prefix,mutate=false)=>api.record(await client.execute(command,{mutate}),prefix);
   const exact=async(command,expected)=>{if(await client.execute(command,{mutate:true})!==expected)throw new api.CliError('PROTOCOL');};
+  async function readAdcService(action=''){
+    const session=client.session;
+    try{
+      const value=SmartUiConsole.parseAdcService(await client.execute('ui adc service'+(action?' '+action:''),{mutate:action==='start'}),'ui');
+      if(session!==client.session||!binaryState.connected)throw new api.CliError('CLOSED');
+      if(!value||action==='start'&&!value.active||action==='stop'&&value.active)throw new api.CliError('PROTOCOL');
+      if(adcService?.active&&!value.active){preview=null;$('api-adc-result').textContent='Сервисное окно завершено. Несохранённый расчёт отменён.';}
+      adcService={...value,receivedAt:Date.now()};return value;
+    }catch(error){if(session===client.session){adcService=null;preview=null;}throw error;}
+  }
   function numeric(value,max=0xffffffff){if(!/^\d+$/.test(value)||Number(value)>max)throw new api.CliError('PROTOCOL');return Number(value);}
   const networkReady=()=>{
     const state=legacy.getState();
@@ -174,7 +195,7 @@
       try{const reply=await rec('ui '+kind+' '+key,'OK ui '+kind);
         if(reply.key!==key||typeof reply.value!=='string'||!/^[-+]?\d+(?:\.\d+)?$/.test(reply.value)||!Number.isFinite(Number(reply.value)))throw new api.CliError('PROTOCOL');
         result[key]=reply.value;
-      }catch(error){if(error.reason==='unsupported'&&optional.has(key))result[key]='0';else throw error;}
+      }catch(error){if(optional.has(key)&&(error.reason==='unsupported'||key==='adc_service'&&error.reason==='invalid'))result[key]='0';else throw error;}
     }
     return result;
   }
@@ -187,7 +208,8 @@
     const capKeys=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max'];
     const valueKeys=['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted'];
     const sharedCaps=SmartUiConsole.parseSettingsCaps(line('OK settings caps',capKeys,caps));
-    if(!sharedCaps||!SmartUiConsole.parseDeviceSettings(line('OK settings get',valueKeys,settings),sharedCaps))throw new api.CliError('PROTOCOL');
+    if(!sharedCaps||!SmartUiConsole.parseDeviceSettings(line('OK settings get',valueKeys,settings),sharedCaps)||!['0','1'].includes(caps.adc_service))throw new api.CliError('PROTOCOL');
+    if(caps.adc_service==='1')await readAdcService();else adcService=null;
     if(caps.melody_names==='1'&&caps.sound==='1'){
       const maximum=numeric(caps.melody_max,255);
       for(let id=0;id<=maximum;id++)if(!melodyNames.has(id)){
@@ -236,7 +258,7 @@
     });}catch(error){note(error.name==='NotFoundError'?'Порт не выбран.':error.safe?error.message:'Не удалось открыть порт. Проверьте разрешения браузера.','warning');}
     finally{choosing=false;renderShell();}
   };
-  $('disconnect').onclick=async()=>{if(mode==='console')await originalDisconnect();else{await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}resetNetwork();renderShell();};
+  $('disconnect').onclick=async()=>{if(mode==='console')await originalDisconnect();else{if(adcService?.active&&available())try{await readAdcService('stop');}catch(_){}await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}resetNetwork();renderShell();};
   window.addEventListener('smartui-console-state',()=>{if(mode==='console')renderShell();});
 
 
@@ -248,10 +270,27 @@
   $('api-notify-test').onclick=()=>run(async()=>{if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');note('Команда теста принята. Используются сохранённые параметры; общая тишина и выключенные каналы учитываются. Это не проверка исправности оборудования.');});
 
   $('api-adc-measured').oninput=()=>{preview=null;renderShell();};
+  $('api-adc-service-start').onclick=async()=>{
+    const session=client.session;
+    if(!await legacy.confirmAction('На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB и свежий замер мультиметром. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.'))return;
+    if(session!==client.session||!writable())return;
+    await run(async()=>{preview=null;await readAdcService('start');$('api-adc-result').textContent='Сервисное окно открыто. Рассчитайте и сохраните ADC по свежему измерению.';note('Сервисное окно подтверждено нодой. Таймер не продлевается при чтении состояния.','warning');});
+  };
+  $('api-adc-service-stop').onclick=()=>run(async()=>{preview=null;await readAdcService('stop');$('api-adc-result').textContent='Сервисное окно закрыто. Несохранённая калибровка не применялась.';note('Нода подтвердила завершение сервисного окна.');});
+  $('api-adc-service-refresh').onclick=()=>run(()=>readAdcService());
+  setInterval(()=>{if(available()&&adcService?.active)void run(()=>readAdcService());},5000);
   $('api-adc-preview').onclick=()=>run(async()=>{const mv=SmartUiConsole.measuredMilliVolts($('api-adc-measured').value);preview=null;$('api-adc-result').textContent='Запрашиваем опорный замер. Настройки не изменены.';const p=await rec('ui adc preview '+mv,'OK ui adc_preview');
     if(numeric(p.token)<1||numeric(p.sampled_mv,65535)<1||Number(p.measured_mv)!==mv||!Number.isFinite(Number(p.multiplier))||Number(p.multiplier)<Number(caps.adc_min)-0.000002||Number(p.multiplier)>Number(caps.adc_max)+0.000002)throw new api.CliError('PROTOCOL');
     preview={...p,expires:Date.now()+60000};$('api-adc-result').textContent='Расчёт, ещё не сохранён: ADC '+p.multiplier+' · Опорный замер: '+p.sampled_mv+' мВ.';});
-  $('api-adc-apply').onclick=async()=>{if(!preview||Date.now()>=preview.expires){preview=null;$('api-adc-result').textContent='Расчёт устарел. Повторите измерение и расчёт.';renderShell();return;}if(!await legacy.confirmAction('Сохранить калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Изменение влияет на защиту питания.'))return;await run(async()=>{const expected=Number(preview.multiplier);const reply=await client.execute('ui adc apply '+preview.token,{mutate:true});if(reply!=='OK ui adc_apply')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-expected)>0.000002)throw new api.CliError('PROTOCOL');$('api-adc-result').textContent='Калибровка подтверждена и прочитана обратно с ноды.';});};
+  $('api-adc-apply').onclick=async()=>{
+    const candidate=preview,session=client.session;
+    const expired=()=>!candidate||preview!==candidate||session!==client.session||Date.now()>=candidate.expires;
+    const stale=()=>{preview=null;$('api-adc-result').textContent='Расчёт устарел. Повторите измерение и расчёт.';renderShell();};
+    if(expired()){stale();return;}
+    if(!await legacy.confirmAction('Сохранить калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Изменение влияет на защиту питания.'))return;
+    if(expired()||!writable()){stale();return;}
+    await run(async()=>{const expected=Number(candidate.multiplier);const reply=await client.execute('ui adc apply '+candidate.token,{mutate:true});if(reply!=='OK ui adc_apply')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-expected)>0.000002)throw new api.CliError('PROTOCOL');$('api-adc-result').textContent='Калибровка подтверждена и прочитана обратно с ноды.';});
+  };
   $('api-adc-reset').onclick=async()=>{if(!await legacy.confirmAction('Вернуть только заводскую калибровку ADC? Контакты, ключи и остальные настройки сохранятся.'))return;await run(async()=>{const reply=await client.execute('ui adc reset',{mutate:true});if(reply!=='OK ui adc_reset')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-Number(settings.adc_default))>0.000002)throw new api.CliError('PROTOCOL');});};
   $('api-wifi-form').onsubmit=e=>{e.preventDefault();run(async()=>{
     let password=$('api-password').value;const ssid=$('api-ssid').value;SmartUiConsole.validateCredentials(ssid,password,{openNetwork:$('api-open-network').checked,allowReservedSsid:true});$('api-password').value='';

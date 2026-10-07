@@ -263,6 +263,18 @@ bool NRF52Board::isExternalPowered() {
   }
 }
 
+bool NRF52Board::isUsbPowerConfirmed() {
+  uint8_t sd_enabled = 0;
+  if (sd_softdevice_is_enabled(&sd_enabled) != NRF_SUCCESS) return false;
+  uint32_t usb_status = 0;
+  if (sd_enabled) {
+    if (sd_power_usbregstatus_get(&usb_status) != NRF_SUCCESS) return false;
+  } else {
+    usb_status = NRF_POWER->USBREGSTATUS;
+  }
+  return (usb_status & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
+}
+
 void NRF52Board::sleep(uint32_t secs) {
   // Clear FPU interrupt flags to avoid insomnia
   // see errata 87 for details https://docs.nordicsemi.com/bundle/errata_nRF52840_Rev3/page/ERR/nRF52840/Rev3/latest/anomaly_840_87.html

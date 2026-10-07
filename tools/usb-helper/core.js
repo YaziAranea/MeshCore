@@ -73,7 +73,9 @@
     RADIO_RESTORE: 'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
     RADIO_REPEAT: 'Включённая ретрансляция несовместима с выбранной частотой. Помощник не выключает её автоматически; измените настройку на ноде.',
     ADC_INPUT: 'Введите измеренное мультиметром напряжение от 2,500 до 4,500 В, например 3,82.',
-    ADC_CONFIRM: 'Сначала выполните расчёт, затем явно подтвердите сохранение.'
+    ADC_CONFIRM: 'Сначала выполните расчёт, затем явно подтвердите сохранение.',
+    ADC_SERVICE_CONFIRM: 'Временное окно калибровки включается только после отдельного подтверждения.',
+    ADC_USB_REQUIRED: 'Нода не подтвердила питание USB и локальное USB-подключение. Сервисное окно не включено.'
   });
   const DEFAULT_TIMEOUTS = Object.freeze({ command: 6000, test: 25000, usb: 2000, close: 1500, candidate: 120000, adcPreview: 60000 });
   const encoder = new TextEncoder();
@@ -183,8 +185,17 @@
   }
   function parseSettingsCaps(line) {
     const flags = ['adc','sound','board_led','unread_led','vibration','gps','battery_protection','display'];
-    const r = record(line, 'OK settings caps', ['v',...flags,'melody_max','adc_min','adc_max']);
+    const keys = ['v',...flags,'melody_max','adc_min','adc_max'];
+    const r = record(line, 'OK settings caps', keys) || record(line, 'OK settings caps', [...keys,'adc_service']);
     if (!r || r.v !== 1 || flags.some(k => !integer(r[k],0,1)) || !integer(r.melody_max,0,255) || r.adc_min < 0 || r.adc_max > 1000 || r.adc_min > r.adc_max || (r.adc && r.adc_min <= 0)) return null;
+    if (r.adc_service !== undefined && !integer(r.adc_service,0,1)) return null;
+    return {...r};
+  }
+  function parseAdcService(line, transport='settings') {
+    if (!['settings','ui'].includes(transport)) return null;
+    const r = record(line, 'OK '+transport+' adc_service', ['supported','active','remaining_ms','external']);
+    if (!r || ['supported','active','external'].some(k=>!integer(r[k],0,1)) || !integer(r.remaining_ms,0,120000)) return null;
+    if (r.active ? (!r.supported || !r.external || r.remaining_ms===0) : r.remaining_ms!==0) return null;
     return {...r};
   }
   function parseDeviceSettings(line, caps) {
@@ -211,8 +222,8 @@
   function settingsError(line) {
     if (line === RX.readonly || line === 'ERR settings readonly') return 'READ_ONLY';
     const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
-    const match = /^ERR settings ([a-z]+)$/.exec(line);
-    if (match) return errors[match[1]] || 'PROTOCOL';
+    const match = /^ERR settings ([a-z_]+)$/.exec(line);
+    if (match) return match[1] === 'usb_required' ? 'ADC_USB_REQUIRED' : errors[match[1]] || 'PROTOCOL';
     if (line.startsWith('ERR settings') || line === RX.unknown) return 'PROTOCOL';
     return null;
   }
@@ -225,7 +236,7 @@
       for (const key of Object.keys(DEFAULT_TIMEOUTS)) {
         if (Number.isFinite(timeouts[key]) && timeouts[key] > 0) this._timeouts[key] = timeouts[key];
       }
-      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null, deviceSettings:null, adcPreview:null };
+      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null, deviceSettings:null, adcPreview:null, adcService:null };
       this._session = null;
       this._operation = null;
       this._closing = null;
@@ -240,6 +251,7 @@
         settingsCaps: this._state.settingsCaps ? {...this._state.settingsCaps} : null,
         deviceSettings: this._state.deviceSettings ? {...this._state.deviceSettings} : null,
         adcPreview: this._state.adcPreview ? {...this._state.adcPreview} : null,
+        adcService: this._state.adcService ? {...this._state.adcService} : null,
         info: this._state.info ? { ...this._state.info, capabilities: [...this._state.info.capabilities] } : null };
     }
     _call(name, value) {
@@ -320,7 +332,7 @@
           // Native Web Serial's open defaults are sufficient for this console.
           session.reader = port.readable.getReader();
           session.writer = port.writable.getWriter();
-          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null });
+          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null });
           session.readTask = this._readLoop(session);
           await this._resync(session);
           let helpSeen = false;
@@ -390,7 +402,10 @@
     async disconnect() {
       if (this._closing) return this._closing;
       if (!this._session) return;
-      await this._shutdown(this._session, true);
+      if (this._state.adcService?.active && this._state.verified && !this._operation && !this._setupActive) {
+        try { await this.stopAdcService(); } catch (_) { /* Close USB even if acknowledgement is lost. Firmware enforces timeout and USB loss. */ }
+      }
+      if (this._session) await this._shutdown(this._session, true);
     }
     async _bounded(promise) {
       let timer;
@@ -406,7 +421,7 @@
       if (this._session === session) this._session = null;
       this._clearCandidate();
       clearTimeout(this._adcTimer); this._adcTimer = null;
-      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null });
+      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null });
       this._call('onStatus', null);
       const closing = (async () => {
         if (session.openTask) await this._bounded(session.openTask);
@@ -721,7 +736,52 @@
       const caps = await this._settingsExchange(session, 'settings caps', parseSettingsCaps);
       const settings = await this._settingsExchange(session, 'settings get', line => parseDeviceSettings(line,caps));
       this._stateChanged({settingsCaps:caps,deviceSettings:settings});
+      if (caps.adc_service) await this._readAdcService(session);
+      else this._stateChanged({adcService:null});
       return settings;
+    }
+    async _readAdcService(session, command='settings adc service') {
+      const value = await this._settingsExchange(session,command,parseAdcService);
+      this._assertCurrent(session);
+      if (this._state.adcService?.active && !value.active) this.clearAdcPreview();
+      this._stateChanged({adcService:{...value,receivedAt:Date.now()}});
+      return value;
+    }
+    async loadAdcService() {
+      return this._operate(async session=>{
+        this._requireSettings('adc_service');
+        try { return await this._readAdcService(session); }
+        catch(error) { this._invalidateAdcService(session,error); throw error; }
+      });
+    }
+    async startAdcService({confirmed=false}={}) {
+      if (!confirmed) throw failure('ADC_SERVICE_CONFIRM');
+      return this._operate(async session=>{
+        this._requireSettings('adc_service'); this.clearAdcPreview();
+        try {
+          const value = await this._readAdcService(session,'settings adc service start');
+          if (!value.active) throw failure('PROTOCOL');
+          this._event('warning','Сервисное окно подтверждено нодой. Рассчитайте и сохраните ADC по свежему измерению; таймер не продлевается.');
+          return value;
+        } catch(error) { this._invalidateAdcService(session,error); throw error; }
+      },{mutate:true});
+    }
+    async stopAdcService() {
+      return this._operate(async session=>{
+        this._requireSettings('adc_service'); this.clearAdcPreview();
+        try {
+          const value = await this._readAdcService(session,'settings adc service stop');
+          if (value.active) throw failure('PROTOCOL');
+          this._event('info','Нода подтвердила завершение сервисного окна. Несохранённая калибровка не применялась.');
+          return value;
+        } catch(error) { this._invalidateAdcService(session,error); throw error; }
+      }); // Ending a temporary suspension is allowed even in read-only recovery.
+    }
+    _invalidateAdcService(session,error) {
+      if (!this._current(session)) return;
+      const uncertain=['TIMEOUT','SERIAL_ERROR','DISCONNECTED','PROTOCOL'].includes(error.code);
+      this.clearAdcPreview();
+      this._stateChanged({adcService:null,...(uncertain?{verified:false}:{})});
     }
     _requireSettings(capability) {
       if (!this._state.settingsSupported || !this._state.settingsCaps) throw failure('SETTINGS_UNAVAILABLE');
@@ -748,6 +808,7 @@
         const settings = await this._settingsExchange(session,'settings get',line => parseDeviceSettings(line,this._state.settingsCaps));
         if (!verify(settings)) throw failure('PROTOCOL');
         this._stateChanged({deviceSettings:settings});
+        if (this._state.settingsCaps.adc_service && /^settings adc (apply|reset)/.test(command)) await this._readAdcService(session);
         this._event('success','Настройка сохранена и прочитана обратно с ноды.');
         return settings;
       } catch (error) {
@@ -886,5 +947,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
 }));

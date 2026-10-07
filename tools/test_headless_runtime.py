@@ -106,7 +106,11 @@ struct Screen {
   bool isIdleForNightPrompt() const { return true; }
 };
 using HomeScreen = Screen;
-struct Board { bool external = false; bool isExternalPowered() { return external; } };
+struct Board {
+  bool external = false, confirmed_usb = false;
+  bool isExternalPowered() { return external; }
+  bool isUsbPowerConfirmed() { return confirmed_usb; }
+};
 struct Prefs {
   uint8_t buzzer_quiet=0, notifications_muted=0, vibe_quiet=0, notify_tone_volume=10;
   uint8_t night_quiet_active=0;
@@ -141,6 +145,7 @@ public:
   Prefs prefs; Prefs* _node_prefs=&prefs;
   Buzzer buzzer; Vibration vibration;
   bool _night_prompt_active=false, _storage_recovery_active=false;
+  bool _adc_calibration_service_active=false;
   bool _night_prompt_yes=false, trusted=true;
   bool _important_notify_active=false, _popup_pending=false, _msg_tone_active=false;
   uint8_t _important_msg_flags=0, _ble_smart_notify_flags=0;
@@ -210,6 +215,7 @@ public:
   void triggerMsgVibe() { ++vibe_tests; }
   void loop();
   void applyDeviceSettingsRuntime(bool);
+  void setAdcCalibrationServiceActive(bool);
   void previewNotifyMode();
   void notify(UIEventType);
   uint8_t getNotifyToneVolume() const;
@@ -220,6 +226,7 @@ public:
         value = re.search(r"#define\s+" + name + r"\s+([^\r\n]+)", source).group(1)
         code = re.sub(r"(?m)^#define " + name + r" .+$", "#define " + name + " " + value, code)
     for signature in ("void UITask::loop()", "void UITask::applyDeviceSettingsRuntime(",
+                      "void UITask::setAdcCalibrationServiceActive(",
                       "void UITask::previewNotifyMode()", "void UITask::notify(UIEventType",
                       "uint8_t UITask::getNotifyToneVolume() const", "char UITask::handleLongPress(char c)",
                       "bool UITask::persistNightPrefs(", "void UITask::nightModeHandler()"):
@@ -252,6 +259,31 @@ int main() {
   usb.mv=2600;
   for(int i=0;i<3;++i) { now+=1000; usb.loop(); }
   CHECK(usb.shutdowns==1);
+  // Headless service uses the same real transition and cutoff code as OLED.
+  UITask calibration; calibration.mv=2600;
+  calibration.board.external=calibration.board.confirmed_usb=true;
+  calibration._low_batt_strikes=2; calibration.next_batt_chck=now+100000;
+  calibration.setAdcCalibrationServiceActive(true);
+  CHECK(calibration._low_batt_strikes==0 && calibration.next_batt_chck==0);
+  for(int i=0;i<10;++i) { now+=1000; calibration.loop(); }
+  CHECK(calibration.shutdowns==0 && calibration._low_batt_strikes==0);
+  CHECK(calibration.important==10 && calibration.buzzer.loops==10);
+  CHECK(DisplayDriver::calls==0);
+  calibration.setAdcCalibrationServiceActive(false);
+  CHECK(calibration._low_batt_strikes==0 && calibration.next_batt_chck==0);
+  calibration.loop(); CHECK(calibration._low_batt_strikes==1);
+  for(int i=0;i<2;++i) { now+=1000; calibration.loop(); }
+  CHECK(calibration.shutdowns==1 && DisplayDriver::calls==0);
+  UITask unconfirmed; unconfirmed.mv=2600; unconfirmed.board.external=true;
+  unconfirmed.setAdcCalibrationServiceActive(true);
+  for(int i=0;i<3;++i) { now+=1000; unconfirmed.loop(); }
+  CHECK(unconfirmed.shutdowns==1 && DisplayDriver::calls==0);
+  UITask recovery_cal; recovery_cal.mv=2600;
+  recovery_cal.board.external=recovery_cal.board.confirmed_usb=true;
+  recovery_cal._storage_recovery_active=true;
+  recovery_cal.setAdcCalibrationServiceActive(true);
+  for(int i=0;i<3;++i) { now+=1000; recovery_cal.loop(); }
+  CHECK(recovery_cal.shutdowns==1 && DisplayDriver::calls==0);
   UITask unavailable; unavailable.mv=0;
   for(int i=0;i<5;++i) { now+=1000; unavailable.loop(); }
   CHECK(unavailable.shutdowns==0);
