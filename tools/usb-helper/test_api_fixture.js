@@ -7,6 +7,7 @@ function installApiMock(options={}) {
     caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...options.caps},
     settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...options.settings},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',
+    radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
     emit(packet){if(this.closed)return;const bytes=Uint8Array.from([62,packet.length&255,packet.length>>8,...packet]);
       if(options.fragment===false)this.controller.enqueue(bytes);else{this.controller.enqueue(bytes.slice(0,2));this.controller.enqueue(bytes.slice(2,7));this.controller.enqueue(bytes.slice(7));}},
     reply(tag,text){this.emit(Uint8Array.from([29,...enc.encode((this.wrong?'ZZ':tag)+'|'+text)]));},
@@ -19,7 +20,13 @@ function installApiMock(options={}) {
       if(this.drop)return;
       if(this.errorNext){const e=this.errorNext;this.errorNext=null;this.reply(tag,e);return;}
       let text;
-      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.12 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0';
+      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.13 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0';
+      else if(/^ui (radio|advert)( |$)/.test(cmd)){
+        const [,kind,action,...values]=cmd.split(' ');
+        if(options.network===false)text='ERR ui unsupported';
+        else if(action==='set'&&(options.readonly||this.networkError))text='ERR ui '+(options.readonly?'readonly':this.networkError);
+        else{if(action==='set'){const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];keys.forEach((key,i)=>this[kind][key]=Number(values[i]));}text='OK ui '+kind+' '+Object.entries(this[kind]).map(([k,v])=>k+'='+v).join(' ');}
+      }
       else if(cmd.startsWith('ui caps ')){const key=cmd.slice(8);text=Object.hasOwn(this.caps,key)?'OK ui caps key='+key+' value='+this.caps[key]:'ERR ui unsupported';}
       else if(cmd.startsWith('ui get ')){const key=cmd.slice(7);text=Object.hasOwn(this.settings,key)?'OK ui get key='+key+' value='+this.settings[key]:'ERR ui unsupported';}
       else if(cmd.startsWith('ui set ')){const [, ,key,v]=cmd.split(' ');if(options.readonly)text='ERR ui readonly';else{this.settings[key]=Number(v);if(key==='battery_protection')this.settings.shutdown_mv=Number(v)?3200:2700;text='OK ui set key='+key+' value='+v;}}

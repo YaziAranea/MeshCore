@@ -3,13 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-0.12
+      - smartui-0.13
       # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.12 as Latest after all six-board checks pass
+        description: Publish public SmartUI 0.13 as Latest after all six-board checks pass
         required: false
         type: boolean
         default: false
@@ -41,15 +41,15 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.12.uf2
+            uf2_name: T096_UI_0.13.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.12.uf2
+            uf2_name: T114_UI_0.13.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.12.uf2
+            uf2_name: ProMicro_RA62_UI_0.13.uf2
 
     steps:
       - name: Check out source
@@ -161,15 +161,15 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.12
+            stem: Heltec_V3_UI_0.13
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.12
+            stem: Heltec_V4.3_UI_0.13
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.12
+            stem: Paper_UI_0.13
 
     steps:
       - name: Check out source
@@ -517,6 +517,7 @@ jobs:
           node tools/usb-helper/test_core.js
           node --test tools/usb-helper/test_firmware.js
           node --test tools/usb-helper/test_api.js
+          node --test tools/usb-helper/test_presets.js
           python tools/test_usb_helper_package.py
           python tools/test_release_source_identity.py
 
@@ -619,12 +620,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-public-release:
-    name: Publish SmartUI 0.12
-    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.12'
+    name: Publish SmartUI 0.13
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.13'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-public-release-smartui-0.12
+      group: publish-public-release-smartui-0.13
       cancel-in-progress: false
     permissions:
       contents: write
@@ -643,7 +644,7 @@ jobs:
           name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.12 release page
+      - name: Create or resume the SmartUI 0.13 release page
         shell: bash
         run: |
           set -euo pipefail
@@ -655,9 +656,9 @@ jobs:
           }
           # Recheck live visibility before any tag, release or asset mutation.
           check_public_target
-          tag="smartui-0.12"
-          title="Smart UI 0.12"
-          notes="release/RELEASE_NOTES_SmartUI_0.12_RU.md"
+          tag="smartui-0.13"
+          title="Smart UI 0.13"
+          notes="release/RELEASE_NOTES_SmartUI_0.13_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.

@@ -4,7 +4,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 ## Где находится эталон
 
-Для SmartUI 0.12 скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.12):
+Для SmartUI 0.13 скачивайте из одного [GitHub Release](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.13):
 
 - UF2 или BIN своей платы;
 - `SHA256SUMS.txt` для UF2 или `SHA256SUMS-ESP32.txt` для BIN.
@@ -13,7 +13,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 - артефакт `smartui-ps17-validated-uf2` содержит три UF2 и `SHA256SUMS.txt`;
 - артефакт `smartui-ps17-validated-esp32-bin` содержит пары V3/V4.3/Wireless Paper FULL и `SHA256SUMS-ESP32.txt`;
-- артефакт `smartui-public-release` содержит полный комплект 0.12, включая `RELEASE-MANIFEST.json`, помощник 1.5 и Developer Kit.
+- артефакт `smartui-public-release` содержит полный комплект 0.13, включая `RELEASE-MANIFEST.json`, помощник 1.6 и Developer Kit.
 
 GitHub хранит артефакт как ZIP. Распакуйте бинарники и их манифест в одну папку. Не сравнивайте файл одного Release/CI-run с манифестом другого.
 
@@ -22,14 +22,14 @@ GitHub хранит артефакт как ZIP. Распакуйте бинар
 Для одного файла:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T096_UI_0.12.uf2
+Get-FileHash -Algorithm SHA256 .\T096_UI_0.13.uf2
 ```
 
 или:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\T114_UI_0.12.uf2
-Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_UI_0.12.uf2
+Get-FileHash -Algorithm SHA256 .\T114_UI_0.13.uf2
+Get-FileHash -Algorithm SHA256 .\ProMicro_RA62_UI_0.13.uf2
 ```
 
 Скопируйте полученную 64-символьную строку и сравните её с соответствующей строкой своего манифеста. Регистр букв не важен; каждый символ важен.
@@ -63,7 +63,7 @@ if ($failed) { throw 'SHA-256 verification failed' }
 ## Windows без PowerShell
 
 ```text
-certutil -hashfile T096_UI_0.12.uf2 SHA256
+certutil -hashfile T096_UI_0.13.uf2 SHA256
 ```
 
 ## Linux
@@ -79,7 +79,7 @@ sha256sum -c SHA256SUMS-ESP32.txt
 Для одного файла:
 
 ```bash
-shasum -a 256 T096_UI_0.12.uf2
+shasum -a 256 T096_UI_0.13.uf2
 ```
 
 ## Если сумма не совпала

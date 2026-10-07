@@ -198,6 +198,12 @@ public:
   // shutdown is cancelled or an emergency shutdown proceeds regardless.
   bool flushPendingStorage();
 #if SMARTUI_CONNECTION_SELECTOR
+  bool validateLocalRadioSettings(float freq, float bw, uint8_t sf, uint8_t cr) const;
+  bool applyLocalRadioSettings(float freq, float bw, uint8_t sf, uint8_t cr);
+  bool localRadioSettingsHealthy() const;
+  bool localRadioSettingsBusy();
+  bool localRepeatFrequencyAllowed(uint32_t khz) const { return isValidClientRepeatFreq(khz); }
+  void applyLocalAdvertInterval() { updateAutoAdvertTimer(); }
   // A new local client must not inherit a previous client's iterator, signing
   // buffer or pending management requests. The radio/offline inbox is retained.
   void resetLocalAppSession();

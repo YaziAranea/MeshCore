@@ -18,6 +18,17 @@ const SETTINGS = {battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet
 const wireRecord=(kind,values)=>'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('radio/advert records bound every field and reject duplicate or hostile payloads',()=>{
+  const {parseNetworkSetting,networkValuesValid,ADVERT_INTERVALS}=require('./core.js');
+  const radio='OK settings radio freq_khz=868731 bw_hz=62500 sf=7 cr=7 path_bytes=2 tx_dbm=20 repeat=0';
+  const parsed=parseNetworkSetting(radio,'radio');assert.equal(parsed.freq_khz,868731);
+  assert.equal(networkValuesValid('radio',parsed),true);
+  for(const altered of [radio+' extra=1',radio.replace('sf=7','sf=263'),radio.replace('path_bytes=2','path_bytes=0'),radio.replace('repeat=0','repeat=2'),radio.replace('bw_hz=62500','bw_hz=NaN'),radio.replace('cr=7','cr=7 sf=7'),radio.replace('sf=7','sf=<script>'),radio+'\n'])assert.equal(parseNetworkSetting(altered,'radio'),null);
+  assert.deepEqual(ADVERT_INTERVALS,[0,15,30,60,120,180]);
+  for(const value of ADVERT_INTERVALS)assert.deepEqual(parseNetworkSetting('OK ui advert interval_min='+value,'advert','ui'),{interval_min:value});
+  for(const value of [-1,1,14,16,65536])assert.equal(parseNetworkSetting('OK ui advert interval_min='+value,'advert','ui'),null);
+});
+
 class FakePort {
   constructor(options = {}) {
     this.options = options;
@@ -913,4 +924,22 @@ test('Settings 1 can expose current values in recovery without allowing writes',
   assert.equal(f.port.commands.length,before);
   await f.instance.loadDeviceSettings();
   await f.instance.disconnect();
+});
+
+test('network feature read timeout invalidates untagged console; unknown feature does not',async()=>{
+  const old=await connected();await assert.rejects(old.instance.loadNetworkSetting('radio'),code('SETTINGS_UNSUPPORTED'));assert.equal(old.instance.state.verified,true);await old.instance.disconnect();
+  const f=await connected({onCommand(command){if(command==='settings radio')return false;}});
+  await assert.rejects(f.instance.loadNetworkSetting('radio'),code('TIMEOUT'));assert.equal(f.instance.state.verified,false);
+  const count=f.port.commands.length;await assert.rejects(f.instance.loadNetworkSetting('radio'),code('NOT_VERIFIED'));assert.equal(f.port.commands.length,count);await f.instance.disconnect();
+});
+
+test('network settings persist once, preserve current path, and fail closed after lost readback',async()=>{
+  let state={freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0},saved=false;
+  const f=await connected({onCommand(command,port){
+    if(command.startsWith('settings radio set ')){['freq_khz','bw_hz','sf','cr','path_bytes'].forEach((k,i)=>state[k]=Number(command.split(' ')[i+3]));saved=true;port.reply(wireRecord('radio',state));return false;}
+    if(command==='settings radio'){port.reply(saved?'ERR settings busy':wireRecord('radio',state));return false;}
+  }});
+  await assert.rejects(f.instance.saveNetworkSetting('radio',{freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:1}),code('SETTINGS_UNCERTAIN'));
+  assert.equal(state.path_bytes,3);assert.equal(state.tx_dbm,20);assert.equal(state.freq_khz,868731);assert.equal(f.instance.state.verified,false);
+  assert.equal(f.port.commands.filter(c=>c.startsWith('settings radio set')).length,1);await f.instance.disconnect();
 });

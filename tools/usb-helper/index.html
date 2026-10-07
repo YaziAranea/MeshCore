@@ -6,160 +6,170 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
   <title>SmartUI · Локальный центр управления</title>
   <style>
-    :root { color-scheme: dark; --bg:#101722; --panel:#182230; --edge:#344355; --text:#edf2f7; --muted:#b0bfd0; --accent:#82dec8; --blue:#a9d0ff; --warn:#ffcf87; --error:#ffa9a9; }
+    :root { color-scheme:dark; --bg:#0b1418; --panel:#142126; --edge:#30444a; --text:#f0f6f4; --muted:#b0c3c5; --accent:#9ce7c0; --blue:#accdf2; --warn:#ffda9a; --error:#ffb7b7; --surface:#0f1b20; }
     * { box-sizing:border-box; }
-    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
-    main { max-width:1120px; margin:auto; padding:38px 24px 24px; }
-    header { display:flex; gap:20px; align-items:center; justify-content:space-between; margin-bottom:26px; }
-    h1 { margin:0; font-size:clamp(25px,4vw,36px); letter-spacing:-.7px; }
-    h2 { margin:0 0 8px; font-size:20px; }
-    h3 { margin:0 0 8px; font-size:16px; }
+    html { scroll-behavior:smooth; scroll-padding-top:24px; }
+    body { margin:0; color:var(--text); background:var(--bg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+    main { max-width:1480px; margin:auto; padding:44px 36px 28px 270px; }
+    header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:34px; }
+    h1,h2,h3,p { margin:0; }
+    h1 { font-size:clamp(28px,3.1vw,42px); font-weight:650; letter-spacing:-1.5px; line-height:1.15; }
+    h2 { font-size:22px; font-weight:650; letter-spacing:-.45px; margin-bottom:8px; }
+    h3 { font-size:18px; font-weight:650; margin-bottom:8px; }
     p { margin:8px 0 16px; }
-    .eyebrow { color:var(--accent); letter-spacing:2px; font-size:12px; font-weight:700; margin:0 0 5px; }
+    a { color:var(--accent); text-underline-offset:3px; }
+    .eyebrow,.panel-kicker { margin:0 0 10px; color:var(--accent); letter-spacing:1.8px; font-size:11px; font-weight:750; text-transform:uppercase; }
     .subtitle,.hint,footer { color:var(--muted); }
-    .subtitle { margin:5px 0 0; }
-    .tag { border:1px solid var(--edge); padding:6px 12px; border-radius:30px; color:var(--muted); font-size:13px; }
-    .notice { background:#223242; border-left:3px solid var(--blue); padding:12px 16px; border-radius:5px; margin-bottom:18px; }
-    .notice.warning { border-color:var(--warn); background:#332c22; }
-    .notice.error { border-color:var(--error); background:#35282d; }
-    .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }
-    .card { min-width:0; overflow-wrap:anywhere; padding:24px; background:var(--panel); border:1px solid var(--edge); border-radius:14px; }
-    .wide { grid-column:1/-1; }
-    .step { display:inline-grid; place-items:center; width:28px; height:28px; margin-right:8px; background:#253848; color:var(--accent); border-radius:8px; font-size:15px; }
-    button,input,select { font:inherit; }
-    select { max-width:100%; min-height:44px; color:var(--text); background:#101a27; border:1px solid #60738a; border-radius:8px; padding:8px; }
-    .reply-row { padding:12px 0; border-top:1px solid var(--edge); }
-    #firmware-result { white-space:pre-wrap; overflow-wrap:anywhere; }
-    button { min-height:44px; cursor:pointer; border:1px solid var(--edge); border-radius:8px; background:#263546; color:var(--text); padding:9px 16px; font-weight:600; }
-    button:hover:not(:disabled) { border-color:var(--blue); background:#31455c; }
-    button.primary { background:var(--accent); border-color:var(--accent); color:#102923; }
-    button.primary:hover:not(:disabled) { background:#a3ebdb; }
-    button.danger { color:var(--error); }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); background:#203b3a; }
-    :focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
-    .buttons { display:flex; flex-wrap:wrap; gap:9px; margin:14px 0 0; }
-    label.field { display:block; font-weight:600; margin:16px 0 6px; }
-    input[type="text"],input[type="password"] { width:100%; min-height:46px; border:1px solid #60738a; border-radius:8px; padding:9px 12px; color:var(--text); background:#101a27; }
-    input:disabled { opacity:.55; }
-    input[type="file"] { width:100%; min-width:0; }
-    input[type="checkbox"] { width:18px; height:18px; margin:0; accent-color:var(--accent); }
-    .check { display:flex; gap:9px; align-items:center; margin:11px 0; font-size:14px; }
-    .hint { font-size:14px; margin:7px 0 0; }
-    .state { min-height:26px; color:var(--accent); margin:12px 0 0; font-weight:600; }
-    dl { display:grid; grid-template-columns:1fr 1fr; gap:13px; margin:18px 0 0; }
-    dt { color:var(--muted); font-size:13px; }
-    dd { margin:2px 0 0; font-weight:650; overflow-wrap:anywhere; }
-    #feedback { margin-top:16px; padding:12px 14px; border-radius:8px; background:#213544; min-height:49px; overflow-wrap:anywhere; }
-    #feedback[data-kind="error"] { background:#422a30; color:#ffc3c3; }
-    #feedback[data-kind="warning"] { background:#3b3325; color:var(--warn); }
-    #feedback[data-kind="success"] { background:#203c36; color:var(--accent); }
-    ol { padding-left:23px; }
-    li { margin:6px 0; }
-    details { margin-top:18px; }
-    summary { cursor:pointer; font-weight:600; min-height:32px; }
-    #events { max-height:220px; overflow:auto; list-style:none; padding:0; margin:12px 0 0; font-size:14px; }
-    #events li { padding:7px 0; border-top:1px solid var(--edge); overflow-wrap:anywhere; }
-    .event-time { font-variant-numeric:tabular-nums; color:var(--muted); margin-right:10px; }
-    footer { display:flex; flex-wrap:wrap; gap:8px 24px; font-size:13px; padding:20px 0; }
-    code { font:14px ui-monospace,Consolas,monospace; color:var(--blue); }
-    dialog { max-width:470px; width:calc(100% - 36px); background:var(--panel); color:var(--text); border:1px solid var(--edge); border-radius:14px; padding:25px; }
-    dialog::backdrop { background:#000a; }
-    [hidden] { display:none!important; }
-    html { scroll-behavior:smooth; scroll-padding-top:20px; }
-    body { background:radial-gradient(ellipse at 25% 0,#193033 0,transparent 48%),var(--bg); }
-    .local-badge { display:inline-flex; align-items:center; gap:7px; color:var(--accent); font-size:13px; }
-    .local-badge::before { content:""; width:7px; height:7px; border-radius:50%; background:currentColor; }
-    .tool-nav { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 24px; }
-    .tool-nav a { color:var(--text); text-decoration:none; border:1px solid var(--edge); border-radius:99px; padding:9px 15px; font-size:14px; background:#172631; }
-    .tool-nav a:hover { border-color:var(--accent); }
-    .tool-nav a:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
-    .section-heading { display:flex; flex-wrap:wrap; gap:14px; align-items:center; justify-content:space-between; }
-    .section-heading p { margin:0; }
-    #device-section { border-color:#426a68; background:linear-gradient(135deg,#1b2d35,#182230 60%); }
-    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px; }
-    .device-panel { min-width:0; padding:20px; background:#111e2a; border:1px solid #324750; border-radius:12px; }
-    .device-panel h3 { color:var(--text); font-size:18px; }
-    .device-panel-wide { grid-column:1/-1; }
-    .device-panel-wide #lights-settings { display:grid; grid-template-columns:1fr 1fr; gap:0 24px; }
-    .panel-kicker { margin:0 0 8px; color:var(--accent); font-size:11px; font-weight:700; letter-spacing:1.8px; text-transform:uppercase; }
-    .measurement { display:flex; flex-wrap:wrap; gap:18px 32px; margin:18px 0; }
-    .measurement dd { font-size:30px; line-height:1.2; font-variant-numeric:tabular-nums; letter-spacing:-1px; }
-    .measurement .small-value { font-size:20px; padding-top:8px; letter-spacing:0; }
-    .setting-row { padding:14px 0; border-bottom:1px solid #293d49; }
-    .setting-row:last-child { border-bottom:0; padding-bottom:0; }
-    .setting-row label { display:block; font-weight:600; margin-bottom:7px; }
-    .setting-controls { display:grid; grid-template-columns:minmax(90px,1fr) auto; gap:9px; align-items:center; }
-    .setting-controls select { margin:0; }
-    .setting-state { margin:7px 0 0; font-size:12px; color:var(--muted); }
-    .setting-state[data-dirty="true"] { color:var(--warn); }
-    .preview-box { margin-top:14px; padding:14px; background:#1b3536; border:1px solid #416f69; border-radius:9px; }
-    .preview-box p { margin:0; }
-    .safety-note { font-size:13px; color:var(--warn); border-left:2px solid #9b7849; padding-left:10px; margin-top:14px; }
-    #settings-status { display:inline-block; padding:6px 10px; border:1px solid #426a68; border-radius:8px; color:var(--accent); font-size:13px; }
-    #settings-capabilities { font-size:13px; }
-    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
-    @media(max-width:730px) { .settings-grid,.device-panel-wide #lights-settings { grid-template-columns:1fr; } .device-panel { padding:16px; } .section-heading { align-items:flex-start; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } }
-    @media(max-width:730px) { main { padding:22px 16px 12px; } header { align-items:flex-start; flex-direction:column; gap:10px; } .grid { grid-template-columns:1fr; } .card { padding:20px; } }
-    :root { --bg:#0b111b; --panel:#131e2b; --edge:#2a3b4e; --accent:#8fe2cb; }
-    body { background:radial-gradient(ellipse at 80% 0,#16303a,transparent 48%),var(--bg); }
-    main { max-width:1440px; padding:32px 30px 24px 240px; }
-    header { margin-bottom:28px; align-items:flex-start; }
-    h1 { font-size:clamp(26px,3vw,36px); font-weight:650; }
-    .app-rail { position:fixed; top:0; bottom:0; left:max(0px,calc((100vw - 1440px)/2)); width:212px; padding:33px 18px; background:#101925; border-right:1px solid var(--edge); }
-    .rail-brand { font-size:23px; letter-spacing:-.6px; font-weight:750; margin:0 10px 4px; }
-    .rail-sub { color:var(--muted); font-size:12px; margin:0 10px 32px; }
-    .tool-nav { display:flex; flex-direction:column; gap:7px; }
-    .tool-nav a { border:0; border-radius:10px; background:transparent; padding:12px; }
-    .tool-nav a:hover,.tool-nav a[aria-current] { background:#233b47; color:var(--accent); }
-    .rail-foot { position:absolute; bottom:26px; padding:0 10px; color:var(--muted); font-size:12px; }
-    .transport-dock { display:grid; grid-template-columns:minmax(240px,1fr) auto; gap:16px; padding:20px 22px; margin:0 0 22px; border:1px solid #3f6268; border-radius:16px; background:linear-gradient(110deg,#1b303b,#142430); }
-    .transport-dock label { font-size:12px; color:var(--muted); display:block; margin-bottom:6px; }
-    .transport-dock select { width:100%; border-color:#537178; }
+    .subtitle { margin-top:12px; max-width:540px; }
+    .hint { margin:8px 0 0; font-size:14px; line-height:1.6; }
+    .tag,.status-pill,#settings-status { display:inline-flex; border:1px solid var(--edge); border-radius:99px; padding:6px 11px; font-size:12px; color:var(--muted); }
+    .local-badge { display:flex; align-items:center; gap:7px; color:var(--accent); font-size:12px; }
+    .local-badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+    .app-rail { position:fixed; inset:0 auto 0 max(0px,calc((100vw - 1480px)/2)); width:234px; padding:42px 18px; border-right:1px solid var(--edge); background:#0d191e; }
+    .rail-brand { display:flex; align-items:center; gap:10px; font-size:24px; font-weight:720; letter-spacing:-.8px; margin:0 12px 3px; }
+    .mesh-mark { width:29px; height:29px; color:var(--accent); flex-shrink:0; }
+    .rail-sub { color:var(--muted); font-size:12px; margin:0 12px 34px; }
+    .rail-foot { position:absolute; bottom:26px; margin:0 12px; color:var(--muted); font-size:12px; }
+    .tool-nav { display:flex; flex-direction:column; gap:5px; }
+    .tool-nav a { display:flex; align-items:center; gap:10px; min-height:46px; padding:11px 13px; border-radius:12px; color:var(--muted); text-decoration:none; font-size:14px; }
+    .tool-nav a:hover,.tool-nav a[aria-current] { color:var(--text); background:#213b35; }
+    .tool-nav a[aria-current] { box-shadow:inset 3px 0 var(--accent); }
+    .nav-icon { font-size:16px; width:20px; text-align:center; color:var(--accent); }
+    .transport-dock { display:grid; grid-template-columns:minmax(200px,1fr) auto; gap:14px 24px; padding:22px 24px; margin-bottom:20px; border:1px solid #48665f; border-radius:22px; background:#172b2b; }
+    .transport-dock label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+    .transport-dock select { width:100%; }
     .transport-dock .buttons { margin:0; align-items:center; }
     .transport-dock .state,.transport-dock .hint { grid-column:1/-1; margin:0; }
     .transport-dock .state { font-size:14px; }
-    .connection-light { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--muted); margin-right:8px; }
-    .api-overview { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
-    .stat-card { padding:20px; background:#111f2c; border:1px solid var(--edge); border-radius:12px; }
-    .stat-card dt { font-size:12px; }
-    .stat-card dd { font-size:25px; margin-top:8px; }
-    .stat-card small { color:var(--muted); font-size:12px; }
-    .api-workspace { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr); gap:18px; }
-    .inbox-list { display:grid; gap:12px; margin-top:20px; }
-    .message-card { background:#101d2a; padding:18px; border:1px solid #314857; border-radius:12px; }
-    .message-card[data-unread="true"] { border-left:3px solid var(--accent); }
-    .message-top { display:flex; justify-content:space-between; gap:14px; align-items:start; font-size:12px; color:var(--muted); }
-    .message-text { margin:12px 0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:15px; }
-    .message-card .buttons button { font-size:13px; padding:7px 11px; min-height:44px; }
-    .empty-state { text-align:center; padding:35px 20px; border:1px dashed #395163; border-radius:12px; color:var(--muted); margin-top:18px; }
-    .empty-state strong { display:block; color:var(--text); font-size:18px; margin-bottom:7px; }
-    #api-events { list-style:none; padding:0; max-height:430px; overflow:auto; }
-    #api-events li { border-bottom:1px solid var(--edge); padding:10px 0; font-size:13px; }
-    .status-pill { font-size:12px; border:1px solid #46626a; border-radius:99px; padding:4px 8px; color:var(--accent); white-space:nowrap; }
-    #api-feedback { margin-bottom:18px; }
-    #api-settings-fields { display:grid; grid-template-columns:1fr 1fr; gap:0 25px; }
-    #api-command-result { white-space:pre-wrap; padding:14px; background:#0e1824; border-radius:8px; color:var(--muted); font-size:13px; }
+    .notice { padding:14px 18px; margin-bottom:16px; border:1px solid #344b56; border-radius:14px; background:#172730; font-size:14px; }
+    .notice.warning { border-color:#77603b; background:#30291d; }
+    .notice.error { border-color:#76504e; background:#332324; }
+    details.notice { margin-top:0; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
+    .card { min-width:0; padding:26px; border:1px solid var(--edge); border-radius:22px; background:var(--panel); overflow-wrap:anywhere; }
+    .wide { grid-column:1/-1; }
+    .section-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .section-heading p { margin-top:0; }
+    .step { display:inline-grid; place-items:center; width:27px; height:27px; margin-right:9px; border-radius:9px; color:var(--accent); background:#244039; font-size:13px; vertical-align:2px; }
+    button,input,select { font:inherit; }
+    button { min-height:46px; padding:10px 17px; border:1px solid #4a5f62; border-radius:12px; background:#25383d; color:var(--text); font-weight:600; cursor:pointer; }
+    button:hover:not(:disabled) { border-color:var(--accent); background:#30484c; }
+    button.primary { border-color:var(--accent); background:var(--accent); color:#153024; }
+    button.primary:hover:not(:disabled) { background:#b7f0d3; }
+    button.danger { color:var(--error); }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    button[aria-pressed="true"] { background:#244439; border-color:var(--accent); color:var(--accent); }
+    :focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
+    .buttons { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
+    label.field { display:block; margin:18px 0 7px; font-weight:600; font-size:14px; }
+    input[type="text"],input[type="password"],select { max-width:100%; min-height:46px; border:1px solid #627779; border-radius:11px; background:var(--surface); color:var(--text); padding:10px 12px; }
+    input[type="text"],input[type="password"] { width:100%; }
+    select { font-size:15px; }
+    input:disabled { opacity:.55; }
+    input[type="file"] { width:100%; min-width:0; font-size:14px; }
+    input[type="file"]::file-selector-button { min-height:44px; padding:8px 12px; margin-right:10px; background:#25383d; color:var(--text); border:1px solid #627779; border-radius:10px; cursor:pointer; }
+    input[type="checkbox"] { width:19px; height:19px; margin:0; accent-color:var(--accent); }
+    .check { display:flex; align-items:center; gap:10px; min-height:44px; margin:8px 0; font-size:14px; }
+    .state { min-height:26px; color:var(--accent); margin-top:12px; font-weight:600; }
+    dl { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:20px 0 0; }
+    dt { font-size:12px; color:var(--muted); }
+    dd { margin:3px 0 0; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+    #feedback { margin-top:18px; padding:14px 16px; border-radius:12px; background:#1c3437; min-height:49px; }
+    #feedback[data-kind="error"] { background:#402829; color:var(--error); }
+    #feedback[data-kind="warning"] { background:#342c1f; color:var(--warn); }
+    #feedback[data-kind="success"] { background:#203c30; color:var(--accent); }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; }
+    .device-panel { min-width:0; padding:22px; background:var(--surface); border:1px solid var(--edge); border-radius:17px; }
+    .device-panel-wide { grid-column:1/-1; }
+    .measurement { display:flex; flex-wrap:wrap; gap:18px 28px; margin:20px 0; }
+    .measurement dd { font-size:32px; font-weight:550; line-height:1.2; letter-spacing:-1px; }
+    .measurement .small-value { font-size:22px; padding-top:8px; }
+    .setting-row { padding:17px 0; border-bottom:1px solid var(--edge); }
+    .setting-row:last-child { border-bottom:0; }
+    .setting-row label { display:block; margin-bottom:9px; font-size:14px; font-weight:600; }
+    .setting-controls { display:grid; grid-template-columns:minmax(90px,1fr) auto; gap:10px; align-items:center; }
+    .setting-state { margin:8px 0 0; color:var(--muted); font-size:12px; }
+    .setting-state[data-dirty="true"] { color:var(--warn); }
+    .preview-box { margin-top:16px; padding:16px; background:#1b352d; border:1px solid #476d5b; border-radius:13px; }
+    .preview-box p { margin:0; }
+    .safety-note { margin-top:16px; padding-left:12px; border-left:2px solid #b48d55; color:var(--warn); font-size:13px; }
+    #settings-status { color:var(--accent); }
+    #settings-capabilities { font-size:13px; }
+    .api-workspace { display:grid; grid-template-columns:1fr; gap:20px; }
+    #api-settings-fields { display:grid; grid-template-columns:1fr 1fr; gap:0 28px; }
     #api-command { font-family:ui-monospace,Consolas,monospace; }
-    .privacy-note { border-top:1px solid var(--edge); padding-top:14px; color:var(--muted); font-size:12px; }
-    @media(min-width:1200px) { .grid { gap:20px; } }
-    @media(max-width:1000px) { main { padding-left:24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { flex-direction:row; flex-wrap:wrap; } .tool-nav a { background:#172733; } .api-workspace { grid-template-columns:1fr; } }
-    @media(max-width:730px) { main { padding:20px 15px; } .transport-dock { grid-template-columns:1fr; padding:17px; } .api-overview { grid-template-columns:1fr; } .stat-card { display:flex; align-items:center; justify-content:space-between; gap:12px; } .stat-card dd { font-size:22px; margin:0; } .stat-card small { display:none; } #api-settings-fields { grid-template-columns:1fr; } .tool-nav { gap:4px; } .tool-nav a { font-size:12px; padding:9px 11px; } }
+    #api-command-result { padding:16px; background:var(--surface); border-radius:12px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
+    #api-feedback { margin-bottom:16px; }
+    .radio-workspace { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(230px,1fr); gap:22px; margin-top:20px; }
+    .radio-card { background:linear-gradient(120deg,#192e2a,#142126 72%); border-color:#49685b; }
+    .preset-preview { min-height:118px; padding:16px; margin-top:16px; border:1px solid #48665b; border-radius:13px; background:#10231d; }
+    .preset-preview strong { display:block; font-size:21px; font-weight:600; letter-spacing:-.4px; }
+    .preset-preview p { margin:6px 0 0; color:var(--muted); font-size:13px; }
+    .preset-preview .radio-chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
+    .radio-chips span { padding:4px 8px; border:1px solid #436153; border-radius:7px; font-size:12px; color:var(--text); }
+    #preset-city { width:100%; }
+    #preset-search { margin-top:0; }
+    .radio-current { margin-top:18px; color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+    .radio-status { min-height:25px; margin:16px 0 0; color:var(--accent); font-size:14px; }
+    .radio-status[data-kind="error"] { color:var(--error); }
+    .radio-status[data-kind="warning"] { color:var(--warn); }
+    .advert-panel { border-left:1px solid var(--edge); padding-left:22px; }
+    #advert-interval { width:100%; }
+    .reply-row { padding:18px 0; border-top:1px solid var(--edge); }
+    ol { padding-left:23px; } li { margin:7px 0; }
+    details { margin-top:18px; }
+    summary { display:list-item; min-height:44px; padding:9px 0; font-weight:600; cursor:pointer; }
+    #events,#api-log { max-height:230px; padding:0; overflow:auto; list-style:none; font-size:13px; }
+    #events li,#api-log li { padding:8px 0; border-top:1px solid var(--edge); overflow-wrap:anywhere; }
+    .event-time { margin-right:10px; color:var(--muted); font-variant-numeric:tabular-nums; }
+    #firmware-result { white-space:pre-wrap; overflow-wrap:anywhere; }
+    footer { display:flex; flex-wrap:wrap; gap:8px 24px; padding:24px 0; font-size:12px; }
+    code { font:13px ui-monospace,Consolas,monospace; color:var(--blue); }
+    dialog { width:calc(100% - 36px); max-width:520px; padding:28px; background:var(--panel); color:var(--text); border:1px solid #57736b; border-radius:23px; box-shadow:0 20px 80px #0008; }
+    dialog::backdrop { background:#000b; }
+    [hidden] { display:none!important; }
+    @media(max-width:1100px) { main { padding:28px 24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { flex-direction:row; flex-wrap:wrap; gap:6px; margin-bottom:24px; } .tool-nav a { background:#14262a; padding:10px 12px; } .nav-icon { display:none; } }
+    @media(max-width:760px) { main { padding:24px 16px; } header { flex-direction:column; gap:16px; margin-bottom:24px; } header .local-badge { display:inline-flex; margin:0 0 0 8px; } .grid,.settings-grid,.radio-workspace,#api-settings-fields { grid-template-columns:1fr; } .card { padding:22px 18px; border-radius:19px; } .transport-dock { grid-template-columns:1fr; padding:20px 18px; } .advert-panel { border-left:0; border-top:1px solid var(--edge); padding:22px 0 0; } .device-panel { padding:18px; } .tool-nav a { font-size:12px; } }
+    @media(max-width:380px) { main { padding:20px 12px; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } h1 { font-size:28px; } header .local-badge { display:flex; margin:8px 0 0; } }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
   </style>
 </head>
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">ВАША ЛОКАЛЬНАЯ СЕТЬ</p><h1>Нода под вашим контролем.</h1><p class="subtitle">Настройки устройства, радио и сети — без облака.</p></div>
-    <div><span class="tag">Помощник 1.5 · SmartUI</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ближе к вашей сети.</h1><p class="subtitle">Выберите город. Настройте ноду под себя.<br>Без аккаунта, облака и лишних действий.</p></div>
+    <div><span class="tag">Помощник 1.6 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
-  <aside class="app-rail"><p class="rail-brand">SmartUI<span style="color:var(--accent)">.</span></p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство и радио</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
+  <aside class="app-rail"><p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#radio-section">Город и радио</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
   <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
-  <div class="notice"><strong>Перед подключением:</strong> нода должна работать в режиме <strong>Bluetooth или Wi-Fi</strong>. При наличии экрана выберите его в «Настройки → Подключение». Без экрана используйте вход ниже, если нода работает USB-компаньоном. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</div>
-  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.12 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
+  <details id="connection-help" class="notice"><summary>Если подключение не получается</summary><p><strong>Выберите подходящий вход:</strong> для режима Bluetooth или Wi-Fi на ноде — «Настройки (консоль)»; для режима USB — «Настройки (USB-компаньон)». Оба работают через USB-кабель. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</p>
+  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.13 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
+  </details>
   <div class="grid">
+    <section id="radio-section" class="card wide radio-card" aria-labelledby="radio-title">
+      <div class="section-heading"><div><p class="panel-kicker">Ваш город · Ваша сеть</p><h2 id="radio-title">Подключитесь к местному эфиру</h2></div><span id="radio-capability" class="status-pill">Ожидает подключения</span></div>
+      <p class="hint">Городской пресет настраивает частоту, полосу и кодирование. Выбор города ничего не меняет — применение отдельной кнопкой.</p>
+      <div class="radio-workspace">
+        <div>
+          <label class="field" for="preset-search">Найти город</label><input id="preset-search" type="text" placeholder="Название или код города" autocomplete="off" spellcheck="false">
+          <label class="field" for="preset-city">Пресет MeshCoreTel</label><select id="preset-city" aria-describedby="preset-source"><option value="">Выберите город</option></select>
+          <div id="preset-preview" class="preset-preview"><strong>Сначала выберите город</strong><p>Параметры появятся здесь. Текущие настройки ноды сохраняются до подтверждения.</p></div>
+          <p id="radio-current" class="radio-current">Настройки ноды ещё не прочитаны.</p>
+          <div class="buttons"><button id="preset-apply" class="primary" disabled>Применить к ноде</button><button id="radio-refresh" disabled>Прочитать с ноды</button></div>
+          <p id="preset-source" class="hint">Автономный снимок каталога MeshCoreTel. Интернет помощнику не требуется.</p>
+          <details><summary>Что именно изменится?</summary><p class="hint">Частота, полоса (BW), SF и CR. Мощность, FEM, ретрансляция и длина хеша маршрута останутся прежними. Пресеты сообщества могут меняться; сверяйтесь с участниками своего города. После смены частоты нода перестанет слышать прежнюю сеть. Используйте разрешённые для вашего региона параметры.</p><p class="hint"><a id="preset-source-link" href="https://meshcoretel.ru/ru/OMS" target="_blank" rel="noopener noreferrer">Открыть каталог MeshCoreTel</a> — откроется отдельная вкладка, настройки ноды не отправляются.</p></details>
+        </div>
+        <div class="advert-panel">
+          <p class="panel-kicker">Заметность в сети</p><h3>Автоанонс</h3><p class="hint">Нода периодически сообщает ближайшим участникам, что она рядом. Интервалы такие же, как в меню ноды.</p>
+          <label class="field" for="advert-interval">Повторять анонс</label><select id="advert-interval" disabled><option value="0">Выключен</option><option value="15">Каждые 15 минут</option><option value="30">Каждые 30 минут</option><option value="60">Каждый час</option><option value="120">Каждые 2 часа</option><option value="180">Каждые 3 часа</option></select>
+          <p id="advert-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="advert-save" disabled>Сохранить интервал</button></div>
+          <p class="hint">Это интервал, не время суток. Сохранение не отправляет немедленный анонс; отсчёт следующего начинается заново.</p>
+        </div>
+      </div>
+      <p id="radio-status" class="radio-status" role="status" aria-live="polite">Подключите SmartUI 0.13 или новее. Каталог можно посмотреть заранее.</p>
+    </section>
     <section id="connection-section" class="card" aria-labelledby="usb-title">
       <h2 id="usb-title"><span class="step">1</span>Подключите ноду</h2>
       <p class="hint">Нужен USB-кабель с передачей данных. В окне браузера выберите порт именно вашей ноды.</p>
@@ -243,7 +253,7 @@
       <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
       <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
-      <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Настройки (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.12.</p>
+      <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Настройки (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.13.</p>
       <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
       <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Этот офлайн-помощник подключается только по USB, не по TCP, и не прошивает устройство.</p></details>
       <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>
@@ -261,6 +271,9 @@
 </script>
 <script>
 /* SMARTUI_HELPER_API */
+</script>
+<script>
+/* SMARTUI_HELPER_PRESETS */
 </script>
 <script>
 /* SMARTUI_HELPER_APP */

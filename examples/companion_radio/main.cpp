@@ -36,6 +36,7 @@ MultiSerialInterface interface_manager;
   #include "ConnectionController.h"
   #include "DeviceSettings.h"
   #include "SmartUiCliSettings.h"
+  #include "RadioSettings.h"
   #include "SmartUiSync.h"
 #endif
 
@@ -133,6 +134,7 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 static smartui::DeviceSettings device_settings;
 // Separate preview-token domains for the service console and Companion CLI.
 static smartui::DeviceSettings cli_device_settings;
+static smartui::RadioSettings radio_settings;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
@@ -288,8 +290,47 @@ static void testDeviceNotification() {
 }
 static bool handleCompanionDeviceSettings(const char* command, char* reply,
                                           size_t capacity, bool allow_mutation) {
+  if (radio_settings.handle(command, reply, capacity, allow_mutation)) return true;
   return device_settings.handle(command, reply, capacity, allow_mutation);
 }
+
+static smartui::RadioSettingsState readRadioSettings() {
+  const NodePrefs& p = *the_mesh.getNodePrefs();
+  smartui::RadioSettingsState s;
+  s.frequency_mhz = p.freq;
+  s.bandwidth_khz = p.bw;
+  s.sf = p.sf;
+  s.cr = p.cr;
+  s.path_bytes = p.path_hash_mode + 1;
+  s.tx_dbm = p.tx_power_dbm;
+  s.repeat = p.isRepeatEn();
+  s.advert_minutes = p.auto_advert_interval_mins;
+  return s;
+}
+
+static void writeRadioSettings(const smartui::RadioSettingsState& s) {
+  NodePrefs& p = *the_mesh.getNodePrefs();
+  p.freq = s.frequency_mhz;
+  p.bw = s.bandwidth_khz;
+  p.sf = s.sf;
+  p.cr = s.cr;
+  p.path_hash_mode = s.path_bytes - 1;
+  p.auto_advert_interval_mins = s.advert_minutes;
+  // No assignments to TX power, repeat, identity or UI preferences.
+}
+
+static bool validateRadioSettings(const smartui::RadioSettingsState& s) {
+  return the_mesh.validateLocalRadioSettings(s.frequency_mhz, s.bandwidth_khz, s.sf, s.cr);
+}
+static bool applyRadioSettings(const smartui::RadioSettingsState& s) {
+  return the_mesh.applyLocalRadioSettings(s.frequency_mhz, s.bandwidth_khz, s.sf, s.cr);
+}
+static bool repeatFrequencyAllowed(uint32_t khz) { return the_mesh.localRepeatFrequencyAllowed(khz); }
+static void applyAdvertSettings() { the_mesh.applyLocalAdvertInterval(); }
+static bool radioSettingsBusy() {
+  return connection_controller.deviceApiBusy() || the_mesh.localRadioSettingsBusy();
+}
+static bool radioSettingsHealthy() { return the_mesh.localRadioSettingsHealthy(); }
 
 static const char* apiMelodyName(uint8_t id) {
 #ifdef DISPLAY_CLASS
@@ -320,6 +361,7 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
     return true;
   }
   if (connection_controller.handleCliCommand(command, reply, capacity, writable)) return true;
+  if (radio_settings.handle(command, reply, capacity, writable)) return true;
   const bool read = strncmp(command, "ui caps ", 8) == 0 ||
                     strncmp(command, "ui get ", 7) == 0 ||
                     strncmp(command, "ui melody ", 10) == 0;
@@ -712,6 +754,17 @@ void setup() {
   settings_hooks.melodyName = apiMelodyName;
   settings_hooks.setToneBridge = apiSetToneBridge;
   cli_device_settings.begin(settings_hooks);
+  smartui::RadioSettingsHooks radio_hooks;
+  radio_hooks.read = readRadioSettings;
+  radio_hooks.write = writeRadioSettings;
+  radio_hooks.save = saveDeviceSettings;
+  radio_hooks.validate = validateRadioSettings;
+  radio_hooks.repeatAllowed = repeatFrequencyAllowed;
+  radio_hooks.applyRadio = applyRadioSettings;
+  radio_hooks.applyAdvert = applyAdvertSettings;
+  radio_hooks.busy = radioSettingsBusy;
+  radio_hooks.healthy = radioSettingsHealthy;
+  radio_settings.begin(radio_hooks);
 #endif
 
   board.onBootComplete();

@@ -11,6 +11,7 @@
 #include <Mesh.h>
 #include "helpers/radiolib/RXPowerSaving.h"
 #include "helpers/radiolib/LoRaConfigValidation.h"
+#include "RadioSettings.h"
 #include <helpers/SmartUiBuildInfo.h>
 
 #define CMD_APP_START                 1
@@ -191,17 +192,7 @@
 #endif
 
 static bool isValidAutoAdvertIntervalMins(uint16_t mins) {
-  switch (mins) {
-    case 0:
-    case 15:
-    case 30:
-    case 60:
-    case 120:
-    case 180:
-      return true;
-    default:
-      return false;
-  }
+  return smartui::validAutoAdvertInterval(mins);
 }
 
 static uint16_t nextAutoAdvertIntervalMins(uint16_t mins) {
@@ -1745,6 +1736,30 @@ uint32_t MyMesh::getBLEPin() {
 uint16_t MyMesh::getAutoAdvertIntervalMins() const {
   return _prefs.auto_advert_interval_mins;
 }
+
+#if SMARTUI_CONNECTION_SELECTOR
+bool MyMesh::validateLocalRadioSettings(float freq, float bw, uint8_t sf, uint8_t cr) const {
+  return validateCompanionRadioParams(freq, bw, sf, cr);
+}
+
+bool MyMesh::applyLocalRadioSettings(float freq, float bw, uint8_t sf, uint8_t cr) {
+  if (!setCompanionRadioParamsChecked(freq, bw, sf, cr)) return false;
+  applyCompanionRxPowerSaving(sf, bw);
+  return true;
+}
+
+bool MyMesh::localRadioSettingsHealthy() const {
+#ifdef WRAPPER_CLASS
+  return radio_driver.isConfigValid() && !_radio_startup_error;
+#else
+  return !_radio_startup_error;
+#endif
+}
+
+bool MyMesh::localRadioSettingsBusy() {
+  return hasPendingWork() || radio_driver.isReceiving() || !radio_driver.isInRecvMode();
+}
+#endif
 
 void MyMesh::updateAutoAdvertTimer() {
   if (_prefs.auto_advert_interval_mins > 0) {

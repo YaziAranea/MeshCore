@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.5.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.6.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -37,7 +37,7 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
@@ -45,6 +45,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
   const mock = window.__serialMock = {
     requests: 0, commands: [], raw: [], mode: localRecovery ? 'USB' : 'BLE', configured: false,
     replies, localRecovery, quickReplies: Array(9).fill(''), settings,
+    radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0},advert:{interval_min:60},
     settingsCaps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125,...settingsCaps},
     settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0},
     settingsRecord(kind,values){return 'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');},
@@ -77,6 +78,12 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         return;
       }
       const command = raw.trim().toLowerCase();
+      if(radioFeature&&/^settings (radio|advert)( |$)/.test(command)){
+        const [,kind,action,...values]=command.split(' ');
+        if(action==='set'&&readOnly){this.emit('ERR settings readonly');return;}
+        if(action==='set'){const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];keys.forEach((key,i)=>this[kind][key]=Number(values[i]));}
+        this.emit('OK settings '+kind+' '+Object.entries(this[kind]).map(([k,v])=>k+'='+v).join(' '));return;
+      }
       if ((this.readOnly || this.localRecovery) && command !== 'status' && !(this.settings && ['help','info','settings caps','settings get'].includes(command)) && !(this.localRecovery && command === 'wifi forget')) { this.emit('Connection settings are read-only during storage recovery.'); return; }
       if(this.settings && command.startsWith('settings ')) {
         if(command==='settings caps') this.emit(this.settingsRecord('caps',this.settingsCaps));
@@ -161,7 +168,7 @@ async function fixture(options = {}) {
   const network = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{} });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature) });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -183,6 +190,19 @@ async function connect(page) {
   assert.equal(await page.locator('#disconnect').isEnabled(), true);
 }
 async function ready(page) { await page.waitForFunction(() => !document.getElementById('test').disabled); }
+test('console city presets and auto advert use same controls with confirmation/readback',async()=>{
+  const f=await fixture({radioFeature:true,settings:true,info:'SmartUI=0.13 core=1.17.1 build=1234abcd upstream=a27e78e4 capabilities=BLE,USB board=Heltec T114'});
+  try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('radio-refresh').disabled);
+    await p.locator('#preset-search').fill('Омск');await p.locator('#preset-city').selectOption({index:1});
+    await confirm(p,'#preset-apply',false);assert.equal(await p.evaluate(()=>window.__serialMock.commands.some(c=>c.startsWith('settings radio set'))),false);
+    await confirm(p,'#preset-apply',true);await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('прочитан обратно'));
+    const result=await p.evaluate(()=>({radio:window.__serialMock.radio,city:SmartUiPresets.get(document.getElementById('preset-city').value)}));
+    assert.equal(result.radio.freq_khz,result.city.frequencyKHz);assert.equal(result.radio.path_bytes,3);assert.equal(result.radio.tx_dbm,20);
+    await p.locator('#advert-interval').selectOption('30');await confirm(p,'#advert-save',true);await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('Интервал автоанонса сохранён'));
+    assert.equal(await p.evaluate(()=>window.__serialMock.advert.interval_min),30);
+    assert.equal(await p.evaluate(()=>window.__serialMock.commands.filter(c=>c==='settings advert set 30').length),1);
+  }finally{await f.close();}
+});
 async function confirm(page, button, accepted) {
   await page.locator(button).click();
   assert.equal(await page.locator('#confirm-dialog').isVisible(), true);
@@ -465,15 +485,16 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
-const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.12');
-test('0.08 through 0.12 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.13');
+test('0.08 through 0.13 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
     {version:'0.10',maximum:30,named:true},
     {version:'0.11',maximum:30,named:true},
     {version:'0.12',maximum:30,named:true},
-    {version:'0.13',maximum:30,named:false},
+    {version:'0.13',maximum:30,named:true},
+    {version:'0.14',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},

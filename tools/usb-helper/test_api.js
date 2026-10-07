@@ -76,6 +76,17 @@ test('notification test uses exact ui test and read-only inference',async()=>{
   const f=await connected();try{assert.equal(await f.client.execute('ui test'),'OK ui test');}finally{await f.client.disconnect();}
   const r=await connected({readonly:true});try{await assert.rejects(r.client.execute('ui test'),{code:'DENIED'});await assert.rejects(r.client.execute('ui set volume 4'),{code:'DENIED'});}finally{await r.client.disconnect();}
 });
+
+test('radio and advert writes infer mutation without a caller hint',async()=>{
+  const r=await connected({readonly:true});try{
+    const count=r.port.commands.length;
+    await assert.rejects(r.client.execute('ui radio set 868731 62500 7 7 2'),{code:'DENIED'});
+    await assert.rejects(r.client.execute('ui advert set 30'),{code:'DENIED'});
+    assert.equal(r.port.commands.length,count);
+    assert.match(await r.client.execute('ui radio'),/^OK ui radio /);
+    assert.match(await r.client.execute('ui advert'),/^OK ui advert /);
+  }finally{await r.client.disconnect();}
+});
 test('reconnect renegotiates and credentials never enter diagnostic events',async()=>{
   const f=await connected();await f.client.execute('ui wifi password 736563726574',{mutate:true});await f.client.disconnect();await f.client.connect(f.port);
   assert.equal(f.client.state.uncertain,false);assert.equal(f.port.commands.filter(c=>c==='ui hello').length,2);

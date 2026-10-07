@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_1.5.html"
-ZIP_NAME = "SmartUI_USB_Helper_1.5.zip"
+HTML_NAME = "SmartUI_USB_Helper_1.6.html"
+ZIP_NAME = "SmartUI_USB_Helper_1.6.zip"
 
 
 def digest(data):
@@ -18,7 +18,7 @@ def digest(data):
 
 def render():
     html = (SOURCE / "index.html").read_text(encoding="utf-8")
-    for part in ("core", "firmware", "api", "app", "dashboard"):
+    for part in ("core", "firmware", "api", "presets", "app", "dashboard"):
         marker = f"/* SMARTUI_HELPER_{part.upper()} */"
         if html.count(marker) != 1:
             raise ValueError(f"Expected exactly one {part} marker")
@@ -40,11 +40,14 @@ def package(output):
     payloads = {
         HTML_NAME: html,
         "README_RU.md": (SOURCE / "README_RU.md").read_bytes(),
+        "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
         "screenshots/settings-desktop.png": (SOURCE / "screenshots/settings-desktop.png").read_bytes(),
         "screenshots/settings-mobile.png": (SOURCE / "screenshots/settings-mobile.png").read_bytes(),
         "screenshots/dashboard-desktop.png": (SOURCE / "screenshots/dashboard-desktop.png").read_bytes(),
         "screenshots/dashboard-mobile.png": (SOURCE / "screenshots/dashboard-mobile.png").read_bytes(),
+        "screenshots/city-desktop.png": (SOURCE / "screenshots/city-desktop.png").read_bytes(),
+        "screenshots/city-mobile.png": (SOURCE / "screenshots/city-mobile.png").read_bytes(),
     }
     checksums = "".join(f"{digest(raw)}  {name}\n" for name, raw in sorted(payloads.items()))
     payloads["SHA256SUMS.txt"] = checksums.encode("ascii")

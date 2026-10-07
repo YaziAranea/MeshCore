@@ -3,6 +3,8 @@
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
   let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false;
   const settingEdits=new Map(),melodyNames=new Map();
+  let radioState=null,advertState=null,radioSupport=null,advertSupport=null,networkRunning=false;
+  const catalog=globalThis.SmartUiPresets;
   let binaryState={connected:false,busy:false,phase:'disconnected',hello:null,uncertain:false};
   const grid=document.querySelector('.grid');
   const consolePanels=[$('device-section'),$('replies-section'),$('wifi-title').closest('section'),$('mode-title').closest('section')];
@@ -29,10 +31,10 @@
   const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
   function note(text,kind='info'){$('api-feedback').textContent=text;$('api-feedback').className='notice'+(kind==='error'?' error':kind==='warning'?' warning':'');}
   function log(text){const li=document.createElement('li');li.textContent=new Date().toLocaleTimeString('ru-RU')+' · '+text;$('api-log').prepend(li);while($('api-log').children.length>40)$('api-log').lastChild.remove();}
-  const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing;
+  const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing&&!networkRunning;
   const writable=()=>available()&&binaryState.hello?.write==='1';
   function renderShell(){
-    const s=mode==='api'?binaryState:legacy.getState(),busy=Boolean(s.busy||running||choosing||(mode==='api'&&(client.opening||client.closing||(!s.connected&&client.session))));
+    const s=mode==='api'?binaryState:legacy.getState(),busy=Boolean(s.busy||running||networkRunning||choosing||(mode==='api'&&(client.opening||client.closing||(!s.connected&&client.session))));
     $('helper-mode').disabled=Boolean(s.connected||busy);
     $('connect').disabled=!window.isSecureContext||!navigator.serial||Boolean(s.connected||busy);
     $('disconnect').disabled=!s.connected||choosing;
@@ -51,6 +53,7 @@
     $('api-adc-preview').disabled=!available()||caps?.adc!=='1';
     $('api-adc-reset').disabled=!writable()||caps?.adc!=='1';
     $('api-adc-apply').disabled=!writable()||!preview||Date.now()>=preview.expires;
+    renderNetworkControls();
   }
   async function run(operation){
     if(running)return;running=true;renderShell();
@@ -66,6 +69,105 @@
   const rec=async(command,prefix,mutate=false)=>api.record(await client.execute(command,{mutate}),prefix);
   const exact=async(command,expected)=>{if(await client.execute(command,{mutate:true})!==expected)throw new api.CliError('PROTOCOL');};
   function numeric(value,max=0xffffffff){if(!/^\d+$/.test(value)||Number(value)>max)throw new api.CliError('PROTOCOL');return Number(value);}
+  const networkReady=()=>{
+    const state=legacy.getState();
+    return !networkRunning&&(mode==='api'?available():state.connected&&state.verified&&!state.busy&&!state.testPassed);
+  };
+  const networkWritable=()=>networkReady()&&(mode==='api'?binaryState.hello?.write==='1':!legacy.getState().status?.readOnly);
+  function networkNote(text,kind='info'){$('radio-status').textContent=text;$('radio-status').dataset.kind=kind;}
+  function radioText(r){return (r.freq_khz/1000).toFixed(3)+' МГц · BW '+(r.bw_hz/1000)+' кГц · SF'+r.sf+' · CR 4/'+r.cr;}
+  function renderNetworkControls(){
+    const ready=networkReady(),write=networkWritable();
+    $('radio-refresh').disabled=!ready;
+    $('preset-apply').disabled=!write||!radioState||radioSupport!==true||!catalog?.get($('preset-city').value);
+    $('advert-interval').disabled=!write||!advertState||advertSupport!==true;
+    $('advert-save').disabled=!write||!advertState||advertSupport!==true||Number($('advert-interval').value)===advertState.interval_min;
+    const s=mode==='api'?binaryState:legacy.getState();
+    $('radio-capability').textContent=!s.connected?'Ожидает подключения':networkRunning?'Проверяем настройки…':!ready?'Соединение занято':radioSupport===false?'Нужна поддержка прошивки':!write?'Только чтение':radioState?'Готово к настройке':'Не прочитано';
+  }
+  function resetNetwork(){radioState=null;advertState=null;radioSupport=null;advertSupport=null;$('radio-current').textContent='Настройки ноды ещё не прочитаны.';$('advert-current').textContent='Сначала подключите ноду.';renderNetworkControls();}
+  function showNetworkState(){
+    $('radio-current').textContent=radioState?'Сейчас на ноде: '+radioText(radioState)+' · '+radioState.tx_dbm+' дБм · хеш '+radioState.path_bytes+' байт.':radioSupport===false?'Сборка не поддерживает чтение городского пресета. Остальные инструменты работают.':'Настройки радио не подтверждены.';
+    $('advert-current').textContent=advertState?'На ноде: '+(advertState.interval_min?'каждые '+advertState.interval_min+' мин':'выключен')+'.':advertSupport===false?'Автоанонс недоступен в этой сборке.':'Интервал не прочитан.';
+    if(advertState)$('advert-interval').value=String(advertState.interval_min);
+    renderNetworkControls();
+  }
+  async function readNetwork(kind){
+    if(mode==='console')return legacy.client.loadNetworkSetting(kind);
+    const value=SmartUiConsole.parseNetworkSetting(await client.execute('ui '+kind),kind,'ui');
+    if(!value)throw new api.CliError('PROTOCOL');return value;
+  }
+  async function saveNetwork(kind,values){
+    if(!SmartUiConsole.networkValuesValid(kind,values))throw new api.CliError('INPUT');
+    if(mode==='console')return legacy.client.saveNetworkSetting(kind,values);
+    const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];
+    const before=await readNetwork(kind);
+    if(kind==='radio')values={...values,path_bytes:before.path_bytes};
+    let acknowledged=false;
+    try{
+      const text=await client.execute('ui '+kind+' set '+keys.map(k=>values[k]).join(' '),{mutate:true});acknowledged=true;
+      const ack=SmartUiConsole.parseNetworkSetting(text,kind,'ui');
+      if(!ack||keys.some(k=>ack[k]!==values[k]))throw new api.CliError('PROTOCOL');
+      const saved=await readNetwork(kind);
+      if(keys.some(k=>saved[k]!==values[k])||kind==='radio'&&(saved.tx_dbm!==before.tx_dbm||saved.repeat!==before.repeat))throw new api.CliError('PROTOCOL');
+      return saved;
+    }catch(error){
+      if(acknowledged){client.update({uncertain:true,phase:'uncertain'});throw new api.CliError('UNCERTAIN');}throw error;
+    }
+  }
+  async function networkOperation(operation){
+    if(networkRunning)return;networkRunning=true;renderShell();
+    try{await operation();}catch(error){
+      if((error.code==='PROTOCOL'||error.reason==='restore')&&mode==='api'&&binaryState.connected)client.update({uncertain:true,phase:'uncertain'});
+      if(mode==='api'?binaryState.uncertain:!legacy.getState().verified){radioState=null;advertState=null;showNetworkState();}
+      networkNote(error.safe?error.message:'Не удалось подтвердить операцию. Прочитайте настройки заново.','error');
+    }finally{networkRunning=false;renderShell();}
+  }
+  async function loadNetwork(){
+    for(const kind of ['radio','advert']){
+      try{const value=await readNetwork(kind);if(kind==='radio'){radioState=value;radioSupport=true;}else{advertState=value;advertSupport=true;}}
+      catch(error){
+        if(error.reason==='unsupported'||error.reason==='invalid'||['SETTINGS_UNSUPPORTED','SETTINGS_UNAVAILABLE'].includes(error.code)){
+          if(kind==='radio'){radioState=null;radioSupport=false;}else{advertState=null;advertSupport=false;}
+        }else{if(kind==='radio')radioState=null;else advertState=null;showNetworkState();throw error;}
+      }
+    }
+    showNetworkState();networkNote(radioState?'Текущие параметры прочитаны. Выберите город и подтвердите применение.':'Для городских пресетов нужна SmartUI 0.13 или новее; остальные настройки доступны.',radioState?'info':'warning');
+  }
+  function populateCities(){
+    const selected=$('preset-city').value,records=catalog?.list($('preset-search').value)||[];
+    $('preset-city').replaceChildren(new Option(records.length?'Выберите город':'Город не найден',''));
+    for(const city of records)$('preset-city').append(new Option(city.name+' · '+city.code,city.id));
+    if(records.some(city=>city.id===selected))$('preset-city').value=selected;
+    previewCity();
+  }
+  function previewCity(){
+    const box=$('preset-preview'),city=catalog?.get($('preset-city').value);box.replaceChildren();
+    const title=document.createElement('strong'),description=document.createElement('p');
+    title.textContent=city?city.name+' · '+city.code:'Сначала выберите город';
+    description.textContent=city?'Параметры из снимка MeshCoreTel. Ещё не применены.':'Параметры появятся здесь. Текущие настройки ноды сохраняются до подтверждения.';
+    box.append(title,description);
+    if(city){const chips=document.createElement('div');chips.className='radio-chips';for(const text of [city.frequencyMHz.toFixed(3)+' МГц','BW '+city.bandwidthKHz+' кГц','SF'+city.sf,'CR 4/'+city.cr]){const span=document.createElement('span');span.textContent=text;chips.append(span);}box.append(chips);}
+    renderNetworkControls();
+  }
+  $('preset-search').oninput=populateCities;$('preset-city').onchange=previewCity;
+  $('advert-interval').onchange=renderNetworkControls;
+  $('radio-refresh').onclick=()=>{if(networkReady())networkOperation(loadNetwork);};
+  $('preset-apply').onclick=async()=>{
+    if(!networkWritable()||!radioState)return;const city=catalog?.get($('preset-city').value);if(!city)return;
+    const values={freq_khz:city.frequencyKHz??Math.round(city.frequencyMHz*1000),bw_hz:city.bandwidthHz??Math.round(city.bandwidthKHz*1000),sf:city.sf,cr:city.cr,path_bytes:radioState.path_bytes};
+    if(!await legacy.confirmAction('Применить пресет «'+city.name+'»: '+radioText(values)+'? Нода перейдёт в другой эфир. Мощность, FEM, ретрансляция и хеш маршрута не меняются. Убедитесь, что параметры разрешены в вашем регионе.'))return;
+    if(!networkWritable())return;
+    await networkOperation(async()=>{radioState=await saveNetwork('radio',values);showNetworkState();networkNote('Пресет «'+city.name+'» сохранён и прочитан обратно с ноды.');});
+  };
+  $('advert-save').onclick=async()=>{
+    if(!networkWritable()||!advertState)return;const interval=Number($('advert-interval').value);
+    if(!await legacy.confirmAction(interval?'Сохранить автоанонс каждые '+interval+' минут? Отсчёт следующего анонса начнётся заново.':'Выключить периодический автоанонс? Ручной анонс останется доступен.'))return;
+    if(!networkWritable())return;
+    await networkOperation(async()=>{advertState=await saveNetwork('advert',{interval_min:interval});showNetworkState();networkNote('Интервал автоанонса сохранён и прочитан обратно с ноды.');});
+  };
+  if(catalog){const stamp=new Date(catalog.metadata.snapshotAt);$('preset-source').textContent='Снимок каталога: '+(Number.isNaN(stamp.getTime())?catalog.metadata.snapshotAt:stamp.toLocaleDateString('ru-RU'))+' · '+catalog.list().length+' городов. Автономно; параметры сообщества могут меняться.';}
+  populateCities();
   async function readFields(kind,keys,optional){
     const result=Object.create(null);
     for(const key of keys){
@@ -119,22 +221,22 @@
   async function wifiStatus(){wifiState=await rec('ui wifi status','OK ui wifi');if(!['supported','configured','associated'].every(key=>['0','1'].includes(wifiState[key]))||!(wifiState.ip==='none'||/^(?:\d{1,3}\.){3}\d{1,3}$/.test(wifiState.ip)&&wifiState.ip.split('.').every(n=>Number(n)<=255)))throw new api.CliError('PROTOCOL');const names={idle:'Нет незавершённой настройки',ssid:'Ожидает имя сети',password:'Ожидает пароль',ready:'Можно начать проверку',testing:'Проверка идёт — запросите результат через несколько секунд',test_ok:'Проверка успешна. Сеть ещё не сохранена',saved:'Сеть сохранена',cancelled:'Проверка отменена',failed:'Проверка не прошла; старые настройки сохранены',timeout:'Время проверки истекло'};$('api-wifi-state').textContent=names[wifiState.state]||'Состояние не распознано';renderShell();}
   $('helper-mode').onchange=()=>{
     if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing){$('helper-mode').value=mode;return;}
-    mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported')el.hidden=mode==='api';});
+    mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
     document.querySelector('.tool-nav a').href=mode==='api'?'#connection-dock':'#connection-section';
     document.querySelectorAll('[data-api-nav]').forEach(el=>el.hidden=mode!=='api');document.querySelectorAll('[data-console-nav]').forEach(el=>el.hidden=mode==='api');$('refresh').hidden=mode==='api';renderShell();
   };
   const originalConnect=$('connect').onclick,originalDisconnect=$('disconnect').onclick;
   $('connect').onclick=async()=>{
-    if(mode==='console'){await originalConnect();renderShell();return;}
+    if(mode==='console'){resetNetwork();await originalConnect();renderShell();if(networkReady()&&!legacy.getState().status?.readOnly)await networkOperation(loadNetwork);return;}
     if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing)return;
     choosing=true;renderShell();
     try{const port=await navigator.serial.requestPort();choosing=false;await run(async()=>{
-      await client.connect(port);acknowledgedLoss=false;settings=null;caps=null;settingEdits.clear();melodyNames.clear();wifiState=null;note('Локальный CLI подключён. Читаем настройки; сообщения не запрашиваются.');
-      connectionState=await rec('ui connection','OK ui connection');if(!['ble','usb','wifi'].includes(connectionState.mode)||!['none','ble','usb','wifi'].includes(connectionState.client)||!['0','1'].includes(connectionState.write))throw new api.CliError('PROTOCOL');numeric(connectionState.caps,7);await wifiStatus();await loadSettings();note('Настройки прочитаны. Изменения сохраняются отдельно.');
+      resetNetwork();await client.connect(port);acknowledgedLoss=false;settings=null;caps=null;settingEdits.clear();melodyNames.clear();wifiState=null;note('Локальный CLI подключён. Читаем настройки; сообщения не запрашиваются.');
+      connectionState=await rec('ui connection','OK ui connection');if(!['ble','usb','wifi'].includes(connectionState.mode)||!['none','ble','usb','wifi'].includes(connectionState.client)||!['0','1'].includes(connectionState.write))throw new api.CliError('PROTOCOL');numeric(connectionState.caps,7);await wifiStatus();await loadSettings();await loadNetwork();note('Настройки прочитаны. Изменения сохраняются отдельно.');
     });}catch(error){note(error.name==='NotFoundError'?'Порт не выбран.':error.safe?error.message:'Не удалось открыть порт. Проверьте разрешения браузера.','warning');}
     finally{choosing=false;renderShell();}
   };
-  $('disconnect').onclick=async()=>{if(mode==='console')await originalDisconnect();else{await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}renderShell();};
+  $('disconnect').onclick=async()=>{if(mode==='console')await originalDisconnect();else{await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}resetNetwork();renderShell();};
   window.addEventListener('smartui-console-state',()=>{if(mode==='console')renderShell();});
 
 

@@ -69,6 +69,9 @@
     SETTINGS_RANGE: 'Значение вне допустимого диапазона. Проверьте измерение и параметры платы.',
     SETTINGS_UNCERTAIN: 'Результат изменения неизвестен. Переподключитесь и прочитайте настройки: не считайте их сохранёнными.',
     SETTINGS_READBACK: 'Не удалось прочитать настройки. Текущие значения не подтверждены.',
+    RADIO_FAILED: 'Радио отклонило параметры. Изменение не подтверждено; прочитайте состояние ноды.',
+    RADIO_RESTORE: 'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
+    RADIO_REPEAT: 'Включённая ретрансляция несовместима с выбранной частотой. Помощник не выключает её автоматически; измените настройку на ноде.',
     ADC_INPUT: 'Введите измеренное мультиметром напряжение от 2,500 до 4,500 В, например 3,82.',
     ADC_CONFIRM: 'Сначала выполните расчёт, затем явно подтвердите сохранение.'
   });
@@ -157,6 +160,27 @@
     return result;
   }
   const integer = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+  const ADVERT_INTERVALS = Object.freeze([0,15,30,60,120,180]);
+  function parseNetworkSetting(line, kind, transport='settings') {
+    if (!['radio','advert'].includes(kind) || !['settings','ui'].includes(transport)) return null;
+    if (kind === 'advert') {
+      const r=record(line,'OK '+transport+' advert',['interval_min']);
+      return r && ADVERT_INTERVALS.includes(r.interval_min) ? {...r} : null;
+    }
+    // TX can be negative on supported radios. Keep exact keys and bounded ASCII.
+    if (typeof line!=='string' || line.length>156 || /[^\x20-\x7e]/.test(line)) return null;
+    const prefix='OK '+transport+' radio ',keys=['freq_khz','bw_hz','sf','cr','path_bytes','tx_dbm','repeat'];
+    if (!line.startsWith(prefix)) return null;
+    const parts=line.slice(prefix.length).split(' '),r=Object.create(null);
+    if(parts.length!==keys.length)return null;
+    for(const part of parts){const m=/^([a-z_]+)=(-?\d+)$/.exec(part);if(!m||!keys.includes(m[1])||Object.hasOwn(r,m[1]))return null;r[m[1]]=Number(m[2]);}
+    if(!integer(r.freq_khz,150000,2500000)||!integer(r.bw_hz,7000,500000)||!integer(r.sf,5,12)||!integer(r.cr,5,8)||!integer(r.path_bytes,1,3)||!integer(r.tx_dbm,-30,50)||!integer(r.repeat,0,1))return null;
+    return {...r};
+  }
+  function networkValuesValid(kind, values) {
+    if(kind==='advert')return values && ADVERT_INTERVALS.includes(values.interval_min);
+    return kind==='radio' && values && parseNetworkSetting('OK settings radio '+['freq_khz','bw_hz','sf','cr','path_bytes'].map(k=>k+'='+values[k]).join(' ')+' tx_dbm=0 repeat=0','radio')!==null;
+  }
   function parseSettingsCaps(line) {
     const flags = ['adc','sound','board_led','unread_led','vibration','gps','battery_protection','display'];
     const r = record(line, 'OK settings caps', ['v',...flags,'melody_max','adc_min','adc_max']);
@@ -186,7 +210,7 @@
   }
   function settingsError(line) {
     if (line === RX.readonly || line === 'ERR settings readonly') return 'READ_ONLY';
-    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE'};
+    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
     const match = /^ERR settings ([a-z]+)$/.exec(line);
     if (match) return errors[match[1]] || 'PROTOCOL';
     if (line.startsWith('ERR settings') || line === RX.unknown) return 'PROTOCOL';
@@ -786,6 +810,45 @@
         if (line.startsWith('Reply=') || line === 'Quick replies unavailable.' || line === RX.unknown) return rejected('PROTOCOL');
       });
     }
+    async _readNetworkSetting(session,kind,command='settings '+kind) {
+      return this._exchange(session,command,line=>{
+        // Feature discovery is nonfatal on older releases; no version guessing.
+        if(line===RX.unknown||line==='ERR settings unsupported'||command==='settings '+kind&&line==='ERR settings invalid')return rejected('SETTINGS_UNSUPPORTED');
+        const error=settingsError(line);
+        if(error){if(error==='READ_ONLY'){session.readOnly=true;if(this._state.status)this._setStatus({...this._state.status,readOnly:true});}return rejected(error);}
+        const value=parseNetworkSetting(line,kind);if(value)return success(value);
+        if(line.startsWith('OK settings'))return rejected('PROTOCOL');
+      });
+    }
+    async loadNetworkSetting(kind) {
+      if(!['radio','advert'].includes(kind))throw failure('SETTINGS_INVALID');
+      return this._operate(async session=>{
+        try{return await this._readNetworkSetting(session,kind);}
+        catch(error){if(['TIMEOUT','PROTOCOL','SERIAL_ERROR','DISCONNECTED'].includes(error.code)&&this._current(session))this._stateChanged({verified:false});throw error;}
+      });
+    }
+    async saveNetworkSetting(kind,values) {
+      if(!networkValuesValid(kind,values))throw failure('SETTINGS_INVALID');
+      return this._operate(async session=>{
+        const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];
+        let acknowledged=false;
+        try{
+          const before=await this._readNetworkSetting(session,kind);
+          if(kind==='radio')values={...values,path_bytes:before.path_bytes};
+          const command='settings '+kind+' set '+keys.map(k=>values[k]).join(' ');
+          const ack=await this._readNetworkSetting(session,kind,command);acknowledged=true;
+          if(keys.some(k=>ack[k]!==values[k]))throw failure('PROTOCOL');
+          const saved=await this._readNetworkSetting(session,kind);
+          if(keys.some(k=>saved[k]!==values[k])||kind==='radio'&&(saved.tx_dbm!==before.tx_dbm||saved.repeat!==before.repeat))throw failure('PROTOCOL');
+          return saved;
+        }catch(error){
+          if(error.code==='RADIO_RESTORE'&&this._current(session))this._stateChanged({verified:false});
+          if(acknowledged||['TIMEOUT','SERIAL_ERROR','DISCONNECTED','PROTOCOL'].includes(error.code)){
+            if(this._current(session))this._stateChanged({verified:false});throw failure('SETTINGS_UNCERTAIN');
+          }throw error;
+        }
+      },{mutate:true});
+    }
     async loadQuickReplies() {
       return this._operate(async session => {
         if (!this._state.quickRepliesSupported) throw failure('REPLIES_UNAVAILABLE');
@@ -823,5 +886,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, measuredMilliVolts });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
 }));

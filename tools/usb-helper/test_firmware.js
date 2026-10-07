@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
 const {verify,PROFILES} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
-const VERSION = '0.12';
+const VERSION = '0.13';
 const sha = data => createHash('sha256').update(data).digest('hex');
 
 function application(profile, source = COMMIT.slice(0,8), appendedHash = true, version = VERSION) {
@@ -54,8 +54,8 @@ test('preflight validates all six profiles and reconstructs split UF2 markers', 
   }
 });
 
-test('preflight retains 0.09 and 0.10 release compatibility for all six profiles', async()=>{
-  for(const version of ['0.09','0.10']) for(const profile of PROFILES) {
+test('preflight retains 0.09 through 0.12 release compatibility for all six profiles', async()=>{
+  for(const version of ['0.09','0.10','0.11','0.12']) for(const profile of PROFILES) {
     const result=await verify(fixture(profile.id,false,undefined,version).args());
     assert.equal(result.board,profile.label);
   }

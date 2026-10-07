@@ -27,6 +27,9 @@
     stale:'Расчёт устарел. Прочитайте настройки и повторите расчёт.',
     source:'Запустите ProMicro от АКБ, дождитесь измерения, подключите USB без перезапуска и рассчитайте поправку в течение 2 минут.',
     measurement:'Не удалось получить пригодный замер. Проверьте питание ноды.',
+    radio:'Радио отклонило параметры. Изменение не подтверждено; прочитайте состояние ноды.',
+    restore:'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
+    repeat:'Включённая ретрансляция несовместима с выбранной частотой. Помощник не отключает её автоматически; измените настройку на ноде.',
     range:'Значение выходит за допустимые границы платы.',
     transport:'Операция недоступна через этот транспорт. Настраивайте Wi-Fi по BLE или USB.',
     unconfigured:'Сначала настройте и сохраните подключение.',notready:'Нода ещё не готова к этой операции.',
@@ -179,7 +182,7 @@
       if(this.state.busy||this.closing)throw fail('BUSY');
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
-      mutate=mutate||/^ui (set |test$|adc (apply |reset$)|wifi (?!status$)|mode (?!status$))/.test(command);
+      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |reset$)|wifi (?!status$)|mode (?!status$))/.test(command);
       if(mutate&&this.state.hello.write!=='1')throw fail('DENIED');
       validateCommand(command);this.update({busy:true});
       try{const reply=await this.command(command);this.audit(mutate?'write':'read');return reply;}

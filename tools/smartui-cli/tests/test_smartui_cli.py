@@ -110,7 +110,8 @@ class CliTests(unittest.TestCase):
     def test_readonly_infers_writes(self):
         client, board = self.connected(readonly=True)
         for command in ("ui set volume 2", "ui test", "ui adc apply 7", "ui adc reset",
-                        "ui wifi begin", "ui wifi password 74657374", "ui mode ble"):
+                        "ui wifi begin", "ui wifi password 74657374", "ui mode ble",
+                        "ui radio set 868731 62500 7 7 2", "ui advert set 120"):
             before = len(board.requests)
             with self.assertRaises(CliError) as e:
                 client.execute(command)

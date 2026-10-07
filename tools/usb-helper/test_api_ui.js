@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:url'),{chromium}=require('playwright');
 const {installApiMock}=require('./test_api_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_1.5.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_1.6.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -47,11 +47,72 @@ test('CLI settings-only handshake, one reader, hidden unsupported hardware',asyn
     await p.locator('#helper-mode').selectOption('console');assert.equal(await p.locator('#device-section').isVisible(),true);
   }finally{await f.close();}
 });
+
+test('city preset confirmation, atomic apply and readback preserve power/repeat/path; advert intervals match node',async()=>{
+  const f=await fixture();try{const p=f.page;await connect(p);
+    await p.locator('#preset-search').fill('Омск');
+    assert.ok(await p.locator('#preset-city option').count()>=2);
+    await p.locator('#preset-city').selectOption({index:1});
+    assert.match(await p.locator('#preset-preview').textContent(),/МГц/);
+    assert.equal(await p.evaluate(()=>window.__apiMock.commands.some(c=>c.startsWith('ui radio set'))),false);
+    await p.locator('#preset-apply').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>window.__apiMock.commands.some(c=>c.startsWith('ui radio set'))),false);
+    // Change path length on the node after preview; applying a city must keep it.
+    await p.evaluate(()=>window.__apiMock.radio.path_bytes=3);
+    await p.locator('#preset-apply').click();await p.locator('#confirm-yes').click();
+    await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('прочитан обратно'));
+    const result=await p.evaluate(()=>({radio:window.__apiMock.radio,city:SmartUiPresets.get(document.getElementById('preset-city').value),commands:window.__apiMock.commands}));
+    assert.equal(result.radio.freq_khz,result.city.frequencyKHz);assert.equal(result.radio.bw_hz,result.city.bandwidthHz);
+    assert.equal(result.radio.path_bytes,3);assert.equal(result.radio.tx_dbm,20);assert.equal(result.radio.repeat,0);
+    assert.equal(result.commands.filter(c=>c.startsWith('ui radio set')).length,1);
+    assert.deepEqual(await p.locator('#advert-interval option').evaluateAll(options=>options.map(o=>Number(o.value))),[0,15,30,60,120,180]);
+    await p.locator('#advert-interval').selectOption('120');await p.locator('#advert-save').click();await p.locator('#confirm-yes').click();
+    await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('Интервал автоанонса сохранён'));
+    assert.equal(await p.evaluate(()=>window.__apiMock.advert.interval_min),120);
+    assert.equal(await p.evaluate(()=>window.__apiMock.commands.filter(c=>c==='ui advert set 120').length),1);
+    await p.locator('#preset-search').fill('не существующий город');assert.equal(await p.locator('#preset-apply').isDisabled(),true);
+  }finally{await f.close();}
+});
+
+test('old firmware and readonly retain other controls, preset failures never fake success',async()=>{
+  for(const options of [{network:false},{readonly:true},{}]){
+    const f=await fixture(options);try{const p=f.page;await connect(p);await p.locator('#preset-city').selectOption({index:1});
+      if(options.network===false||options.readonly){assert.equal(await p.locator('#preset-apply').isDisabled(),true);assert.equal(await p.locator('#advert-save').isDisabled(),true);assert.equal(await p.locator('#api-settings-load').isDisabled(),false);}
+      else{await p.evaluate(()=>window.__apiMock.networkError='repeat');await p.locator('#preset-apply').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>document.getElementById('radio-status').dataset.kind==='error');assert.match(await p.locator('#radio-status').textContent(),/ретрансляция несовместима/);assert.equal(await p.evaluate(()=>window.__apiMock.radio.freq_khz),869525);assert.equal(await p.evaluate(()=>window.__apiMock.commands.filter(c=>c.startsWith('ui radio set')).length),1);}
+    }finally{await f.close();}
+  }
+});
+
+test('radio ACK lost: no automatic retry and writes blocked until reconnect',async()=>{
+  const f=await fixture({clock:true});try{const p=f.page;await connect(p);await p.locator('#preset-city').selectOption({index:1});await p.locator('#preset-apply').click();
+    await p.evaluate(()=>{const original=window.__apiMock.reply;window.__apiMock.reply=function(tag,text){if(this.commands.at(-1).startsWith('ui radio set'))return;original.call(this,tag,text);};});
+    await p.locator('#confirm-yes').click();await p.waitForFunction(()=>window.__apiMock.commands.some(c=>c.startsWith('ui radio set')));await p.clock.runFor(6500);
+    assert.equal(await p.locator('#preset-apply').isDisabled(),true);assert.match(await p.locator('#radio-status').textContent(),/неизвестен/);
+    assert.equal(await p.evaluate(()=>window.__apiMock.commands.filter(c=>c.startsWith('ui radio set')).length),1);
+  }finally{await f.close();}
+});
+
+test('successful radio ACK followed by readback error is uncertain and blocks writes',async()=>{
+  const f=await fixture();try{const p=f.page;await connect(p);await p.locator('#preset-city').selectOption('OMS');
+    await p.evaluate(()=>{const original=window.__apiMock.reply;window.__apiMock.reply=function(tag,text){if(this.commands.at(-1).startsWith('ui radio set'))this.afterRadioSave=true;else if(this.afterRadioSave&&this.commands.at(-1)==='ui radio')text='ERR ui busy';original.call(this,tag,text);};});
+    await p.locator('#preset-apply').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>document.getElementById('transport-state').textContent.includes('Результат неизвестен'));
+    assert.equal(await p.locator('#preset-apply').isDisabled(),true);assert.equal(await p.locator('#api-settings-load').isDisabled(),true);assert.match(await p.locator('#radio-status').textContent(),/не подтверждена/);
+    assert.equal(await p.evaluate(()=>window.__apiMock.commands.filter(c=>c.startsWith('ui radio set')).length),1);
+  }finally{await f.close();}
+});
 test('desktop/mobile geometry and simulated screenshots',async()=>{
   const f=await fixture();try{const p=f.page;await connect(p);
-    await p.evaluate(()=>{scrollTo(0,0);const badge=document.createElement('div');badge.textContent='Симуляция USB · тестовые данные';badge.style.cssText='position:fixed;right:12px;bottom:12px;z-index:1000;background:#203744;color:#edf2f7;border:1px solid #91b8c1;border-radius:7px;padding:7px 10px;font:12px system-ui;';document.body.append(badge);});
+    await p.evaluate(()=>{scrollTo(0,0);const badge=document.createElement('div');badge.id='simulation-watermark';badge.textContent='Симуляция USB · тестовые данные';badge.style.cssText='position:fixed;right:12px;bottom:12px;z-index:1000;background:#203744;color:#edf2f7;border:1px solid #91b8c1;border-radius:7px;padding:7px 10px;font:12px system-ui;';document.body.append(badge);});
+    const cityScreenshot=async name=>{
+      await p.evaluate(()=>{document.getElementById('simulation-watermark').hidden=true;const badge=document.createElement('p');badge.id='city-simulation-watermark';badge.textContent='Симуляция USB · тестовые данные';badge.style.cssText='display:block;margin:18px 0 0;padding:9px 12px;border:1px solid #627779;border-radius:9px;color:#b0c3c5;font:12px/1.5 system-ui;text-align:center;';document.getElementById('radio-section').append(badge);});
+      await p.locator('#radio-section').screenshot({path:path.join(output,name)});
+      await p.evaluate(()=>{document.getElementById('city-simulation-watermark').remove();document.getElementById('simulation-watermark').hidden=false;});
+    };
+    await p.locator('#preset-city').selectOption('OMS');
     await geometry(p);await p.screenshot({path:path.join(output,'dashboard-desktop.png'),fullPage:false});
-    for(const width of [320,390,730,1040]){await p.setViewportSize({width,height:1000});await geometry(p);if(width===390){await p.locator('#api-settings').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(output,'dashboard-mobile.png'),fullPage:false});}}
+    await cityScreenshot('radio-desktop.png');
+    for(const width of [320,390,730,1040]){await p.setViewportSize({width,height:1000});await geometry(p);if(width===390){await cityScreenshot('radio-mobile.png');await p.locator('#api-settings').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(output,'dashboard-mobile.png'),fullPage:false});}}
+    await p.locator('#preset-search').focus();await p.keyboard.press('Tab');assert.equal(await p.evaluate(()=>document.activeElement.id),'preset-city');
   }finally{await f.close();}
 });
 test('per-field save/readback keeps another unsaved field',async()=>{

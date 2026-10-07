@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PublicReleasePolicyTests(unittest.TestCase):
     def test_one_public_version_for_six_boards_and_nine_images(self):
-        self.assertEqual((VERSION, TAG), ("0.12", "smartui-0.12"))
+        self.assertEqual((VERSION, TAG), ("0.13", "smartui-0.13"))
         self.assertEqual(DISTRIBUTION, "public")
         self.assertEqual(PUBLICATION, {
             "draft": False, "prerelease": False, "make_latest": True,
@@ -24,19 +24,19 @@ class PublicReleasePolicyTests(unittest.TestCase):
         self.assertEqual(len(NRF_ENVS) + len(ESP_ENVS), 6)
         self.assertEqual(len(set(FIRMWARE_NAMES)), 9)
         self.assertEqual(ASSET_COUNT, 17)
-        self.assertTrue(all("_UI_0.12" in name for name in FIRMWARE_NAMES))
-        self.assertEqual(ARCHIVE_NAME, "SmartUI_0.12_all-boards.zip")
-        self.assertEqual(NOTES_NAME, "RELEASE_NOTES_SmartUI_0.12_RU.md")
-        self.assertIn("Smart UI 0.12", (ROOT / NOTES_NAME).read_text(encoding="utf-8"))
+        self.assertTrue(all("_UI_0.13" in name for name in FIRMWARE_NAMES))
+        self.assertEqual(ARCHIVE_NAME, "SmartUI_0.13_all-boards.zip")
+        self.assertEqual(NOTES_NAME, "RELEASE_NOTES_SmartUI_0.13_RU.md")
+        self.assertIn("Smart UI 0.13", (ROOT / NOTES_NAME).read_text(encoding="utf-8"))
         validate_release_notes((ROOT / NOTES_NAME).read_text(encoding="utf-8"))
         build_info = (ROOT / "src/helpers/SmartUiBuildInfo.h").read_text(encoding="utf-8")
-        self.assertIn('#define SMARTUI_VERSION "0.12"', build_info)
+        self.assertIn('#define SMARTUI_VERSION "0.13"', build_info)
 
     def test_public_title_and_firmware_spelling_require_exact_version(self):
-        for title in ("# Smart UI 0.12 — release", "# SmartUI 0.12"):
+        for title in ("# Smart UI 0.13 — release", "# SmartUI 0.13"):
             validate_release_notes(title)
-        for title in ("", "Smart UI 0.11", "SmartUI 0.120", "Smart UI 0.12.1",
-                      "SmartUI 0.12 RELEASE_FINALIZATION"):
+        for title in ("", "Smart UI 0.11", "SmartUI 0.130", "Smart UI 0.13.1",
+                      "SmartUI 0.13 RELEASE_FINALIZATION"):
             with self.subTest(title=title), self.assertRaises(ValueError):
                 validate_release_notes(title)
 
@@ -45,8 +45,8 @@ class PublicReleasePolicyTests(unittest.TestCase):
                       "heltec_v4", "heltec_wireless_paper"):
             with self.subTest(board=board):
                 source = (ROOT / "variants" / board / "platformio.ini").read_text(encoding="utf-8")
-                self.assertIn('SMARTUI_RELEASE_LABEL=\'"0.12"\'', source)
-                self.assertIn("SmartUI 0.12", source)
+                self.assertIn('SMARTUI_RELEASE_LABEL=\'"0.13"\'', source)
+                self.assertIn("SmartUI 0.13", source)
                 self.assertNotIn("SmartUI 0.06-test.2", source)
                 self.assertNotIn("PRIVATE_RELAY", source)
 
@@ -57,12 +57,12 @@ class PublicReleasePolicyTests(unittest.TestCase):
                       "github.event.repository.private == false",
                       "github.event_name == 'workflow_dispatch'",
                       "inputs.publish_experimental",
-                      "github.ref == 'refs/heads/smartui-0.12'",
+                      "github.ref == 'refs/heads/smartui-0.13'",
                       "needs: release-gate"):
             self.assertIn(guard, publish)
         self.assertIn('.full_name == "YaziAranea/MeshCore" and .private == false and .visibility == "public"', publish)
         self.assertEqual(publish.count("          check_public_target\n"), 2)
-        self.assertLess(publish.index("          check_public_target\n"), publish.index('tag="smartui-0.12"'))
+        self.assertLess(publish.index("          check_public_target\n"), publish.index('tag="smartui-0.13"'))
         self.assertLess(publish.rindex("          check_public_target\n"), publish.index('gh release edit "$tag"'))
         self.assertIn("--prerelease=false", publish)
         self.assertIn("--latest=true", publish)

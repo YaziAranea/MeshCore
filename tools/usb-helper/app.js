@@ -40,7 +40,7 @@
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
   ];
-  // Exact public 0.08..0.12 notify_tones order; the package test checks source parity.
+  // Exact public 0.08..0.13 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
   const addOptions = (select, options) => {
@@ -75,7 +75,7 @@
     $("settings-capabilities").textContent=caps ? "Поддержка сборки: "+Object.entries(names).filter(([key])=>caps[key]).map(([,name])=>name).join(", ")+". "+(caps.display ? "Драйвер экрана активен." : "Настройка без дисплея.") : "Новые настройки доступны в SmartUI 0.08 с протоколом Settings 1. Возможности определяются ответом ноды, не её названием.";
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));
@@ -286,7 +286,7 @@
   $("cancel").onclick = () => run(() => client.cancelWifi());
   for (const mode of Object.keys(modeNames)) $("mode-" + mode).onclick = async () => {
     if (state.status?.mode === mode) return;
-    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.12 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
+    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.13 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
     if (await confirmAction(message)) await run(() => client.setMode(mode));
   };
   $("forget").onclick = async () => {

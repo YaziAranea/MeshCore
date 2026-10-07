@@ -51,7 +51,7 @@ def integration():
 #include <string>
 #include <vector>
 #define SMARTUI_CONNECTION_SELECTOR 1
-#define SMARTUI_VERSION "0.12"
+#define SMARTUI_VERSION "0.13"
 #define FIRMWARE_VERSION "v1.17.1"
 #define MAX_FRAME_SIZE 176
 #define PUB_KEY_SIZE 32
@@ -104,7 +104,7 @@ static std::string send(MyMesh& mesh, Serial& serial, const std::string& command
 int main() {
   Serial serial; MyMesh mesh(&serial);
   assert(send(mesh, serial, "board") == "Test board");
-  assert(send(mesh, serial, "AB|ver") == "AB|SmartUI 0.12; firmware=v1.17.1");
+  assert(send(mesh, serial, "AB|ver") == "AB|SmartUI 0.13; firmware=v1.17.1");
   assert(send(mesh, serial, "get radio") == "> 869.161,62.500,7,7");
   strcpy(mesh._prefs.node_name, "\xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
   assert(send(mesh, serial, "get name") == "> \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
@@ -155,7 +155,7 @@ def main_dispatch_integration():
 #include <cstdio>
 #include <cstring>
 #include <string>
-#define SMARTUI_VERSION "0.12"
+#define SMARTUI_VERSION "0.13"
 static unsigned controller_calls, controller_resets, backend_calls, backend_resets;
 static bool backend_allowed, backend_handled = true;
 static std::string last_command;
@@ -190,6 +190,14 @@ bool handleSmartUiSettingsCli(DeviceSettings&, const char* command, char* reply,
 }
 }
 static smartui::DeviceSettings cli_device_settings;
+struct RadioSettings {
+  bool handle(const char* command, char* reply, size_t capacity, bool allowed) {
+    if (strcmp(command, "ui radio") != 0 && strcmp(command, "ui advert") != 0 &&
+        strncmp(command, "ui radio set ", 13) != 0) return false;
+    snprintf(reply, capacity, "OK ui radio-backend write=%u", allowed ? 1U : 0U);
+    return true;
+  }
+} radio_settings;
 ''' + body + r'''
 static std::string call(const char* command, bool expected_handled = true) {
   char reply[157] = {};
@@ -208,6 +216,10 @@ int main() {
   assert(controller_calls == 0 && backend_calls == 0);
   assert(call("ui connection") == "OK ui connection write=0");
   assert(controller_calls == 1 && backend_calls == 0);
+  assert(call("ui radio") == "OK ui radio-backend write=0");
+  assert(call("ui advert") == "OK ui radio-backend write=0");
+  assert(call("ui radio set 869161 62500 7 7 2") == "OK ui radio-backend write=0");
+  assert(backend_calls == 0);
 
   connection_controller.busy = true;
   for (const char* command : {"ui caps v", "ui get battery_mv", "ui melody 0"}) {
@@ -240,6 +252,83 @@ int main() {
   assert(backend_resets == old_backend_resets + 1 &&
          controller_resets == old_controller_resets + 1);
   puts("PASS production main CMD66 dispatcher permissions, busy/FEM gates and session reset");
+}
+'''
+
+
+def radio_hooks_integration():
+    source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
+    mesh = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    controller = (ROOT / "examples/companion_radio/ConnectionController.cpp").read_text(encoding="utf-8")
+    assert "radio_settings.handle(command, reply, capacity, allow_mutation)" in scope(source, "static bool handleCompanionDeviceSettings(")
+    assert "handleDeviceSettingsCommand(line);" in scope(controller, "void ConnectionController::handleConsoleLine(")
+    assert "smartui::validAutoAdvertInterval(mins)" in scope(mesh, "static bool isValidAutoAdvertIntervalMins(")
+    assert "sendZeroHop(pkt);" in scope(mesh, "bool MyMesh::advert()")
+    body = "\n".join(scope(source, signature) for signature in (
+        "static bool saveDeviceSettings(", "static smartui::RadioSettingsState readRadioSettings(",
+        "static void writeRadioSettings(", "static bool validateRadioSettings(",
+        "static bool applyRadioSettings(", "static bool repeatFrequencyAllowed(",
+        "static void applyAdvertSettings(", "static bool radioSettingsBusy(",
+        "static bool radioSettingsHealthy("))
+    start = source.index("  smartui::RadioSettingsHooks radio_hooks;")
+    stop = source.index("  radio_settings.begin(radio_hooks);", start) + len("  radio_settings.begin(radio_hooks);")
+    return r'''
+#include "RadioSettings.h"
+#include <helpers/radiolib/LoRaConfigValidation.h>
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <string>
+struct NodePrefs {
+  float freq=869.161f,bw=62.5f; uint8_t sf=7,cr=7,path_hash_mode=0;
+  int8_t tx_power_dbm=20; uint16_t auto_advert_interval_mins=30;
+  bool repeat=false; double node_lat=12.0,node_lon=34.0;
+  char identity[16]="leave-alone";
+  bool isRepeatEn() const { return repeat; }
+};
+struct Mesh {
+  NodePrefs prefs, disk;
+  bool save_ok=true, busy=false, healthy=true;
+  unsigned applies=0, timers=0;
+  NodePrefs* getNodePrefs() { return &prefs; }
+  bool savePrefs() { prefs.node_lat=56; prefs.node_lon=78; if(save_ok) disk=prefs; return save_ok; }
+  bool validateLocalRadioSettings(float f,float b,uint8_t s,uint8_t c) { return validSX1262LoRaParams(f,b,s,c); }
+  bool applyLocalRadioSettings(float f,float b,uint8_t s,uint8_t c) { ++applies;return validSX1262LoRaParams(f,b,s,c); }
+  bool localRepeatFrequencyAllowed(uint32_t khz) const { return khz == 869495; }
+  void applyLocalAdvertInterval() { ++timers; }
+  bool localRadioSettingsBusy() const { return busy; }
+  bool localRadioSettingsHealthy() const { return healthy; }
+} the_mesh;
+struct Controller { bool busy=false; bool deviceApiBusy() const {return busy;} } connection_controller;
+static smartui::RadioSettings radio_settings;
+''' + body + r'''
+static std::string call(const char* command,bool writable=true) {
+  char reply[157]={}; assert(radio_settings.handle(command,reply,sizeof(reply),writable)); return reply;
+}
+int main() {
+''' + source[start:stop] + r'''
+  assert(call("ui radio").find("path_bytes=1")!=std::string::npos);
+  assert(call("settings radio set 868731 125000 9 8 3").find("path_bytes=3")!=std::string::npos);
+  assert(the_mesh.prefs.path_hash_mode==2 && the_mesh.disk.path_hash_mode==2);
+  assert(the_mesh.prefs.tx_power_dbm==20 && !the_mesh.prefs.repeat);
+  assert(strcmp(the_mesh.prefs.identity,"leave-alone")==0 && the_mesh.timers==0);
+  assert(call("ui advert set 120")=="OK ui advert interval_min=120");
+  assert(the_mesh.prefs.auto_advert_interval_mins==120 && the_mesh.timers==1);
+  assert(call("settings advert")=="OK settings advert interval_min=120");
+  assert(call("settings advert set 120")=="OK settings advert interval_min=120" && the_mesh.timers==1);
+  connection_controller.busy=true;
+  assert(call("ui radio set 869161 62500 7 7 1")=="ERR ui busy");
+  connection_controller.busy=false; the_mesh.busy=true;
+  assert(call("settings radio set 869161 62500 7 7 1")=="ERR settings busy");
+  the_mesh.busy=false; the_mesh.save_ok=false;
+  the_mesh.prefs.node_lat=12;the_mesh.prefs.node_lon=34;
+  assert(call("settings radio set 869161 62500 7 7 1")=="ERR settings storage");
+  assert(the_mesh.prefs.node_lat==12 && the_mesh.prefs.node_lon==34);
+  assert(the_mesh.prefs.path_hash_mode==2 && the_mesh.prefs.freq==868.731f);
+  assert(call("settings advert set 30")=="ERR settings storage");
+  assert(the_mesh.prefs.auto_advert_interval_mins==120 && the_mesh.timers==1);
+  assert(the_mesh.prefs.node_lat==12 && the_mesh.prefs.node_lon==34);
+  puts("PASS production RadioSettings hooks, USB/CLI routing, persisted path bytes, scheduler, location rollback");
 }
 '''
 
@@ -315,14 +404,19 @@ def main():
         main_adapter.write_text(main_dispatch_integration(), encoding="utf-8")
         queue = Path(directory) / "cli_queue.cpp"
         queue.write_text(queue_integration(), encoding="utf-8")
+        radio_hooks = Path(directory) / "radio_hooks.cpp"
+        radio_hooks.write_text(radio_hooks_integration(), encoding="utf-8")
         compiler = shutil.which("g++") or shutil.which("clang++")
         flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1"]
         if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
             flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
         include = ROOT / "examples/companion_radio"
-        for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue):
+        for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue,
+                      ROOT / "tools/radio_settings_test.cpp", radio_hooks):
             output = Path(directory) / suite.stem
             paths = [suite, include / "SmartUiCli.cpp"]
+            if suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp"):
+                paths += [include / "RadioSettings.cpp"]
             if compiler:
                 build = [compiler, *flags, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]
                 execute = [str(output)]
