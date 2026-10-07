@@ -8,19 +8,25 @@ function installApiMock(options={}) {
     settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...options.settings},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',adcService:{supported:1,active:0,remaining_ms:0,external:1},adcServiceDeadline:0,
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
+    meshcore:{name:'Тестовая нода',tx:'20',af:'1',dutycycle:'50.0%',rxdelay:'0','multi.acks':'0','path.hash.mode':'1','radio.rxgain':'off','tz.offset':'0',freq:'869.525','wifi.status':'connected','wifi.ip':'192.168.1.2'},
     emit(packet){if(this.closed)return;const bytes=Uint8Array.from([62,packet.length&255,packet.length>>8,...packet]);
       if(options.fragment===false)this.controller.enqueue(bytes);else{this.controller.enqueue(bytes.slice(0,2));this.controller.enqueue(bytes.slice(2,7));this.controller.enqueue(bytes.slice(7));}},
     reply(tag,text){this.emit(Uint8Array.from([29,...enc.encode((this.wrong?'ZZ':tag)+'|'+text)]));},
     handle(request){
       this.packets.push(Array.from(request));
-      if(request[0]===22){this.emit(Uint8Array.of(13,13));return;}
+      if(request[0]===22){this.emit(Uint8Array.of(13,options.meshcore?14:13));return;}
       if(request[0]===40){this.emit(Uint8Array.from([21,...enc.encode(options.discovery??(options.oldFirmware?'smartui_api:1':'smartui_cli:1'))]));return;}
       if(request[0]!==66)throw new Error('Unexpected protocol opcode');
       const raw=new TextDecoder().decode(request.slice(1)),tag=raw.slice(0,2),cmd=raw.slice(3);this.commands.push(cmd);
       if(this.drop)return;
       if(this.errorNext){const e=this.errorNext;this.errorNext=null;this.reply(tag,e);return;}
       let text;
-      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.14 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0';
+      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.14 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'');
+      else if(options.meshcore===1&&cmd.startsWith('get ')&&Object.hasOwn(this.meshcore,cmd.slice(4)))text='> '+this.meshcore[cmd.slice(4)];
+      else if(options.meshcore===1&&cmd.startsWith('set ')){
+        if(options.readonly)text='Error: readonly';
+        else{const split=cmd.indexOf(' ',4),key=cmd.slice(4,split),value=cmd.slice(split+1);this.meshcore[key]=value;text=key==='pin'?'> pin is now '+value:key==='dutycycle'?'OK - '+value+'%':'OK';}
+      }
       else if(/^ui (radio|advert)( |$)/.test(cmd)){
         const [,kind,action,...values]=cmd.split(' ');
         if(options.network===false)text='ERR ui unsupported';

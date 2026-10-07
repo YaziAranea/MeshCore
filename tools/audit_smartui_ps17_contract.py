@@ -960,8 +960,8 @@ check(
 )
 
 check(
-    "Local Companion CLI backport retains protocol 13 and rejects archived C9",
-    '#define FIRMWARE_VER_CODE 13' in mymesh_h
+    "Companion CLI claims protocol 14 without remote execution and rejects archived C9",
+    '#define FIRMWARE_VER_CODE 14' in mymesh_h
     and 'vars.append("smartui_cli", "1")' in mymesh
     and 'vars.append("smartui_api"' not in mymesh
     and 'if (cmd_frame[0] == 201)' in companion_handler

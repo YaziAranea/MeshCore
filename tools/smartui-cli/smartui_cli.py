@@ -4,9 +4,19 @@ import threading
 
 ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 READ_COMMANDS = {"board", "ver", "get name", "get radio"}
+MESHCORE_READ_COMMANDS = {"get freq", "get tx", "get af", "get dutycycle", "get rxdelay",
+                         "get multi.acks", "get path.hash.mode", "get radio.rxgain",
+                         "get tz.offset", "get wifi.status", "get wifi.ip"}
+DECIMAL = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+MESHCORE_SET = re.compile(
+    r"set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|"
+    r"(?:af|dutycycle|rxdelay|tz\.offset) " + DECIMAL +
+    r"|radio\.rxgain (?:on|off)|radio " + DECIMAL + "," + DECIMAL + r",[-+]?\d+,[-+]?\d+)",
+    re.ASCII)
 ERROR_TEXT = {
     "input": "Invalid local command.",
     "unsupported": "smartui_cli:1 not discovered; use archived Helper 1.4 for 0.11.",
+    "meshcore_unsupported": "meshcore=1 not discovered in ui hello; use supported ui commands.",
     "busy": "Another command is pending.",
     "closed": "Transport is closed.",
     "timeout": "No reply; result unknown. Reconnect and read state, do not retry writes.",
@@ -25,13 +35,23 @@ class CliError(Exception):
 
 
 def encode_command(tag, command):
-    if not isinstance(command, str) or not re.fullmatch(r"[ -~]{2,156}", command):
+    if not isinstance(command, str) or len(command) < 2 or re.search(r"[\x00-\x1f\x7f]", command):
         raise CliError("input")
-    if not command.startswith("ui ") and command not in READ_COMMANDS:
+    try:
+        encoded = command.encode("utf-8")
+    except UnicodeError:
+        raise CliError("input") from None
+    if len(encoded) > 156:
+        raise CliError("input")
+    if command.startswith("set name "):
+        if not MESHCORE_SET.fullmatch(command):
+            raise CliError("input")
+    elif not command.isascii() or not (command.startswith("ui ") or command in READ_COMMANDS or
+                                        command in MESHCORE_READ_COMMANDS or MESHCORE_SET.fullmatch(command)):
         raise CliError("input")
     if not re.fullmatch(r"[0-9A-Za-z]{2}", tag):
         raise CliError("input")
-    return b"\x42" + tag.encode("ascii") + b"|" + command.encode("ascii")
+    return b"\x42" + tag.encode("ascii") + b"|" + encoded
 
 
 def decode_reply(packet, tag, ascii_only=True):
@@ -45,7 +65,7 @@ def decode_reply(packet, tag, ascii_only=True):
         raise CliError("protocol")
     if text == "Unknown command":
         raise CliError("failed", "unsupported")
-    if text.startswith("Error: "):
+    if re.match(r"(?:Error[:,]|ERROR:)", text):
         raise CliError("failed")
     error = re.fullmatch(r"ERR ui ([a-z_]+)", text)
     if error:
@@ -94,7 +114,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return bool(re.match(r"ui (set |test$|(?:radio|advert) set |adc (set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
+    return command.startswith("set ") or bool(re.match(r"ui (set |test$|(?:radio|advert) set |adc (set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:
@@ -170,6 +190,9 @@ class CliClient:
                 raise CliError("closed")
             if self.uncertain:
                 raise CliError("uncertain")
+            encode_command("00", command)  # Validate before capability/permission checks; no I/O.
+            if not command.startswith("ui ") and command not in READ_COMMANDS and self.hello.get("meshcore") != "1":
+                raise CliError("meshcore_unsupported")
             if mutates(command) and self.hello["write"] != "1":
                 raise CliError("readonly")
             return self._command(command)

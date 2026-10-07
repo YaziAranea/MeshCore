@@ -138,8 +138,8 @@ test('manual ADC CLI readback mismatch becomes local uncertainty, never false su
   }finally{await f.close();}
 });
 
-test('CLI settings-only handshake, one reader, hidden unsupported hardware',async()=>{
-  const f=await fixture();try{const p=f.page;await connect(p);
+test('protocol14 meshcore hello preserves CLI settings-only handshake, one reader and hardware gates',async()=>{
+  const f=await fixture({meshcore:1});try{const p=f.page;await connect(p);
     assert.equal(await p.locator('#helper-mode').isDisabled(),true);assert.equal(await p.locator('#device-section').isVisible(),false);
     for(const id of ['api-sync-enable','api-inbox','api-events','api-fetch'])assert.equal(await p.locator('#'+id).count(),0);
     assert.equal(await p.evaluate(()=>window.__apiMock.readerCount),1);assert.equal(await p.evaluate(()=>window.__apiMock.maxOpen),1);

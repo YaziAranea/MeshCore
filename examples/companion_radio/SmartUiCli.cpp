@@ -72,9 +72,11 @@ size_t SmartUiCli::handle(const uint8_t* request, size_t length,
         prefix_length = sizeof(prefix);
       }
     }
-    for (size_t i = 1; !error && i < length; ++i) {
-      if (request[i] < 0x20 || request[i] > 0x7e) error = "Error: invalid command";
-    }
+    // Upstream commands carry UTF-8 text (`set name Дача`). Control bytes,
+    // DEL and malformed sequences stay rejected; `ui ...` keeps its own ASCII
+    // checks in each handler.
+    if (!error && !validReplyText(reinterpret_cast<const char*>(request + 1), length - 1))
+      error = "Error: invalid command";
     if (!error) {
       const size_t command_length = length - 1 - prefix_length;
       if (!command_length) error = "Error: invalid command";

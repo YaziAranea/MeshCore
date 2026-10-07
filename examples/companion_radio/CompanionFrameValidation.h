@@ -69,7 +69,7 @@ enum CommandCode : uint8_t {
   kSetDefaultFloodScope = 63,
   kGetDefaultFloodScope = 64,
   kSendRawPacket = 65,
-  kRunCliCommand = 66,  // Local-only backport; firmware protocol stays v13.
+  kRunCliCommand = 66,  // Protocol v14 companion CLI (local only; no remote execution).
   // Experimental SmartUI extension.  44 remains an opt-in legacy alias only
   // when phone-GPS support is explicitly compiled in.
   kSetPhoneGps = 200,

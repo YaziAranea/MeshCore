@@ -2,6 +2,7 @@
 """Run production local CMD66 framing and MyMesh routing on the host."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,11 +24,15 @@ def integration():
     source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
     header = (ROOT / "examples/companion_radio/MyMesh.h").read_text(encoding="utf-8")
     main_source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
-    assert "#define FIRMWARE_VER_CODE 13" in header
+    assert "#define FIRMWARE_VER_CODE 14" in header
     assert 'vars.append("smartui_cli", "1")' in source
     assert 'vars.append("smartui_api"' not in source
     assert "handleSmartUiApiFrame(" not in source
     assert "onCLICommandRecv(" not in source  # Remote execution was not backported.
+    remote = scope(source, "void MyMesh::onCliCommandMessage(")
+    assert "queueMessage(from, TXT_TYPE_CLI_COMMAND" in remote
+    for runner in ("executeLocalCli", "executeMeshCoreCliCommand", "executeSmartUiCliCommand", "handleCommand"):
+        assert runner not in remote, runner  # A type-3 command from the mesh is only handed to the app.
     # The archived command-201 implementation may remain as inactive source,
     # but it must never regain a router, runtime ledger or UI callback in the
     # production entry point. Local unread/reminder state belongs to UITask.
@@ -66,6 +71,14 @@ static bool backend_handled = true;
 bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
   ++backend_calls; last_command = command;
   snprintf(reply, capacity, "%s", backend_reply.c_str()); return backend_handled;
+}
+static unsigned meshcore_calls;
+static std::string meshcore_reply = "OK", meshcore_command;
+static bool meshcore_handled;
+bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity) {
+  ++meshcore_calls; meshcore_command = command;
+  if (meshcore_handled) snprintf(reply, capacity, "%s", meshcore_reply.c_str());
+  return meshcore_handled;
 }
 struct Board {
   std::string name = "Test board";
@@ -110,11 +123,20 @@ int main() {
   assert(send(mesh, serial, "get name") == "> \xd0\xa2\xd0\xb5\xd1\x81\xd1\x82");
   board.name = std::string(170, 'b');
   assert(send(mesh, serial, "board") == "Error: response too long");
-  for (const char* command : {"erase", "rebuild", "set radio 869.161,62.5,7,7", "rm /prefs.json", "ui-extra", "ls"}) {
+  // Everything outside `ui` goes to the upstream-name dispatcher, which knows
+  // no rescue, filesystem or raw commands; the ui backend never sees them.
+  for (const char* command : {"erase", "rebuild", "rm /prefs.json", "ui-extra", "ls"}) {
     assert(send(mesh, serial, command) == "Unknown command");
-    assert(serial.output[0] == 29);
+    assert(serial.output[0] == 29 && meshcore_command == command);
   }
-  assert(backend_calls == 0);
+  assert(meshcore_calls == 5 && backend_calls == 0);
+  meshcore_handled = true;
+  assert(send(mesh, serial, "AA|set radio 869.161,62.5,7,7") == "AA|OK");
+  assert(meshcore_command == "set radio 869.161,62.5,7,7");
+  assert(send(mesh, serial, "set name \xd0\x94\xd0\xb0\xd1\x87\xd0\xb0") == "OK");
+  assert(meshcore_command == "set name \xd0\x94\xd0\xb0\xd1\x87\xd0\xb0");
+  meshcore_handled = false;
+  assert(meshcore_calls == 7 && backend_calls == 0);
   assert(send(mesh, serial, "AA|ui caps") == "AA|OK");
   assert(backend_calls == 1 && last_command == "ui caps");
   backend_reply = "OK ui mode target=usb state=pending";
@@ -216,7 +238,7 @@ static void fresh() {
 }
 int main() {
   fresh(); connection_controller.writable = false;
-  assert(call("ui hello").find("write=0 sync=0 events=0") != std::string::npos);
+  assert(call("ui hello").find("write=0 sync=0 events=0 meshcore=1") != std::string::npos);
   assert(controller_calls == 0 && backend_calls == 0);
   assert(call("ui connection") == "OK ui connection write=0");
   assert(controller_calls == 1 && backend_calls == 0);
@@ -350,6 +372,125 @@ int main() {
 '''
 
 
+def meshcore_hooks_integration():
+    source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
+    mesh = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    local = scope(mesh, "bool MyMesh::executeLocalCli(")
+    assert "return executeMeshCoreCliCommand(command, reply, capacity);" in local
+    assert local.index("executeSmartUiCliCommand") < local.index("executeMeshCoreCliCommand")
+    # Each upstream setter persists through the same rollback as its binary twin.
+    for setter in ("bool MyMesh::setLocalNodeName(", "bool MyMesh::setLocalBlePin(",
+                   "bool MyMesh::setLocalTuning(", "bool MyMesh::setLocalMultiAcks(",
+                   "bool MyMesh::setLocalPathHashMode(", "bool MyMesh::setLocalRxBoostedGain(",
+                   "bool MyMesh::setLocalTimezoneMinutes("):
+        assert "commitPrefsOrRollback(before)" in scope(mesh, setter), setter
+    assert "flushPendingStorage()" in scope(mesh, "void MyMesh::rebootLocal(")
+    body = "\n".join(scope(source, signature) for signature in (
+        "static smartui::MeshCoreCliResult cliResult(",
+        "static smartui::MeshCoreCliState readMeshCoreCliState(",
+        "static smartui::MeshCoreCliResult cliSetName(",
+        "static smartui::MeshCoreCliResult cliSetPin(",
+        "static smartui::MeshCoreCliResult cliSetTxPower(",
+        "static smartui::MeshCoreCliResult cliSetTuning(",
+        "static smartui::MeshCoreCliResult cliSetMultiAcks(",
+        "static smartui::MeshCoreCliResult cliSetPathHashMode(",
+        "static smartui::MeshCoreCliResult cliSetRxGain(",
+        "static smartui::MeshCoreCliResult cliSetTimezoneMinutes(",
+        "static bool cliRadioCommand(", "static smartui::MeshCoreCliResult cliReboot(",
+        "static smartui::MeshCoreCliResult cliPowerOff(", "static bool cliWifiStatus(",
+        "static bool cliBusy(", "bool executeMeshCoreCliCommand("))
+    start = source.index("  smartui::MeshCoreCliHooks meshcore_hooks;")
+    stop = source.index("  meshcore_cli.begin(meshcore_hooks);", start) + len("  meshcore_cli.begin(meshcore_hooks);")
+    return r'''
+#include "MeshCoreCli.h"
+#include "ConnectionTypes.h"
+#include <cassert>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#define MAX_LORA_TX_POWER 22
+struct NodePrefs {
+  float freq=869.618f,bw=62.5f; uint8_t sf=8,cr=8; int8_t tx_power_dbm=20;
+  float airtime_factor=1.0f,rx_delay_base=0; uint8_t multi_acks=0,path_hash_mode=1,rx_boosted_gain=0;
+  int16_t timezone_offset_minutes=330;
+};
+struct Mesh {
+  NodePrefs prefs; bool save_ok=true,radio_busy=false,gain_supported=true,flush_ok=true;
+  unsigned reboots=0; std::string name; uint32_t pin=1;
+  NodePrefs* getNodePrefs() { return &prefs; }
+  bool setLocalNodeName(const char* n) { if(save_ok) name=n; return save_ok; }
+  bool setLocalBlePin(uint32_t p) { if(save_ok) pin=p; return save_ok; }
+  bool setLocalTxPower(int8_t d) { if(save_ok) prefs.tx_power_dbm=d; return save_ok; }
+  bool setLocalTuning(float r,float a) { if(save_ok){prefs.rx_delay_base=r;prefs.airtime_factor=a;} return save_ok; }
+  bool setLocalMultiAcks(uint8_t c) { if(save_ok) prefs.multi_acks=c; return save_ok; }
+  bool setLocalPathHashMode(uint8_t m) { if(save_ok) prefs.path_hash_mode=m; return save_ok; }
+  bool setLocalRxBoostedGain(bool b,bool& s) { s=gain_supported; if(s&&save_ok) prefs.rx_boosted_gain=b; return s&&save_ok; }
+  bool setLocalTimezoneMinutes(int16_t m) { if(save_ok) prefs.timezone_offset_minutes=m; return save_ok; }
+  bool localRadioSettingsBusy() { return radio_busy; }
+  void rebootLocal() { ++reboots; }  // Returning stands for a failed flush.
+  bool flushPendingStorage() { return flush_ok; }
+} the_mesh;
+struct Board { unsigned power_offs=0; void powerOff() { ++power_offs; } } board;
+struct Controller {
+  bool writable=true,busy=false; CompanionStatus current;
+  CompanionStatus status() const { return current; }
+  bool deviceApiBusy() const { return busy; }
+  bool deviceApiWritesAllowed() const { return writable; }
+} connection_controller;
+struct RadioStub {
+  std::string last; bool allowed=false;
+  bool handle(const char* c,char* r,size_t cap,bool a) { last=c; allowed=a; snprintf(r,cap,"OK ui radio freq_khz=869618"); return true; }
+} radio_settings;
+static smartui::MeshCoreCli meshcore_cli;
+''' + body + r'''
+static std::string call(const char* command) {
+  char reply[157]={}; assert(executeMeshCoreCliCommand(command,reply,sizeof(reply))); return reply;
+}
+int main() {
+''' + source[start:stop] + r'''
+  assert(call("get tz.offset")=="> 5.5" && call("get tx")=="> 20" && call("get freq")=="> 869.618");
+  assert(call("set tx 21")=="OK" && the_mesh.prefs.tx_power_dbm==21);
+  assert(call("set tx 23")=="Error, must be -9 to 22" && the_mesh.prefs.tx_power_dbm==21);
+  assert(call("set name \xd0\x94\xd0\xb0\xd1\x87\xd0\xb0")=="OK" && the_mesh.name=="\xd0\x94\xd0\xb0\xd1\x87\xd0\xb0");
+  assert(call("set pin 654321")=="> pin is now 654321" && the_mesh.pin==654321);
+  assert(call("set af 2")=="OK" && the_mesh.prefs.airtime_factor==2 && the_mesh.prefs.rx_delay_base==0);
+  assert(call("set rxdelay 4")=="OK" && the_mesh.prefs.rx_delay_base==4 && the_mesh.prefs.airtime_factor==2);
+  assert(call("set multi.acks 1")=="OK" && the_mesh.prefs.multi_acks==1);
+  assert(call("set path.hash.mode 2")=="OK" && the_mesh.prefs.path_hash_mode==2);
+  assert(call("set tz.offset -3.5")=="OK" && the_mesh.prefs.timezone_offset_minutes==-210);
+  assert(call("set radio 869.618,62.5,8,8")=="OK");
+  assert(radio_settings.last=="ui radio set 869618 62500 8 8 3" && radio_settings.allowed);
+  the_mesh.radio_busy=true;
+  assert(call("set radio.rxgain on")=="Error: busy" && !the_mesh.prefs.rx_boosted_gain);
+  the_mesh.radio_busy=false; the_mesh.gain_supported=false;
+  assert(call("set radio.rxgain on")=="Error: unsupported" && !the_mesh.prefs.rx_boosted_gain);
+  the_mesh.gain_supported=true;
+  assert(call("set radio.rxgain on")=="OK" && the_mesh.prefs.rx_boosted_gain==1);
+  the_mesh.save_ok=false;
+  assert(call("set tx 10")=="Error: storage" && the_mesh.prefs.tx_power_dbm==21);
+  the_mesh.save_ok=true; connection_controller.writable=false;
+  assert(call("set tx 10")=="Error: readonly" && the_mesh.prefs.tx_power_dbm==21);
+  assert(call("set radio 869.618,62.5,8,8")=="OK" && !radio_settings.allowed);
+  connection_controller.writable=true; connection_controller.busy=true;
+  assert(call("set tx 10")=="Error: busy" && the_mesh.prefs.tx_power_dbm==21);
+  connection_controller.busy=false;
+  assert(call("get wifi.status")=="Error: unsupported");
+  connection_controller.current.capabilities=COMPANION_CAP_WIFI;
+  connection_controller.current.wifiAssociated=true;
+  strcpy(connection_controller.current.wifiLocalIp,"10.0.0.7");
+  assert(call("get wifi.status")=="> connected" && call("get wifi.ip")=="> 10.0.0.7");
+  assert(call("reboot")=="Error: storage" && the_mesh.reboots==1);
+  the_mesh.flush_ok=false;
+  assert(call("poweroff")=="Error: storage" && board.power_offs==0);
+  the_mesh.flush_ok=true;
+  assert(call("shutdown")=="Error: unsupported" && board.power_offs==1);
+  char reply[157]={};
+  assert(!executeMeshCoreCliCommand("erase",reply,sizeof(reply)) && reply[0]==0);
+  puts("PASS production MeshCore CLI hooks: binary-command setters, radio transaction, gates, Wi-Fi status, reboot/power-off");
+}
+'''
+
+
 def queue_integration():
     source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
     queue = scope(source, "bool MyMesh::addToOfflineQueue(")
@@ -413,6 +554,47 @@ int main() {
 '''
 
 
+def type3_integration():
+    """Compile real text RX/TX methods against inert transport/hardware spies.
+
+    Only unrelated CMD branches are omitted; the production frame validator,
+    text-command branch, complete peer receiver, packet composition, queue
+    encoder, callbacks and expected-ACK bookkeeping execute unmodified.
+    """
+    source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    base = (ROOT / "src/helpers/BaseChatMesh.cpp").read_text(encoding="utf-8")
+    constants = "\n".join((ROOT / path).read_text(encoding="utf-8") for path in (
+        "src/MeshCore.h", "src/Packet.h", "src/helpers/BaseChatMesh.h",
+        "src/helpers/ContactInfo.h", "examples/companion_radio/AbstractUITask.h"))
+    constants += "\n" + source + "\n" + base
+    names = ("PUB_KEY_SIZE", "CIPHER_BLOCK_SIZE", "MAX_PACKET_PAYLOAD", "MAX_PATH_SIZE",
+             "MAX_TEXT_LEN", "MSG_SEND_FAILED", "MSG_SEND_SENT_FLOOD", "MSG_SEND_SENT_DIRECT",
+             "OUT_PATH_UNKNOWN", "TXT_ACK_DELAY", "SERVER_RESPONSE_DELAY",
+             "PAYLOAD_TYPE_REQ", "PAYLOAD_TYPE_RESPONSE", "PAYLOAD_TYPE_TXT_MSG", "PAYLOAD_TYPE_ACK",
+             "CMD_SEND_TXT_MSG", "RESP_CODE_SENT", "RESP_CODE_CONTACT_MSG_RECV",
+             "RESP_CODE_CONTACT_MSG_RECV_V3", "PUSH_CODE_MSG_WAITING", "ERR_CODE_ILLEGAL_ARG",
+             "ERR_CODE_UNSUPPORTED_CMD", "ERR_CODE_TABLE_FULL", "ERR_CODE_NOT_FOUND",
+             "UI_MSG_FLAG_NONE", "UI_MSG_FLAG_DIRECT")
+    defines = "\n".join(re.search(r"^\s*#define " + name + r"\s+[^\n]+", constants, re.M)[0]
+                        for name in names)
+    dispatch = scope(source, "void MyMesh::handleCmdFrame(")
+    validation = dispatch[:dispatch.index("\n  // SmartUI 0.11")]
+    text_branch = scope(dispatch, "if (cmd_frame[0] == CMD_SEND_TXT_MSG && len >= 14)")
+    dispatch = validation + "\n  " + text_branch + "\n}\n"
+    methods = "\n".join(scope(base, signature) for signature in (
+        "void BaseChatMesh::onPeerDataRecv(", "mesh::Packet* BaseChatMesh::composeMsgPacket(",
+        "int  BaseChatMesh::sendMessage(", "int  BaseChatMesh::sendCommandData("))
+    methods += "\n" + "\n".join(scope(source, signature) for signature in (
+        "void MyMesh::recordExpectedAck(", "void MyMesh::queueMessage(",
+        "void MyMesh::onMessageRecv(", "void MyMesh::onCommandDataRecv(",
+        "void MyMesh::onCliCommandMessage(", "void MyMesh::onSignedMessageRecv("))
+    template = (ROOT / "tools/companion_cli_type3_test.cpp").read_text(encoding="utf-8")
+    assert template.count("// EXTRACTED_CONSTANTS") == 1
+    assert template.count("// EXTRACTED_METHODS") == 1
+    return template.replace("// EXTRACTED_CONSTANTS", defines).replace(
+        "// EXTRACTED_METHODS", methods + "\n" + dispatch)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="smartui-cli-") as directory:
         adapter = Path(directory) / "cli_integration.cpp"
@@ -423,20 +605,29 @@ def main():
         queue.write_text(queue_integration(), encoding="utf-8")
         radio_hooks = Path(directory) / "radio_hooks.cpp"
         radio_hooks.write_text(radio_hooks_integration(), encoding="utf-8")
+        meshcore_hooks = Path(directory) / "meshcore_hooks.cpp"
+        meshcore_hooks.write_text(meshcore_hooks_integration(), encoding="utf-8")
+        type3 = Path(directory) / "companion_cli_type3.cpp"
+        type3.write_text(type3_integration(), encoding="utf-8")
         compiler = shutil.which("g++") or shutil.which("clang++")
         flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror"]
         if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
             flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
         include = ROOT / "examples/companion_radio"
         for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue,
-                      ROOT / "tools/radio_settings_test.cpp", radio_hooks):
+                      ROOT / "tools/radio_settings_test.cpp", radio_hooks,
+                      ROOT / "tools/meshcore_cli_test.cpp", meshcore_hooks, type3):
             paths = [suite, include / "SmartUiCli.cpp"]
             radio_suite = suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp")
+            meshcore_suite = suite.name in ("meshcore_cli_test.cpp", "meshcore_hooks.cpp")
             if radio_suite:
                 paths += [include / "RadioSettings.cpp"]
+            if meshcore_suite:
+                paths += [include / "MeshCoreCli.cpp"]
             # nRF52 builds use -Ofast; normal optimization alone misses the
-            # reciprocal-conversion rounding that rejected valid presets.
-            for optimization in (("-O1", "-Ofast") if radio_suite else ("-O1",)):
+            # reciprocal-conversion rounding that rejected valid presets, and
+            # the upstream-name parser must reject NaN/infinity without isfinite().
+            for optimization in (("-O1", "-Ofast") if radio_suite or meshcore_suite else ("-O1",)):
                 output = Path(directory) / (suite.stem + optimization)
                 if compiler:
                     build = [compiler, *flags, optimization, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]
