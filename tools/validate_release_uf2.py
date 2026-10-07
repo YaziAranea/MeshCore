@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the three nRF52 UF2 artifacts for SmartUI 0.14."""
+"""Validate the three nRF52 UF2 artifacts for SmartUI 0.15."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ APP_START = 0x26000
 APP_END = 0xD4000  # Preserve the extra-FS region shared by these profiles.
 
 EXPECTED = {
-    "T096_UI_0.14.uf2": b"T096 SmartUI 0.14",
-    "T114_UI_0.14.uf2": b"T114 SmartUI 0.14",
-    "ProMicro_RA62_UI_0.14.uf2": b"ProMicro SmartUI 0.14",
+    "T096_UI_0.15.uf2": b"T096 SmartUI 0.15",
+    "T114_UI_0.15.uf2": b"T114 SmartUI 0.15",
+    "ProMicro_RA62_UI_0.15.uf2": b"ProMicro SmartUI 0.15",
 }
 
 

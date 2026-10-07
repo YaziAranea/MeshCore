@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:url'),{chromium}=require('playwright');
 const {installApiMock}=require('./test_api_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_1.8.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_1.9.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -238,16 +238,84 @@ test('bridge/protection confirmations can decline; no accidental writes',async()
     assert.equal(await p.evaluate(()=>window.__apiMock.commands.some(c=>c.startsWith('ui set '))),false);
   }finally{await f.close();}
 });
-test('staged Wi-Fi explicit save, redacted developer view and secrets',async()=>{
+test('staged Wi-Fi explicit save, safe developer values and secret isolation',async()=>{
   const f=await fixture();try{const p=f.page;await connect(p);
     await p.locator('#api-ssid').fill('Локальная сеть');await p.locator('#api-password').fill('private-password');await p.locator('#api-wifi-test').click();await p.waitForFunction(()=>!document.getElementById('api-wifi-save').disabled);
     assert.equal(await p.locator('#api-password').inputValue(),'');assert.equal(await p.evaluate(()=>window.__apiMock.wifi),'test_ok');
     assert.doesNotMatch(await p.locator('#api-log').textContent(),/private-password|70726976617465|Локальная сеть/);
     await p.locator('#api-wifi-save').click();await ready(p);assert.equal(await p.evaluate(()=>window.__apiMock.wifi),'saved');
-    await p.locator('#api-command').fill('ui get volume');await p.locator('#api-command-send').click();await ready(p);assert.match(await p.locator('#api-command-result').textContent(),/Значения скрыты/);
+    await p.locator('#api-command').fill('ui get volume');await p.locator('#api-command-send').click();await ready(p);assert.match(await p.locator('#api-command-result').textContent(),/key=volume value=7/);
     await p.locator('#api-command').fill('ui wifi password 736563726574');await p.locator('#api-command-send').click();assert.match(await p.locator('#api-feedback').textContent(),/специальные формы/);
   }finally{await f.close();}
 });
+test('0.15 console help presets never send themselves and TX setter confirms with readback',async()=>{
+  const f=await fixture({console:1,meshcore:1});try{const p=f.page;await connect(p);
+    const before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-command-presets [data-command="help"]').click();
+    assert.equal(await p.locator('#api-command').inputValue(),'help');
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/help sound 2/);
+    await p.locator('#api-command-presets [data-command="get tx"]').click();await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/> 20/);
+    await p.locator('#api-command').fill('set tx 18');await p.locator('#api-command-send').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>__apiMock.commands.includes('set tx 18')),false);
+    await p.locator('#api-command-send').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/Прочитано после изменения: > 18/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='set tx 18').length),1);
+    await p.locator('#api-command').fill('melody 1');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/1: Трель/);
+    assert.doesNotMatch(await p.locator('#api-log').textContent(),/set tx|Трель|help sound/);
+    await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-1.9-console-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-1.9-console-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('friendly console setters preserve second safety confirmations and never bypass forms',async()=>{
+  const f=await fixture({console:1,meshcore:1});try{const p=f.page;await connect(p);
+    for(const [command,warning] of [['set battery_protection off',/3,2 В/],['set sound.bridge on',/пьезоизлучателя/]]){
+      await p.locator('#api-command').fill(command);await p.locator('#api-command-send').click();await p.locator('#confirm-yes').click();
+      await p.waitForFunction(()=>document.getElementById('confirm-dialog').open);
+      assert.match(await p.locator('#confirm-text').textContent(),warning);await p.locator('#confirm-no').click();
+      assert.equal(await p.evaluate(c=>__apiMock.commands.includes(c),command),false);
+    }
+    for(const command of ['set pin 654321','set adc 4.9','adc preview 3800','adc service start','ui wifi password 736563726574','reboot']){
+      const before=await p.evaluate(()=>__apiMock.commands.length);
+      await p.locator('#api-command').fill(command);await p.locator('#api-command-send').click();
+      assert.match(await p.locator('#api-feedback').textContent(),/специальные формы/);
+      assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    }
+    assert.doesNotMatch(await p.locator('#api-log').textContent(),/654321|736563726574/);
+  }finally{await f.close();}
+});
+
+test('0.14 console gives explicit upgrade guidance; existing ui and upstream TX remain usable',async()=>{
+  const f=await fixture({meshcore:1});try{const p=f.page;await connect(p);
+    const before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-command').fill('get volume');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/console=1.*0\.15/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    await p.locator('#api-command').fill('ui get volume');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/value=7/);
+    await p.locator('#api-command').fill('get tx');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/> 20/);
+  }finally{await f.close();}
+});
+
+test('developer replies are inert text, never markup, and readonly refuses console writes',async()=>{
+  const f=await fixture({console:1,readonly:true});try{const p=f.page;await connect(p);
+    await p.locator('#api-command').fill('get volume');await p.evaluate(()=>__apiMock.errorNext='> <img src=x onerror="globalThis.injected=true">');
+    await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/<img/);
+    assert.equal(await p.locator('#api-command-result img').count(),0);assert.equal(await p.evaluate(()=>Boolean(globalThis.injected)),false);
+    const before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-command').fill('set volume 5');await p.locator('#api-command-send').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/только чтение/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    await p.locator('#api-adc summary').click();assert.equal(await p.locator('#api-adc-preview').isDisabled(),true);
+  }finally{await f.close();}
+});
+
 test('ADC battery reference preview is nonmutating; source error explained',async()=>{
   const f=await fixture({adcMin:1.36125,adcMax:2.26875,adcReference:3100,settings:{battery_mv:4100,adc_multiplier:1.97,adc_default:1.815}});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
     await p.locator('#api-adc-measured').fill('3,30');await p.locator('#api-adc-preview').click();await ready(p);

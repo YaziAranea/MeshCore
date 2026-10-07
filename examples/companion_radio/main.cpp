@@ -39,6 +39,7 @@ MultiSerialInterface interface_manager;
   #include "SmartUiCliSettings.h"
   #include "RadioSettings.h"
   #include "MeshCoreCli.h"
+  #include "SmartUiConsoleCommands.h"
   #include "SmartUiSync.h"
 #endif
 
@@ -467,6 +468,7 @@ static smartui::MeshCoreCliResult cliSetPin(uint32_t pin) {
   return cliResult(the_mesh.setLocalBlePin(pin));
 }
 static smartui::MeshCoreCliResult cliSetTxPower(int8_t dbm) {
+  if (the_mesh.localRadioSettingsBusy()) return smartui::MeshCoreCliResult::BUSY;
   return cliResult(the_mesh.setLocalTxPower(dbm));
 }
 static smartui::MeshCoreCliResult cliSetTuning(float rx_delay, float airtime_factor) {
@@ -515,6 +517,10 @@ static bool cliWifiStatus(bool& associated, char* ip, size_t capacity) {
 static bool cliBusy() { return connection_controller.deviceApiBusy(); }
 
 bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity) {
+  // Human-facing aliases reuse the exact local UI transactions and their
+  // storage, transport, ADC and FEM busy gates. Never route through remote CLI.
+  if (smartui::handleSmartUiConsoleCommand(command, reply, capacity,
+                                          executeSmartUiCliCommand)) return true;
   return meshcore_cli.handle(command, reply, capacity,
                              connection_controller.deviceApiWritesAllowed());
 }
@@ -525,7 +531,7 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
   const bool writable = connection_controller.deviceApiWritesAllowed();
   if (strcmp(command, "ui hello") == 0) {
     snprintf(reply, capacity,
-        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1",
+        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1",
         SMARTUI_VERSION, writable ? 1U : 0U);
     return true;
   }

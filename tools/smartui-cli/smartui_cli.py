@@ -13,10 +13,28 @@ MESHCORE_SET = re.compile(
     r"(?:af|dutycycle|rxdelay|tz\.offset) " + DECIMAL +
     r"|radio\.rxgain (?:on|off)|radio " + DECIMAL + "," + DECIMAL + r",[-+]?\d+,[-+]?\d+)",
     re.ASCII)
+FRIENDLY_READ = re.compile(
+    r"(?:get (?:volume|vibration|melody|sound_quiet|muted|board_led|unread_led|gps|"
+    r"battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge|adc(?:\.multiplier|\.default)?|"
+    r"battery|battery_mv|shutdown_mv|advert)|(?:get )?caps [a-z][a-z_.]*|"
+    r"help(?: (?:sound|fem|adc|radio|connection|system|advert|led|gps)(?: [1-9]\d*)?)?|"
+    r"melody \d+|melodies|adc (?:manual|service(?: stop)?))", re.ASCII)
+FRIENDLY_WRITE = re.compile(
+    r"(?:set (?:(?:volume|melody|advert) \d+|(?:vibration|sound_quiet|muted|board_led|unread_led|"
+    r"gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge) (?:on|off|0|1)|"
+    r"adc(?:\.multiplier)? (?:\d+(?:\.\d*)?|\.\d+))|test notification|"
+    r"adc (?:preview \d+|apply \d+|reset|service start))", re.ASCII)
+
+
+def is_friendly(command):
+    return bool(FRIENDLY_READ.fullmatch(command) or FRIENDLY_WRITE.fullmatch(command))
+
+
 ERROR_TEXT = {
     "input": "Invalid local command.",
     "unsupported": "smartui_cli:1 not discovered; use archived Helper 1.4 for 0.11.",
     "meshcore_unsupported": "meshcore=1 not discovered in ui hello; use supported ui commands.",
+    "console_unsupported": "console=1 not discovered in ui hello; short commands require SmartUI 0.15.",
     "busy": "Another command is pending.",
     "closed": "Transport is closed.",
     "timeout": "No reply; result unknown. Reconnect and read state, do not retry writes.",
@@ -47,7 +65,8 @@ def encode_command(tag, command):
         if not MESHCORE_SET.fullmatch(command):
             raise CliError("input")
     elif not command.isascii() or not (command.startswith("ui ") or command in READ_COMMANDS or
-                                        command in MESHCORE_READ_COMMANDS or MESHCORE_SET.fullmatch(command)):
+                                        command in MESHCORE_READ_COMMANDS or MESHCORE_SET.fullmatch(command) or
+                                        is_friendly(command)):
         raise CliError("input")
     if not re.fullmatch(r"[0-9A-Za-z]{2}", tag):
         raise CliError("input")
@@ -65,12 +84,12 @@ def decode_reply(packet, tag, ascii_only=True):
         raise CliError("protocol")
     if text == "Unknown command":
         raise CliError("failed", "unsupported")
-    if re.match(r"(?:Error[:,]|ERROR:)", text):
-        raise CliError("failed")
-    error = re.fullmatch(r"ERR ui ([a-z_]+)", text)
+    error = re.fullmatch(r"(?:ERR ui |Error: )([a-z_]+)", text)
     if error:
         reason = error[1]
         raise CliError("readonly" if reason == "readonly" else "failed", reason)
+    if re.match(r"(?:Error[:,]|ERROR:)", text):
+        raise CliError("failed")
     if ascii_only and not text.startswith("OK ui "):
         raise CliError("protocol")
     return text
@@ -114,7 +133,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return command.startswith("set ") or bool(re.match(r"ui (set |test$|(?:radio|advert) set |adc (set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
+    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |test$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:
@@ -191,7 +210,10 @@ class CliClient:
             if self.uncertain:
                 raise CliError("uncertain")
             encode_command("00", command)  # Validate before capability/permission checks; no I/O.
-            if not command.startswith("ui ") and command not in READ_COMMANDS and self.hello.get("meshcore") != "1":
+            friendly = is_friendly(command)
+            if friendly and self.hello.get("console") != "1":
+                raise CliError("console_unsupported")
+            if not command.startswith("ui ") and command not in READ_COMMANDS and not friendly and self.hello.get("meshcore") != "1":
                 raise CliError("meshcore_unsupported")
             if mutates(command) and self.hello["write"] != "1":
                 raise CliError("readonly")

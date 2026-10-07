@@ -2,6 +2,7 @@
 """Exercise the real offline helper bundle without USB or network access."""
 import hashlib
 import json
+import posixpath
 from pathlib import Path
 import re
 import tempfile
@@ -29,8 +30,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("navigator.serial.requestPort()", html)
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
-        self.assertIn("Помощник 1.8", html)
-        self.assertIn("Помощник 1.8 · MeshCore", html)
+        self.assertIn("Помощник 1.9", html)
+        self.assertIn("Помощник 1.9 · MeshCore", html)
         self.assertIn("SmartUiPresets", html)
         self.assertIn('id="preset-city"', html)
         self.assertIn('id="advert-interval"', html)
@@ -38,8 +39,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)
         self.assertIn("120 секунд", html)
-        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_1.8.html")
-        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_1.8.zip")
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_1.9.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_1.9.zip")
         self.assertIn("class CliClient", html)
         self.assertIn('id="helper-mode"', html)
         self.assertNotIn('id="api-inbox"', html)
@@ -61,11 +62,25 @@ class HelperPackageTests(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(set(archive.namelist()), {
                     helper.HTML_NAME, "README_RU.md", "PRESETS_SOURCE_RU.md", "LICENSE", "SHA256SUMS.txt",
+                    "docs/CONSOLE_COMMANDS_RU.md",
+                    "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
+                    "tools/usb-helper/PRESETS_SOURCE_RU.md",
                     "screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
                     "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
                     "screenshots/city-desktop.png", "screenshots/city-mobile.png",
-                    "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png"})
+                "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png",
+                "screenshots/console-desktop.png", "screenshots/console-mobile.png"})
                 self.assertEqual(archive.read(helper.HTML_NAME), first[0].read_bytes())
+                self.assertEqual(archive.read("docs/CONSOLE_COMMANDS_RU.md"),
+                                 (helper.ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes())
+                for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md",
+                             "tools/smartui-cli/README.md"):
+                    self.assertEqual(archive.read(name), (helper.ROOT / name).read_bytes())
+                    for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):
+                        if "://" in link or link.startswith("#"):
+                            continue
+                        linked = posixpath.normpath(posixpath.join(posixpath.dirname(name), link.split("#", 1)[0]))
+                        self.assertIn(linked, archive.namelist(), f"Broken offline documentation link: {name} -> {link}")
                 for name in ("screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
                              "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
                              "screenshots/city-desktop.png", "screenshots/city-mobile.png",

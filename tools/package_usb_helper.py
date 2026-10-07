@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_1.8.html"
-ZIP_NAME = "SmartUI_USB_Helper_1.8.zip"
+HTML_NAME = "SmartUI_USB_Helper_1.9.html"
+ZIP_NAME = "SmartUI_USB_Helper_1.9.zip"
 
 
 def digest(data):
@@ -41,6 +41,10 @@ def package(output):
         HTML_NAME: html,
         "README_RU.md": (SOURCE / "README_RU.md").read_bytes(),
         "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
+        "docs/CONSOLE_COMMANDS_RU.md": (ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes(),
+        "docs/SMARTUI_CLI_RU.md": (ROOT / "docs/SMARTUI_CLI_RU.md").read_bytes(),
+        "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
+        "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
         "screenshots/settings-desktop.png": (SOURCE / "screenshots/settings-desktop.png").read_bytes(),
         "screenshots/settings-mobile.png": (SOURCE / "screenshots/settings-mobile.png").read_bytes(),
@@ -50,6 +54,8 @@ def package(output):
         "screenshots/city-mobile.png": (SOURCE / "screenshots/city-mobile.png").read_bytes(),
         "screenshots/adc-service-desktop.png": (SOURCE / "screenshots/adc-service-desktop.png").read_bytes(),
         "screenshots/adc-service-mobile.png": (SOURCE / "screenshots/adc-service-mobile.png").read_bytes(),
+        "screenshots/console-desktop.png": (SOURCE / "screenshots/console-desktop.png").read_bytes(),
+        "screenshots/console-mobile.png": (SOURCE / "screenshots/console-mobile.png").read_bytes(),
     }
     checksums = "".join(f"{digest(raw)}  {name}\n" for name, raw in sorted(payloads.items()))
     payloads["SHA256SUMS.txt"] = checksums.encode("ascii")

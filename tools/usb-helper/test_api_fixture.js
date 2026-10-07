@@ -17,11 +17,28 @@ function installApiMock(options={}) {
       if(request[0]===22){this.emit(Uint8Array.of(13,options.meshcore?14:13));return;}
       if(request[0]===40){this.emit(Uint8Array.from([21,...enc.encode(options.discovery??(options.oldFirmware?'smartui_api:1':'smartui_cli:1'))]));return;}
       if(request[0]!==66)throw new Error('Unexpected protocol opcode');
-      const raw=new TextDecoder().decode(request.slice(1)),tag=raw.slice(0,2),cmd=raw.slice(3);this.commands.push(cmd);
+      const raw=new TextDecoder().decode(request.slice(1)),tag=raw.slice(0,2),original=raw.slice(3);let cmd=original;this.commands.push(cmd);
       if(this.drop)return;
       if(this.errorNext){const e=this.errorNext;this.errorNext=null;this.reply(tag,e);return;}
+      let friendly=false;
+      if(options.console===1){
+        const aliases={'fem.lna':'fem_lna','fem.pa':'fem_pa','sound.bridge':'bridge','adc':'adc_multiplier','adc.multiplier':'adc_multiplier','adc.default':'adc_default','battery':'battery_mv'};
+        const short=/^(get|set) ([a-z_.]+)(?: (.+))?$/.exec(cmd);
+        if(short){const [,verb,key,value]=short,internal=aliases[key]||key;
+          if(verb==='get'&&Object.hasOwn(this.settings,internal)){cmd='ui get '+internal;friendly=true;}
+          else if(verb==='set'&&Object.hasOwn(this.settings,internal)){cmd=internal==='adc_multiplier'?'ui adc set '+value:'ui set '+internal+' '+(value==='on'?'1':value==='off'?'0':value);friendly=true;}
+          else if(key==='advert'){cmd='ui advert'+(verb==='set'?' set '+value:'');friendly=true;}
+        }
+        const cap=/^(?:get )?caps ([a-z_.]+)$/.exec(original);
+        if(cap){cmd='ui caps '+(['fem.lna','fem.pa','sound.bridge'].includes(cap[1])?aliases[cap[1]]:cap[1]);friendly=true;}
+        if(/^adc (?:preview |apply |manual$|reset$|service)/.test(original)){cmd='ui '+original;friendly=true;}
+        if(original==='test notification'){cmd='ui test';friendly=true;}
+        if(/^melody \d+$/.test(original)){cmd='ui '+original;friendly=true;}
+      }
       let text;
-      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.14 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'');
+      if(cmd==='ui hello')text='OK ui hello version=1 firmware=0.14 max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'')+(options.console!==undefined?' console='+options.console:'');
+      else if(options.console===1&&/^help(?: |$)/.test(cmd))text='> get volume; set volume 1..10; get tx; set tx DBM; help sound 2';
+      else if(options.console===1&&cmd==='melodies')text='> current='+this.settings.melody+' max='+this.caps.melody_max+'; melody N';
       else if(options.meshcore===1&&cmd.startsWith('get ')&&Object.hasOwn(this.meshcore,cmd.slice(4)))text='> '+this.meshcore[cmd.slice(4)];
       else if(options.meshcore===1&&cmd.startsWith('set ')){
         if(options.readonly)text='Error: readonly';
@@ -69,6 +86,14 @@ function installApiMock(options={}) {
         this.wifi=states[action]||this.wifi;text='OK ui wifi '+action+(['save','cancel'].includes(action)?'':' state='+(action==='test'?'testing':this.wifi));
       }else if(['board','ver','get name','get radio'].includes(cmd))text=cmd==='get name'?'Тестовая нода':'test';
       else text='Unknown command';
+      if(friendly){
+        if(text.startsWith('ERR ui '))text='Error: '+text.slice(7);
+        else if(/^ui (get|caps) /.test(cmd))text='> '+text.split('value=')[1];
+        else if(cmd.startsWith('ui melody '))text='> '+cmd.split(' ').at(-1)+': '+new TextDecoder().decode(Uint8Array.from(text.split('name_hex=')[1].match(/../g),b=>parseInt(b,16)));
+        else if(/^(get|set) advert(?: |$)/.test(original))text='> interval_min='+this.advert.interval_min;
+        else if(cmd.startsWith('ui adc '))text=text.replace('OK ui ','OK ');
+        else text='OK';
+      }
       this.reply(tag,text);
     },
     async open(){if(!this.closed)throw new Error('already open');this.closed=false;this.openCount++;this.maxOpen=Math.max(this.maxOpen,this.openCount);

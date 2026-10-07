@@ -23,7 +23,7 @@
       <details id="api-adc"><summary>Калибровка аккумулятора</summary><p id="api-adc-value" class="hint">Нет измерения</p><p id="api-adc-range" class="hint"></p><p class="hint">Выберите один из двух способов калибровки.</p><h4>Способ 1: рассчитать по мультиметру</h4><p id="api-adc-source-warning" class="safety-note"></p><label class="field" for="api-adc-measured">Напряжение мультиметра, В</label><input id="api-adc-measured" type="text" inputmode="decimal" placeholder="Например, 3,82"><div class="buttons"><button id="api-adc-preview" disabled>Рассчитать поправку</button><button id="api-adc-apply" disabled>Сохранить калибровку</button></div><p id="api-adc-result" class="hint" role="status" aria-live="polite">Расчёт не меняет настройки. Сохранение требует подтверждения.</p><div id="api-adc-reset-actions" class="buttons"><button id="api-adc-reset" disabled>Заводская калибровка ADC</button></div></details>
       <p class="safety-note">AGC-сброс — пробная профилактика каждые 60 с с отсрочкой при активности. Мост звука требует совместимого плавающего пьезоизлучателя между двумя штатными выводами; не подключайте такой выход к земле. Возможности сборки не доказывают наличие внешнего оборудования.</p></section>
       <section id="api-wifi" class="card wide"><p class="panel-kicker">Локальная сеть</p><h2>Wi-Fi без потери настроек</h2><p class="hint">USB остаётся подключённым во время проверки. Старые данные заменяются только после успешного теста и отдельного сохранения. TCP без пароля и TLS — только доверенная сеть, без доступа из интернета.</p><form id="api-wifi-form" autocomplete="off"><label class="field" for="api-ssid">Имя сети (SSID)</label><input id="api-ssid" type="text" autocomplete="off" spellcheck="false"><label class="field" for="api-password">Пароль сети</label><input id="api-password" type="password" autocomplete="new-password"><label class="check"><input id="api-open-network" type="checkbox">Сеть без пароля — понимаю риск</label><div class="buttons"><button id="api-wifi-test" type="submit" class="primary" disabled>Проверить сеть</button><button id="api-wifi-status" type="button" disabled>Результат проверки</button><button id="api-wifi-save" type="button" disabled>Сохранить сеть</button><button id="api-wifi-cancel" type="button" disabled>Отменить</button></div></form><p id="api-wifi-state" class="hint">Доступность определяется прошивкой. Через 120 секунд бездействия проверка отменяется.</p></section>
-      <section id="api-developer" class="card wide"><p class="panel-kicker">Интеграция</p><h2>Проверка команд CLI</h2><p class="hint">Одна команда за раз. Стандартный вывод скрывает значения, текст и секреты; сырые пакеты не записываются. Команды изменения требуют подтверждения.</p><label class="field" for="api-command">Команда</label><input id="api-command" type="text" autocomplete="off" spellcheck="false" placeholder="ui get volume"><div class="buttons"><button id="api-command-send" disabled>Выполнить</button></div><p id="api-command-result" role="status">Ожидает команды. Для Wi-Fi используйте форму выше: секреты в командную строку не вводите.</p></section>
+      <section id="api-developer" class="card wide"><p class="panel-kicker">Консоль ноды</p><h2>Команды и справка</h2><p class="hint">Одна команда за раз. Ответы разрешённых команд видны здесь; в журнал не попадают. Изменения требуют подтверждения. Короткие команды и help доступны с SmartUI 0.15, ui-команды сохраняют совместимость.</p><div id="api-command-presets" class="buttons"><button type="button" data-command="help">Справка</button><button type="button" data-command="help sound">Звук и вибро</button><button type="button" data-command="help adc">ADC</button><button type="button" data-command="help radio">Радио</button><button type="button" data-command="get tx">Мощность TX</button><button type="button" data-command="set tx 20">TX: пример</button></div><label class="field" for="api-command">Команда</label><input id="api-command" type="text" autocomplete="off" spellcheck="false" placeholder="get volume"><div class="buttons"><button id="api-command-send" disabled>Выполнить</button></div><p class="hint">Кнопки выше только подставляют пример, не отправляют его. Например: get volume, set volume 7, help adc 2. Для Wi-Fi и ADC используйте формы. PIN и пароли в это поле не вводите.</p><p id="api-command-result" role="status" style="white-space:pre-wrap">Ожидает команды. Для Wi-Fi используйте форму выше: секреты в командную строку не вводите.</p></section>
       <section class="card wide"><h2>Журнал действий</h2><p class="hint">Статусы операций помощника, не события ноды. Без команд, значений и секретов.</p><ul id="api-log" class="hint" aria-label="Журнал действий"></ul><button id="api-log-clear">Очистить</button></section>
     </div>`;
   $('firmware-section').before(workspace);
@@ -60,12 +60,12 @@
     $('api-wifi-status').disabled=!available()||!wifi;
     $('api-wifi-save').disabled=!writable()||!wifi||wifiState?.state!=='test_ok';
     for(const el of $('api-settings-fields').querySelectorAll('select,button'))el.disabled=!writable()||!settings;
-    $('api-adc-preview').disabled=!available()||caps?.adc!=='1';
+    $('api-adc-preview').disabled=!writable()||caps?.adc!=='1';
     $('api-adc-reset').disabled=!writable()||caps?.adc!=='1';
     $('api-adc-apply').disabled=!writable()||!preview||Date.now()>=preview.expires;
     $('api-adc-manual-value').disabled=!writable()||!adcManualSupported;
     $('api-adc-manual-save').disabled=!writable()||!adcManualSupported||!$('api-adc-manual-value').value.trim();
-    $('api-adc-manual-hint').textContent=binaryState.hello?.write==='0'?'Запись недоступна: нода сообщает режим только для чтения.':adcManualSupported?'Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.':'Прямой ввод не поддерживается этой прошивкой. Обновите файлы SmartUI 0.14; расчёт по мультиметру остаётся доступен.';
+    $('api-adc-manual-hint').textContent=binaryState.hello?.write==='0'?'Запись недоступна: нода сообщает режим только для чтения.':adcManualSupported?'Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.':'Прямой ввод не поддерживается этой прошивкой. Обновите SmartUI до актуальной версии; расчёт по мультиметру остаётся доступен.';
     $('api-adc-service-box').hidden=caps?.adc_service!=='1';
     $('api-adc-service-start').disabled=!writable()||caps?.adc_service!=='1'||!adcService?.external||Boolean(adcService?.active);
     $('api-adc-service-stop').disabled=!available()||!adcService?.active;
@@ -340,18 +340,23 @@
   $('api-wifi-save').onclick=()=>run(async()=>{await exact('ui wifi save','OK ui wifi save');await wifiStatus();if(wifiState.state!=='saved')throw new api.CliError('PROTOCOL');note('Сохранение сети подтверждено нодой.');});
   $('api-wifi-cancel').onclick=()=>run(async()=>{await exact('ui wifi cancel','OK ui wifi cancel');$('api-password').value='';await wifiStatus();});
   $('api-log-clear').onclick=()=>{$('api-log').replaceChildren();};
+  for(const button of $('api-command-presets').querySelectorAll('button'))button.onclick=()=>{$('api-command').value=button.dataset.command;$('api-command').focus();};
   $('api-command-send').onclick=async()=>{
     const command=$('api-command').value.trim();
-    const read=/^ui (hello|caps [a-z_]+|get [a-z_]+|connection|melody \d+|mode status)$/.test(command)||['board','ver','get name','get radio'].includes(command);
-    const write=/^ui set (sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|muted|agc_reset|fem_lna|fem_pa|bridge) \d+$/.test(command);
-    if(!read&&!write){note('Используйте короткую команду чтения или ui set. Для сети и ADC есть специальные формы. Секреты сюда не вводите.','warning');return;}
+    let policy;
+    try{policy=api.developerCommand(command);}catch(_){note('Команда недоступна в этом поле. Используйте help, get/set или ui get/set. Для сети и ADC есть специальные формы; PIN и секреты сюда не вводите.','warning');return;}
+    const {write,warning}=policy;
     if(write&&!await legacy.confirmAction('Отправить изменение ноде? Оно может изменить сохранённые настройки. Автоматического повтора не будет.'))return;
-    if(/^ui set (battery_protection 0|bridge 1)$/.test(command)&&!await legacy.confirmAction(command.includes('bridge')?'Мост требует плавающего пьезоизлучателя между штатными выводами, не землёй. Продолжить?':'Защита 3,2 В отключится; останется аварийный порог 2,7 В. Продолжить?'))return;
+    if(warning&&!await legacy.confirmAction(warning==='bridge'?'Мост требует плавающего пьезоизлучателя между штатными выводами, не землёй. Продолжить?':'Защита 3,2 В отключится; останется аварийный порог 2,7 В. Продолжить?'))return;
     $('api-command').value='';await run(async()=>{
-      const reply=await client.execute(command,{mutate:write});
-      const names=reply.split(' ').slice(3).map(token=>token.split('=')[0]).filter(name=>/^[a-z][a-z0-9_]*$/.test(name));
-      $('api-command-result').textContent='Ответ получен. Поля: '+(names.join(', ')||'текст')+'. Значения скрыты; сырой ответ не сохранён.';
-      if(write)await loadSettings();
+      $('api-command-result').textContent='Ожидаем ответ ноды…';
+      try{
+        const reply=await client.execute(command,{mutate:write});
+        $('api-command-result').textContent='Ответ ноды: '+reply;
+        const key=/^(ui )?set ([a-z_.]+) /.exec(command);
+        if(key){const readback=await client.execute((key[1]||'')+'get '+key[2]);$('api-command-result').textContent+='\nПрочитано после изменения: '+readback;}
+        if(write)await loadSettings();
+      }catch(error){$('api-command-result').textContent=error?.safe?error.message:'Ответ не подтверждён. Обновите состояние ноды.';throw error;}
     });
   };
   window.addEventListener('beforeunload',()=>{$('api-password').value='';});

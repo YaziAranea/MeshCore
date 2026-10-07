@@ -14,6 +14,7 @@
     PROTOCOL:'Некорректный ответ ноды. Состояние не подтверждено; переподключитесь.',
     UNSUPPORTED:'Нода не сообщает smartui_cli:1. Для API SmartUI 0.11 используйте архивный Helper 1.4; прежние настройки доступны через консоль.',
     MESHCORE_UNSUPPORTED:'Нода не сообщает meshcore=1 в ui hello. Эти команды оригинального MeshCore недоступны; используйте поддержанные ui-команды.',
+    CONSOLE_UNSUPPORTED:'Нода не сообщает console=1 в ui hello. Для коротких команд и справки нужна SmartUI 0.15; прежние ui-команды остаются доступны.',
     DENIED:'Нода разрешает только чтение. Изменение не выполнено.',
     FAILED:'Команда отклонена. Изменение не подтверждено.',
     INPUT:'Недопустимая команда или значение.',EXHAUSTED:'Теги запросов исчерпаны. Подключитесь заново.',
@@ -45,7 +46,11 @@
   const meshcoreReads=['get freq','get tx','get af','get dutycycle','get rxdelay','get multi.acks',
     'get path.hash.mode','get radio.rxgain','get tz.offset','get wifi.status','get wifi.ip'];
   const meshcoreSet=/^set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|(?:af|dutycycle|rxdelay|tz\.offset) [-+]?(?:\d+(?:\.\d*)?|\.\d+)|radio\.rxgain (?:on|off)|radio [-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?\d+,[-+]?\d+)$/u;
-  const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command);
+  const friendlyReads=/^(?:get (?:volume|vibration|melody|sound_quiet|muted|board_led|unread_led|gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge|adc(?:\.multiplier|\.default)?|battery|battery_mv|shutdown_mv|advert)|(?:get )?caps [a-z][a-z_.]*|help(?: (?:sound|fem|adc|radio|connection|system|advert|led|gps)(?: [1-9]\d*)?)?|melody \d+|melodies|adc (?:manual|service(?: stop)?))$/;
+  const friendlyWrites=/^(?:set (?:(?:volume|melody|advert) \d+|(?:vibration|sound_quiet|muted|board_led|unread_led|gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge) (?:on|off|0|1)|adc(?:\.multiplier)? (?:\d+(?:\.\d*)?|\.\d+))|test notification|adc (?:preview \d+|apply \d+|reset|service start))$/;
+  const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command);
+  const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command)&&!isFriendly(command);
+  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |test$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
   function tagFor(index){
     if(!Number.isInteger(index)||index<0||index>=alphabet.length**2)throw fail('EXHAUSTED');
     return alphabet[Math.floor(index/alphabet.length)]+alphabet[index%alphabet.length];
@@ -58,8 +63,22 @@
     if(command.startsWith('set name ')){
       if(!meshcoreSet.test(command))throw fail('INPUT');
     }else if(/[^\x20-\x7e]/.test(command)||
-      !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||meshcoreSet.test(command)))throw fail('INPUT');
+      !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||meshcoreSet.test(command)||isFriendly(command)))throw fail('INPUT');
     return command;
+  }
+  // The interactive helper is intentionally narrower than the SDK: no PIN,
+  // credentials, terminal power operations or ADC writes without their form.
+  function developerCommand(command){
+    validateCommand(command);
+    const uiRead=/^ui (?:hello|caps (?:v|adc|sound|board_led|unread_led|vibration|gps|battery_protection|display|melody_max|adc_min|adc_max|agc_reset|fem_lna|fem_pa|bridge|melody_names|adc_service)|get (?:battery_mv|adc_multiplier|adc_default|sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|shutdown_mv|muted|agc_reset|fem_lna|fem_pa|bridge)|connection|radio|advert|melody \d+|mode status|adc (?:manual|service))$/;
+    const uiWrite=/^ui set (?:sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|muted|agc_reset|fem_lna|fem_pa|bridge) \d+$/;
+    if(!(uiRead.test(command)||uiWrite.test(command)||command==='ui test'||legacyReads.includes(command)||
+      meshcoreReads.includes(command)||(meshcoreSet.test(command)&&!command.startsWith('set pin '))||
+      friendlyReads.test(command)||friendlyWrites.test(command)&&!/^adc |^set adc/.test(command)))throw fail('INPUT');
+    const write=mutates(command);
+    const warning=/^(?:ui set battery_protection 0|set battery_protection (?:0|off))$/.test(command)?'battery':
+      /^(?:ui set bridge 1|set sound\.bridge (?:1|on))$/.test(command)?'bridge':null;
+    return {write,warning};
   }
   function encodeCommand(tag,command){
     if(!/^[0-9A-Za-z]{2}$/.test(tag))throw fail('INPUT');
@@ -73,10 +92,10 @@
     try{text=new TextDecoder('utf-8',{fatal:true}).decode(packet.slice(4));}catch(_){throw fail('PROTOCOL');}
     if(!text||/[\x00-\x1f\x7f]/.test(text)||(ascii&&/[^\x20-\x7e]/.test(text)))throw fail('PROTOCOL');
     if(text==='Unknown command'){const error=fail('FAILED');error.reason='unsupported';error.message=reasonMessages.unsupported;throw error;}
-    if(/^(?:Error[:,]|ERROR:)/.test(text))throw fail('FAILED'); // Never surface raw CLI error text.
-    const reason=/^ERR ui ([a-z_]+)$/.exec(text)?.[1];
+    const reason=/^(?:ERR ui |Error: )([a-z_]+)$/.exec(text)?.[1];
     if(reason){const error=fail(reason==='readonly'?'DENIED':'FAILED');error.reason=reason;
       error.message=reasonMessages[reason]||errors.FAILED;throw error;}
+    if(/^(?:Error[:,]|ERROR:)/.test(text))throw fail('FAILED'); // Never surface raw CLI error text.
     if(ascii&&!text.startsWith('OK ui '))throw fail('PROTOCOL');
     return text;
   }
@@ -199,8 +218,9 @@
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
       validateCommand(command);
+      if(isFriendly(command)&&this.state.hello.console!=='1')throw fail('CONSOLE_UNSUPPORTED');
       if(needsMeshcore(command)&&this.state.hello.meshcore!=='1')throw fail('MESHCORE_UNSUPPORTED');
-      mutate=mutate||command.startsWith('set ')||/^ui (set |test$|radio set |advert set |adc (apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+      mutate=mutate||mutates(command);
       if(mutate&&this.state.hello.write!=='1')throw fail('DENIED');
       const session=this.session;
       this.update({busy:true});
@@ -222,5 +242,5 @@
       }finally{if(this.session===s)this.session=null;this.closing=false;this.update({connected:false,busy:false,phase:'disconnected',hello:null});}
     }
   }
-  return {CliClient,CliError,FrameDecoder,encodeCommand,decodeReply,record,decodeHex,toHex,matches,discover,tagFor};
+  return {CliClient,CliError,FrameDecoder,encodeCommand,decodeReply,record,decodeHex,toHex,matches,discover,tagFor,developerCommand,mutates};
 }));

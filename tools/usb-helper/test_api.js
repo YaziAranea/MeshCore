@@ -10,6 +10,82 @@ const upstreamWrites=['set name Дача','set pin 654321','set tx 20','set af 2
   'set tz.offset 5.5','set radio 869.618,62.5,8,8'];
 const upstreamReads=['get freq','get tx','get af','get dutycycle','get rxdelay','get multi.acks',
   'get path.hash.mode','get radio.rxgain','get tz.offset','get wifi.status','get wifi.ip'];
+const friendlyReads=['get volume','get vibration','get melody','get sound_quiet','get muted','get board_led',
+  'get unread_led','get gps','get battery_protection','get agc_reset','get fem.lna','get fem.pa','get sound.bridge',
+  'get adc','get adc.multiplier','get adc.default','get battery','get battery_mv','get shutdown_mv','get advert',
+  'caps adc','get caps fem.lna','help','help sound 2','help adc 3','help radio 2','help connection 2',
+  'help system','help advert','help led','help gps','help fem','melody 1','melodies','adc manual','adc service','adc service stop'];
+const friendlyWrites=['set volume 5','set vibration on','set vibration off','set vibration 1','set vibration 0',
+  'set melody 1','set sound_quiet 1','set muted on','set board_led off','set unread_led 1','set gps 0',
+  'set battery_protection on','set agc_reset 1','set fem.lna on','set fem.pa off','set sound.bridge on',
+  'set adc 4.9','set adc.multiplier 4.900000','set advert 120','test notification','adc preview 3800',
+  'adc apply 7','adc reset','adc service start'];
+
+test('friendly console marker is independent and preserves original ui commands',async()=>{
+  const f=await connected({console:1,manualAdc:true,caps:{adc_service:1}});try{
+    assert.equal(f.client.state.hello.console,'1');
+    for(const command of friendlyReads)assert.match(await f.client.execute(command),/^(?:> |OK adc_)/,command);
+    for(const command of friendlyWrites)assert.match(await f.client.execute(command),/^(?:OK|> interval_min=)/,command);
+    assert.equal(await f.client.execute('get volume'),'> 5');
+    assert.equal(await f.client.execute('get fem.lna'),'> 1');
+    assert.equal(await f.client.execute('get advert'),'> interval_min=120');
+    assert.equal(await f.client.execute('melody 1'),'> 1: Трель');
+    assert.equal(api.record(await f.client.execute('ui get volume'),'OK ui get').value,'5');
+    await assert.rejects(f.client.execute('get tx'),{code:'MESHCORE_UNSUPPORTED'});
+  }finally{await f.client.disconnect();}
+});
+
+test('0.14 or malformed console marker never receives new commands; upstream still works',async()=>{
+  for(const console of [undefined,0,2]){
+    const f=await connected({console,meshcore:1});try{const before=f.port.commands.length;
+      for(const command of [...friendlyReads,...friendlyWrites])await assert.rejects(f.client.execute(command),{code:'CONSOLE_UNSUPPORTED'});
+      assert.equal(f.port.commands.length,before);assert.equal(f.client.state.uncertain,false);
+      assert.equal(await f.client.execute('get tx'),'> 20');
+      assert.equal(await f.client.execute('ui get volume'),'OK ui get key=volume value=7');
+    }finally{await f.client.disconnect();}
+  }
+});
+
+test('friendly readonly protects all setters, ADC tokens and tests but allows safe stop',async()=>{
+  const f=await connected({console:1,readonly:true,manualAdc:true,caps:{adc_service:1}});try{
+    const before=f.port.commands.length;
+    for(const command of [...friendlyWrites,'ui adc preview 3800'])await assert.rejects(f.client.execute(command,{mutate:false}),{code:'DENIED'});
+    assert.equal(f.port.commands.length,before);
+    for(const command of friendlyReads)assert.match(await f.client.execute(command),/^(?:> |OK adc_)/,command);
+    assert.equal(f.client.state.uncertain,false);
+  }finally{await f.client.disconnect();}
+});
+
+test('friendly failures are redacted and no write is ever repeated after missing ACK',async()=>{
+  const f=await connected({console:1});try{
+    for(const reason of ['range','readonly','unsupported','source','stale','storage']){
+      f.port.errorNext='Error: '+reason;const before=f.port.commands.length;
+      await assert.rejects(f.client.execute('set volume 5'),e=>e.reason===reason);
+      assert.equal(f.port.commands.length,before+1);assert.equal(f.client.state.uncertain,false);
+    }
+    f.port.drop=true;await assert.rejects(f.client.execute('set volume 5'),{code:'TIMEOUT'});
+    const before=f.port.commands.length;await assert.rejects(f.client.execute('set volume 5'),{code:'UNCERTAIN'});
+    assert.equal(f.port.commands.length,before);
+    assert.doesNotMatch(JSON.stringify(f.events),/set volume|Error:|source/);
+  }finally{await f.client.disconnect();}
+});
+
+test('friendly command grammar rejects secrets, unknown verbs, controls and non-ASCII digits',()=>{
+  for(const command of [...friendlyReads,...friendlyWrites])assert.ok(api.encodeCommand('00',command));
+  for(const command of ['set volume ５','set vibration yes','set fem 1','set adc NaN','set adc Infinity',
+    'set adc 1e2','help reboot','get wifi.password','get pin','set battery_mv 4000','adc service erase',
+    'help sound\nreboot','melody -1','get volume extra'])assert.throws(()=>api.encodeCommand('00',command),{code:'INPUT'},command);
+});
+
+test('helper allowlist exposes TX, help and readings without accepting credentials or ADC writes',()=>{
+  for(const command of [...friendlyReads,...upstreamReads,'ui get volume','ui caps adc','ui radio','ui advert'])assert.equal(api.developerCommand(command).write,false,command);
+  for(const command of ['set tx 20','set name Дача','set volume 5','set fem.lna on','set vibration 1','test notification'])assert.equal(api.developerCommand(command).write,true,command);
+  for(const command of ['set battery_protection off','set battery_protection 0','ui set battery_protection 0'])assert.equal(api.developerCommand(command).warning,'battery');
+  for(const command of ['set sound.bridge on','set sound.bridge 1','ui set bridge 1'])assert.equal(api.developerCommand(command).warning,'bridge');
+  for(const command of ['set pin 654321','ui wifi password 736563726574','ui get password','ui get wifi_password',
+    'set adc 4.9','set adc.multiplier 4.9','adc preview 3800','adc apply 7','adc reset','adc service start',
+    'reboot','poweroff','shutdown'])assert.throws(()=>api.developerCommand(command),{code:'INPUT'},command);
+});
 
 test('protocol 14 and additive meshcore hello preserve ui and enable explicit upstream commands',async()=>{
   const f=await connected({meshcore:1});try{

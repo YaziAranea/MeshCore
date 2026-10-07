@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.8.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.9.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -504,8 +504,8 @@ test('firmware preflight stays offline without serial access and displays merged
 });
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
-const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.14');
-test('0.08 through 0.14 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.15');
+test('0.08 through 0.15 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
@@ -514,7 +514,8 @@ test('0.08 through 0.14 retain verified melody names; unknown firmware or change
     {version:'0.12',maximum:30,named:true},
     {version:'0.13',maximum:30,named:true},
     {version:'0.14',maximum:30,named:true},
-    {version:'0.15',maximum:30,named:false},
+    {version:'0.15',maximum:30,named:true},
+    {version:'0.16',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},

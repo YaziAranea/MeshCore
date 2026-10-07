@@ -109,8 +109,8 @@ def main() -> None:
 
         # R2 and R8 share the 16MB partition layout, but not board wiring or
         # PSRAM type. Renaming one pair must never make it valid for the other.
-        r2 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4.3_UI_0.14")
-        r8 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4_R8_UI_0.14")
+        r2 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4.3_UI_0.15")
+        r8 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4_R8_UI_0.15")
         for original, target in ((r2, r8), (r8, r2)):
             wrong = folder / f"wrong-board-{target.stem}"
             wrong.mkdir()
@@ -126,9 +126,9 @@ def main() -> None:
         passed += 1
         print("[PASS] rejects R2/R8 interchange even with the same 16MB SPIFFS layout")
 
-        paper, paper_layout = fixtures["Paper_UI_0.14"]
+        paper, paper_layout = fixtures["Paper_UI_0.15"]
         try:
-            inspect_prepared_spiffs(paper, LAYOUTS["Heltec_V4.3_UI_0.14"])
+            inspect_prepared_spiffs(paper, LAYOUTS["Heltec_V4.3_UI_0.15"])
         except ValueError as error:
             assert "layout mismatch" in str(error)
         else:
@@ -173,7 +173,7 @@ def main() -> None:
         passed += 1
         print(f"[PASS] {name}: prepared-storage and safe-recovery gates enabled")
 
-    assert (VERSION, TAG) == ("0.14", "smartui-0.14")
+    assert (VERSION, TAG) == ("0.15", "smartui-0.15")
     for pair in EXPECTED:
         fresh = firmware_metadata(f"{pair.stem}-merged.bin", "0" * 40)["storage"]
         update = firmware_metadata(f"{pair.stem}-update.bin", "0" * 40)["storage"]
@@ -187,7 +187,7 @@ def main() -> None:
         assert fresh["factory_spiffs_layout"] == update["factory_spiffs_layout"]
         assert fresh["factory_spiffs_sha256"] == FACTORY_SPIFFS_SHA256[pair.stem]
     passed += 1
-    print("[PASS] 0.14 manifest marks merged clean-only and update state-preserving")
+    print("[PASS] 0.15 manifest marks merged clean-only and update state-preserving")
 
     print(f"Fresh-install storage regression: {passed} passed.")
     print("Real pinned mkspiffs host mount; synthetic ESP containers, not hardware boot tests.")

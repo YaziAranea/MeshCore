@@ -41,7 +41,7 @@
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
   ];
-  // Exact public 0.08..0.14 notify_tones order; the package test checks source parity.
+  // Exact public 0.08..0.15 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
   const addOptions = (select, options) => {
@@ -77,7 +77,7 @@
     renderAdcService(readReady,ready);
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));
@@ -110,7 +110,7 @@
     $("adc-reset").disabled=!ready || !caps.adc;
     $("adc-manual-value").disabled=!ready||!state.adcManualSupported;
     $("adc-manual-save").disabled=!ready||!state.adcManualSupported||!$("adc-manual-value").value.trim();
-    $("adc-manual-hint").textContent=state.status?.readOnly?"Запись недоступна: нода сообщает режим только для чтения.":state.adcManualSupported?"Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.":"Прямой ввод не поддерживается этой прошивкой. Обновите файлы SmartUI 0.14; расчёт по мультиметру остаётся доступен.";
+    $("adc-manual-hint").textContent=state.status?.readOnly?"Запись недоступна: нода сообщает режим только для чтения.":state.adcManualSupported?"Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.":"Прямой ввод не поддерживается этой прошивкой. Обновите SmartUI до актуальной версии; расчёт по мультиметру остаётся доступен.";
     const preview=state.adcPreview;
     $("adc-preview-box").hidden=!preview;
     $("adc-apply").disabled=!ready || !preview || Date.now()>=preview.expiresAt;
@@ -326,7 +326,7 @@
   $("cancel").onclick = () => run(() => client.cancelWifi());
   for (const mode of Object.keys(modeNames)) $("mode-" + mode).onclick = async () => {
     if (state.status?.mode === mode) return;
-    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.14 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
+    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.15 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
     if (await confirmAction(message)) await run(() => client.setMode(mode));
   };
   $("forget").onclick = async () => {

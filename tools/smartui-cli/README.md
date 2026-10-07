@@ -1,4 +1,4 @@
-# SmartUI 0.14 Local CLI SDK
+# SmartUI 0.15 Local CLI SDK
 
 Локальные CMD66/RESP29 для настроек подключённой ноды. Текущая прошивка сообщает
 companion protocol 14; прежние SmartUI с protocol 13 сохраняют свои `ui`-команды.
@@ -6,7 +6,44 @@ SDK не работает с удалённой LoRa-CLI и не поддерж�
 из SmartUI 0.11.
 
 [Русская спецификация](../../docs/SMARTUI_CLI_RU.md).
-Обычному пользователю достаточно USB Helper 1.8.
+Обычному пользователю достаточно USB Helper 1.9.
+[Полная пользовательская справка](../../docs/CONSOLE_COMMANDS_RU.md).
+
+## Короткие команды SmartUI 0.15
+
+После handshake `ui hello` сообщает `console=1`. Без этого признака SDK
+отклоняет новые короткие команды локально, сохраняя прежние `ui …`.
+Это отдельная возможность от `meshcore=1`, отвечающей за имена MeshCore.
+
+~~~python
+hello = client.connect()
+if hello.get("console") == "1":
+    print(client.execute("help sound"))
+    print(client.execute("get volume"))
+    # Только после действия пользователя:
+    # assert client.execute("set volume 7") == "OK"
+    # assert client.execute("get volume") == "> 7"
+~~~
+
+Список: get/set для `volume`, `vibration`, `melody`, `sound_quiet`, `muted`,
+`board_led`, `unread_led`, `gps`, `battery_protection`, `agc_reset`, `fem.lna`,
+`fem.pa`, `sound.bridge`, `adc.multiplier` (синоним `adc`), `advert`;
+чтение `battery`, `battery_mv`, `adc.default`, `shutdown_mv`; `caps KEY`,
+`get caps KEY`, `help [TOPIC [PAGE]]`, `melodies`, `melody N`, `test notification`;
+`adc preview MV`, `adc apply TOKEN`, `adc reset`, `adc manual`,
+`adc service [start|stop]`.
+
+Переключатели принимают on/off/0/1. Границы проверяет прошивка. Ответы —
+`> VALUE`, `OK`, `Error: REASON`; ADC сохраняет структурированные поля токена,
+`get/set advert` возвращает `> interval_min=N`; `melody N` — UTF-8 название.
+Успешный set сам по себе не обновляет модель клиента: перечитайте параметр.
+
+Все записи и ADC preview классифицируются как изменения; нельзя снять эту
+классификацию аргументом `mutate=False`. Сервисный stop остаётся разрешённым
+завершением окна при режиме только чтения. Автоматических повторов нет.
+SDK поддерживает прямую настройку ADC; командное поле Helper намеренно
+направляет такие изменения в специальную форму с проверкой/подтверждением.
+Один полученный ответ не является аппаратным испытанием уведомлений или радио.
 
 ## Состав
 

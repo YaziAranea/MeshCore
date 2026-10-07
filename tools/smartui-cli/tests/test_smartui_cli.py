@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from smartui_cli import CliClient, CliError, decode_reply, discover, encode_command, matches, record
+from smartui_cli import CliClient, CliError, decode_reply, discover, encode_command, matches, record, is_friendly, mutates
 from transports import FrameDecoder, StreamTransport
 
 UPSTREAM_WRITES = ("set name Дача", "set pin 654321", "set tx 20", "set af 2.5", "set dutycycle 10",
@@ -12,12 +12,25 @@ UPSTREAM_WRITES = ("set name Дача", "set pin 654321", "set tx 20", "set af 2
                    "set tz.offset 5.5", "set radio 869.618,62.5,8,8")
 UPSTREAM_READS = ("get freq", "get tx", "get af", "get dutycycle", "get rxdelay", "get multi.acks",
                   "get path.hash.mode", "get radio.rxgain", "get tz.offset", "get wifi.status", "get wifi.ip")
+FRIENDLY_READS = ("get volume", "get vibration", "get melody", "get sound_quiet", "get muted", "get board_led",
+                  "get unread_led", "get gps", "get battery_protection", "get agc_reset", "get fem.lna",
+                  "get fem.pa", "get sound.bridge", "get adc", "get adc.multiplier", "get adc.default",
+                  "get battery", "get battery_mv", "get shutdown_mv", "get advert", "caps adc", "get caps fem.lna",
+                  "help", "help sound 2", "help adc 3", "help radio 2", "help connection 2", "help system",
+                  "help advert", "help led", "help gps", "help fem", "melody 1", "melodies", "adc manual",
+                  "adc service", "adc service stop")
+FRIENDLY_WRITES = ("set volume 5", "set vibration on", "set vibration off", "set vibration 1", "set vibration 0",
+                   "set melody 1", "set sound_quiet 1", "set muted on", "set board_led off", "set unread_led 1",
+                   "set gps 0", "set battery_protection on", "set agc_reset 1", "set fem.lna on", "set fem.pa off",
+                   "set sound.bridge on", "set adc 4.9", "set adc.multiplier 4.900000", "set advert 120",
+                   "test notification", "adc preview 3800", "adc apply 7", "adc reset", "adc service start")
 
 class Board:
-    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None):
+    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None):
         self.requests, self.closed = [], False
         self.readonly, self.discovery, self.error, self.timeout = readonly, discovery, None, False
         self.meshcore, self.name, self.tx = meshcore, "Тестовая нода", "20"
+        self.console = console
 
     def close(self):
         self.closed = True
@@ -42,6 +55,12 @@ class Board:
                             f"write={int(not self.readonly)} sync=0 events=0")
                     if self.meshcore is not None:
                         text += f" meshcore={self.meshcore}"
+                    if self.console is not None:
+                        text += f" console={self.console}"
+                elif self.console == 1 and is_friendly(command):
+                    text = "OK" if mutates(command) else "> 7"
+                    if command == "melody 1":
+                        text = "> 1: Трель"
                 elif self.meshcore == 1 and command in UPSTREAM_READS:
                     text = "> " + (self.tx if command == "get tx" else "1")
                 elif self.meshcore == 1 and command.startswith("set "):
@@ -74,6 +93,72 @@ class CliTests(unittest.TestCase):
         client.connect()
         self.addCleanup(client.close)
         return client, board
+
+    def test_friendly_discovery_independent_from_upstream_and_utf8_reply(self):
+        client, board = self.connected(console=1)
+        self.assertEqual(client.hello["console"], "1")
+        for command in FRIENDLY_READS + FRIENDLY_WRITES:
+            self.assertRegex(client.execute(command), r"^(?:OK|> )")
+        self.assertEqual(client.execute("melody 1"), "> 1: Трель")
+        self.assertEqual(client.field("get", "volume"), "7")
+        with self.assertRaises(CliError) as error:
+            client.execute("get tx")
+        self.assertEqual(error.exception.code, "meshcore_unsupported")
+
+    def test_console_discovery_gate_preserves_014_upstream_compatibility(self):
+        for marker in (None, 0, 2):
+            client, board = self.connected(console=marker, meshcore=1)
+            before = len(board.requests)
+            for command in FRIENDLY_READS + FRIENDLY_WRITES:
+                with self.assertRaises(CliError) as error:
+                    client.execute(command)
+                self.assertEqual(error.exception.code, "console_unsupported")
+            self.assertEqual(len(board.requests), before)
+            self.assertFalse(client.uncertain)
+            self.assertEqual(client.execute("get tx"), "> 20")
+            self.assertEqual(client.field("get", "volume"), "7")
+
+    def test_friendly_readonly_includes_adc_token_creation_but_allows_service_stop(self):
+        client, board = self.connected(console=1, readonly=True)
+        before = len(board.requests)
+        for command in FRIENDLY_WRITES + ("ui adc preview 3800",):
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "readonly")
+        self.assertEqual(len(board.requests), before)
+        for command in FRIENDLY_READS:
+            self.assertTrue(client.execute(command).startswith("> "))
+        self.assertFalse(client.uncertain)
+
+    def test_friendly_grammar_remains_bounded(self):
+        for command in FRIENDLY_READS + FRIENDLY_WRITES:
+            self.assertTrue(encode_command("00", command))
+        for command in ("set volume ５", "set vibration yes", "set fem 1", "set adc NaN", "set adc Infinity",
+                        "set adc 1e2", "help reboot", "get wifi.password", "get pin", "set battery_mv 4000",
+                        "adc service erase", "help sound\nreboot", "melody -1", "get volume extra"):
+            with self.subTest(command=command), self.assertRaises(CliError) as error:
+                encode_command("00", command)
+            self.assertEqual(error.exception.code, "input")
+
+    def test_friendly_error_codes_and_timeout_never_repeat_write(self):
+        client, board = self.connected(console=1)
+        for reason in ("range", "readonly", "unsupported", "source", "stale", "storage"):
+            board.error = "Error: " + reason
+            before = len(board.requests)
+            with self.assertRaises(CliError) as error:
+                client.execute("set volume 5")
+            self.assertEqual(error.exception.reason, reason)
+            self.assertEqual(len(board.requests), before + 1)
+            self.assertFalse(client.uncertain)
+        board.timeout = True
+        with self.assertRaises(CliError) as error:
+            client.execute("set volume 5")
+        self.assertEqual(error.exception.code, "timeout")
+        before = len(board.requests)
+        with self.assertRaises(CliError) as error:
+            client.execute("set volume 5")
+        self.assertEqual(error.exception.code, "uncertain")
+        self.assertEqual(len(board.requests), before)
 
     def test_protocol_14_extra_hello_and_supported_upstream_read_write(self):
         client, board = self.connected(meshcore=1)

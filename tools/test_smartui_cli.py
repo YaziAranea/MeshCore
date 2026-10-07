@@ -178,6 +178,7 @@ def main_dispatch_integration():
 #include <cstring>
 #include <string>
 #include "AdcCalibrationService.h"
+#include "SmartUiConsoleCommands.h"
 #define SMARTUI_VERSION "0.14"
 static smartui::AdcCalibrationService adc_calibration_service;
 static unsigned adc_stops = 0;
@@ -231,12 +232,32 @@ static std::string call(const char* command, bool expected_handled = true) {
   assert(handled == expected_handled);
   return reply;
 }
+static std::string friendly_call(const char* command) {
+  char reply[157] = {};
+  assert(smartui::handleSmartUiConsoleCommand(command, reply, sizeof(reply), executeSmartUiCliCommand));
+  return reply;
+}
 static void fresh() {
   connection_controller = Controller{}; the_mesh = Mesh{}; radio_driver = Radio{};
   controller_calls = backend_calls = 0; backend_allowed = false;
   backend_handled = true; last_command.clear();
 }
 int main() {
+  fresh();
+  assert(friendly_call("set volume 7") == "OK" && backend_allowed && last_command == "ui set volume 7");
+  fresh(); connection_controller.writable = false;
+  assert(friendly_call("set volume 7") == "Error: readonly" && backend_calls == 0);
+  assert(friendly_call("set adc.multiplier 1.815") == "Error: readonly" && backend_calls == 0);
+  fresh(); connection_controller.busy = true;
+  assert(friendly_call("set vibration on") == "Error: busy" && backend_calls == 0);
+  fresh(); the_mesh.pending = true;
+  assert(friendly_call("set fem.lna on") == "Error: busy" && backend_calls == 0);
+  fresh(); radio_driver.receiving = true;
+  assert(friendly_call("set fem.pa on") == "Error: busy" && backend_calls == 0);
+  fresh(); radio_driver.recv = false;
+  assert(friendly_call("set fem.pa off") == "Error: busy" && backend_calls == 0);
+  fresh();
+  assert(friendly_call("set fem.lna on") == "OK" && backend_calls == 1 && last_command == "ui set fem_lna 1");
   fresh(); connection_controller.writable = false;
   assert(call("ui hello").find("write=0 sync=0 events=0 meshcore=1") != std::string::npos);
   assert(controller_calls == 0 && backend_calls == 0);
@@ -403,12 +424,24 @@ def meshcore_hooks_integration():
     stop = source.index("  meshcore_cli.begin(meshcore_hooks);", start) + len("  meshcore_cli.begin(meshcore_hooks);")
     return r'''
 #include "MeshCoreCli.h"
+#include "SmartUiConsoleCommands.h"
 #include "ConnectionTypes.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #define MAX_LORA_TX_POWER 22
+static unsigned friendly_calls;
+static std::string friendly_command;
+bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
+  ++friendly_calls; friendly_command = command;
+  if (strcmp(command, "ui get volume") == 0)
+    snprintf(reply, capacity, "OK ui get key=volume value=7");
+  else if (strcmp(command, "ui set vibration 1") == 0)
+    snprintf(reply, capacity, "OK ui set key=vibration value=1");
+  else snprintf(reply, capacity, "ERR ui unsupported");
+  return true;
+}
 struct NodePrefs {
   float freq=869.618f,bw=62.5f; uint8_t sf=8,cr=8; int8_t tx_power_dbm=20;
   float airtime_factor=1.0f,rx_delay_base=0; uint8_t multi_acks=0,path_hash_mode=1,rx_boosted_gain=0;
@@ -461,6 +494,7 @@ int main() {
   assert(call("set radio 869.618,62.5,8,8")=="OK");
   assert(radio_settings.last=="ui radio set 869618 62500 8 8 3" && radio_settings.allowed);
   the_mesh.radio_busy=true;
+  assert(call("set tx 10")=="Error: busy" && the_mesh.prefs.tx_power_dbm==21);
   assert(call("set radio.rxgain on")=="Error: busy" && !the_mesh.prefs.rx_boosted_gain);
   the_mesh.radio_busy=false; the_mesh.gain_supported=false;
   assert(call("set radio.rxgain on")=="Error: unsupported" && !the_mesh.prefs.rx_boosted_gain);
@@ -475,6 +509,9 @@ int main() {
   assert(call("set tx 10")=="Error: busy" && the_mesh.prefs.tx_power_dbm==21);
   connection_controller.busy=false;
   assert(call("get wifi.status")=="Error: unsupported");
+  assert(call("get volume")=="> 7" && friendly_command=="ui get volume");
+  assert(call("set vibration on")=="OK" && friendly_command=="ui set vibration 1");
+  assert(friendly_calls==2);
   connection_controller.current.capabilities=COMPANION_CAP_WIFI;
   connection_controller.current.wifiAssociated=true;
   strcpy(connection_controller.current.wifiLocalIp,"10.0.0.7");
@@ -623,7 +660,9 @@ def main():
             if radio_suite:
                 paths += [include / "RadioSettings.cpp"]
             if meshcore_suite:
-                paths += [include / "MeshCoreCli.cpp"]
+                paths += [include / "MeshCoreCli.cpp", include / "SmartUiConsoleCommands.cpp"]
+            if suite.name == "cli_main_dispatch.cpp":
+                paths += [include / "SmartUiConsoleCommands.cpp"]
             # nRF52 builds use -Ofast; normal optimization alone misses the
             # reciprocal-conversion rounding that rejected valid presets, and
             # the upstream-name parser must reject NaN/infinity without isfinite().
