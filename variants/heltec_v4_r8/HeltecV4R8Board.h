@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <driver/rtc_io.h>
 #include <helpers/ESP32Board.h>
+#include <helpers/AdcCalibration.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include "LoRaFEMControl.h"
 
@@ -24,13 +25,14 @@ public:
   void onBeforeTransmit(void) override;
   void onAfterTransmit(void) override;
   void shutdownPeripherals() override;
+  bool setLoRaFemLnaEnabled(bool enable) override;
+  bool canControlLoRaFemLna() const override { return true; }
+  bool isLoRaFemLnaEnabled() const override { return loRaFEMControl.isLNAEnabled(); }
   uint16_t getBattMilliVolts() override;
   bool setAdcMultiplier(float multiplier) override {
-    if (multiplier == 0.0f) {
-      adc_mult = ADC_MULTIPLIER;
-    } else {
-      adc_mult = multiplier;
-    }
+    float applied = adc_mult;
+    if (!mesh::normalizeAdcMultiplier(multiplier, ADC_MULTIPLIER, applied)) return false;
+    adc_mult = applied;
     return true;
   }
   float getAdcMultiplier() const override { return adc_mult; }

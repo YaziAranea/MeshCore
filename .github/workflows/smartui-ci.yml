@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.13 as Latest after all six-board checks pass
+        description: Publish public SmartUI 0.13 as Latest after all seven-board checks pass
         required: false
         type: boolean
         default: false
@@ -170,6 +170,10 @@ jobs:
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
             stem: Paper_UI_0.13
+          - board: Heltec V4 R8 OLED FEM ON
+            artifact_id: heltec-v4-r8-oled-fem
+            environment: heltec_v4_r8_companion_radio_ble_femon_smartui
+            stem: Heltec_V4_R8_UI_0.13
 
     steps:
       - name: Check out source
@@ -314,7 +318,7 @@ jobs:
           retention-days: 30
 
   package-release:
-    name: Package one exact-source six-board release
+    name: Package one exact-source seven-board release
     needs: [validate-uf2, validate-esp32]
     runs-on: ubuntu-latest
     steps:
@@ -337,7 +341,7 @@ jobs:
         with:
           name: smartui-v3-validation-support
           path: validation-support
-      - name: Validate all nine images and build manifest, checksums and all-six ZIP
+      - name: Validate all eleven images and build manifest, checksums and all-board ZIP
         run: |
           chmod +x validation-support/mkspiffs
           python tools/test_release_source_guard.py
@@ -346,7 +350,7 @@ jobs:
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \
             --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
-      - name: Upload the complete seventeen-asset release
+      - name: Upload the complete nineteen-asset release
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: smartui-public-release
@@ -466,6 +470,9 @@ jobs:
       - name: Check SmartUI contract
         run: python tools/audit_smartui_ps17_contract.py
 
+      - name: Check Heltec V4 R8 hardware profile and release identity
+        run: python tools/test_heltec_v4_r8_profile.py
+
       - name: Check contact persistence and route-reset acknowledgement
         run: python tools/test_contact_persistence.py
 
@@ -534,7 +541,7 @@ jobs:
           node --test tools/usb-helper/test_ui.js
           node --test tools/usb-helper/test_api_ui.js
 
-      - name: Check active compose sessions and six-board real-font quick replies
+      - name: Check active compose sessions and shared-display real-font quick replies
         run: |
           python tools/test_chat_backend_v006_test.py
           python tools/test_quick_reply_storage.py
@@ -575,7 +582,7 @@ jobs:
       - name: Check icon-only mute state in production C++
         run: python tools/test_quiet_status.py
 
-      - name: Check MeshCore splash with real fonts on all six boards
+      - name: Check MeshCore splash with real display fonts
         run: python tools/test_splash_brand.py
 
       - name: Check actual C++ icons on every display backend
@@ -588,7 +595,9 @@ jobs:
         run: python tools/simulate_smartui_ps17_qa.py --out-dir qa_outputs/ci
 
       - name: Run Heltec V4.3 OLED chrome simulation
-        run: python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/v4_3_oled
+        run: |
+          python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/v4_3_oled
+          python tools/simulate_v4_3_oled_qa.py --board r8 --out-dir qa_outputs/v4_r8_oled
 
       - name: Run Heltec V3 OLED profiles and interaction geometry
         run: python tools/simulate_heltec_v3_smartui_qa.py
@@ -784,7 +793,7 @@ jobs:
             exit 1
           fi
 
-          # New releases remain drafts until all 17 expected assets have arrived.
+          # New releases remain drafts until all 19 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
           # This public release becomes Latest only after the complete bundle passes.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
@@ -797,7 +806,7 @@ jobs:
           local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
           remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assets = {a["name"]: a for a in remote["assets"]}
-          assert len(local) == 17, f"Expected 17 local assets, got {len(local)}"
+          assert len(local) == 19, f"Expected 19 local assets, got {len(local)}"
           assert len(remote["assets"]) == len(assets), "Duplicate asset names"
           assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
           for name, path in local.items():

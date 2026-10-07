@@ -12,11 +12,19 @@
     {id:'promicro', label:'ProMicro RA62', environment:'ProMicro_ra62_companion_radio_ble', reported:'ProMicro DIY', marker:'ProMicro', format:'uf2'},
     {id:'v3', label:'Heltec V3 OLED', environment:'Heltec_v3_companion_radio_ble_smartui', reported:'Heltec V3', marker:'V3', format:'bin'},
     {id:'v43', label:'Heltec V4.3 OLED FEM ON', environment:'heltec_v4_3_companion_radio_ble_femon_smartui', reported:'Heltec V4.3 OLED', marker:'V4.3', format:'bin'},
+    {id:'v4r8', label:'Heltec V4 R8 OLED FEM ON', environment:'heltec_v4_r8_companion_radio_ble_femon_smartui', reported:'Heltec V4 R8 OLED', marker:'V4 R8', format:'bin', firstRelease:'0.13'},
     {id:'paper', label:'Wireless Paper FULL', environment:'Heltec_Wireless_Paper_companion_radio_ble_smartui_full', reported:'Heltec Wireless Paper', marker:'Paper', format:'bin'}
   ].map(Object.freeze));
   function fail(message) { const error = new Error(message); error.safe = true; throw error; }
   function requireThat(value, message) { if (!value) fail(message); }
   function reportedProfile(info) { return info && PROFILES.find(profile => profile.reported === info.board) || null; }
+  function supportsRelease(profile, version) {
+    if (!profile.firstRelease) return true;
+    const parts = /^(\d+)\.(\d+)(?:\.\d+)?(?:[-+][A-Za-z0-9._+-]+)?$/.exec(version);
+    if (!parts) return false;
+    const [major, minor] = profile.firstRelease.split('.').map(Number);
+    return Number(parts[1]) > major || (Number(parts[1]) === major && Number(parts[2]) >= minor);
+  }
   const hex = bytes => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
   async function digest(bytes, cryptoProvider) {
     requireThat(cryptoProvider && cryptoProvider.subtle, 'В браузере недоступен локальный SHA-256. Откройте файл в Chrome или Edge.');
@@ -68,6 +76,7 @@
     const record = records[0];
     const profile = PROFILES.find(item => item.environment === record.environment);
     requireThat(profile && record.board === profile.label && record.source_commit === manifest.commit && Number.isSafeInteger(record.bytes) && record.bytes === bytes.length && typeof record.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(record.sha256), 'Плата, исходный commit или размер файла не соответствуют манифесту.');
+    requireThat(supportsRelease(profile, manifest.version), 'Эта плата не поддерживается в указанной версии SmartUI.');
     const reported = reportedProfile(info);
     const selected = PROFILES.find(item => item.id === target);
     requireThat(reported || selected, 'Плата ноды неизвестна. Укажите точную модель вручную.');

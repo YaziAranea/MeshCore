@@ -22,13 +22,17 @@ static constexpr size_t kFactorySpiffsOffset = 0x670000;
 static constexpr size_t kFactorySpiffsSize = 0x180000;
 static constexpr size_t kFactoryFlashMinimum = 0x7f0000;
 static constexpr char kStorageRecoveryBoard[] = "V3";
-#elif UI_SAFE_STORAGE_RECOVERY && defined(HELTEC_LORA_V4)
+#elif UI_SAFE_STORAGE_RECOVERY && (defined(HELTEC_LORA_V4) || defined(HELTEC_V4_R8))
 static constexpr char kV3FactorySpiffsSha256Hex[] =
     "ec202a958aea323b1e5f8388ab92814695b85d5ac9c77227fdf47ed850fff7fe";
 static constexpr size_t kFactorySpiffsOffset = 0xc90000;
 static constexpr size_t kFactorySpiffsSize = 0x360000;
 static constexpr size_t kFactoryFlashMinimum = 0xff0000;
+#if defined(HELTEC_V4_R8)
+static constexpr char kStorageRecoveryBoard[] = "V4 R8";
+#else
 static constexpr char kStorageRecoveryBoard[] = "V4.3";
+#endif
 #elif UI_SAFE_STORAGE_RECOVERY && defined(HELTEC_WIRELESS_PAPER)
 static constexpr char kV3FactorySpiffsSha256Hex[] =
     "debe417f42a5bdda6c6e81539f9a3519b4653ab70cefeba01885ecc4b2d3cf5b";

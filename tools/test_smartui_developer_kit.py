@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check deterministic allowlisted SDK packaging and the 17-asset release layout."""
+"""Check deterministic allowlisted SDK packaging and the 19-asset release layout."""
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import hashlib
@@ -195,7 +195,7 @@ class DeveloperKitTests(unittest.TestCase):
         )
         self.assertEqual(javascript.returncode, 0, javascript.stdout + javascript.stderr)
 
-    def test_release_contains_17_assets_and_kit_in_manifest_and_all_boards_zip(self):
+    def test_release_contains_19_assets_and_kit_in_manifest_and_all_boards_zip(self):
         # Synthetic images only: hardware/image validators have their own tests.
         marker = b"SmartUI-source:" + COMMIT[:8].encode() + b"\0"
         files = []
@@ -209,15 +209,18 @@ class DeveloperKitTests(unittest.TestCase):
         with patch.object(release, "validate_stage"):
             result = release.package_release(self.root / "release", files, notes, COMMIT)
         output = Path(result["directory"])
-        self.assertEqual(len(result["assets"]), 17)
+        self.assertEqual(len(result["assets"]), 19)
         manifest = json.loads((output / release.MANIFEST_NAME).read_text(encoding="utf-8"))
-        self.assertEqual(manifest["asset_count"], 17)
+        self.assertEqual(manifest["asset_count"], 19)
+        self.assertEqual(manifest["board_count"], 7)
+        self.assertEqual(manifest["firmware_count"], 11)
+        self.assertEqual(len(manifest["firmware"]), 11)
         entry = manifest["developer_kit"]
         self.assertEqual((entry["name"], entry["source_commit"]), (kit.ZIP_NAME, COMMIT))
         self.assertEqual(entry["sha256"], release.digest(output / kit.ZIP_NAME))
         self.assertIn(kit.ZIP_NAME, {f["name"] for f in manifest["files"]})
         with zipfile.ZipFile(output / release.ARCHIVE_NAME) as archive:
-            self.assertEqual(len(archive.namelist()), 16)
+            self.assertEqual(len(archive.namelist()), 18)
             self.assertEqual(archive.read(kit.ZIP_NAME), (output / kit.ZIP_NAME).read_bytes())
 
 

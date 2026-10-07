@@ -20,7 +20,7 @@ Set-Location MeshCore
 git switch smartui-0.13
 ```
 
-Текущий SmartUI 0.13 для шести плат находится в ветке `smartui-0.13`. Для исходников опубликованного выпуска используйте `git switch --detach refs/tags/smartui-0.13`, для предыдущего выпуска — тег `smartui-0.12`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Текущий SmartUI 0.13 для семи плат находится в ветке `smartui-0.13`. Для исходников опубликованного выпуска используйте `git switch --detach refs/tags/smartui-0.13`, для предыдущего выпуска — тег `smartui-0.12` (R8 в нём нет). Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ## Целевые сборки
 
@@ -32,6 +32,7 @@ git switch smartui-0.13
 | Heltec V3 OLED | `Heltec_v3_companion_radio_ble_smartui` | merged + update BIN |
 | Heltec V4.3 OLED FEM ON | `heltec_v4_3_companion_radio_ble_femon_smartui` | merged + update BIN |
 | Wireless Paper FULL | `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` | merged + update BIN |
+| Heltec V4 R8 OLED FEM ON | `heltec_v4_r8_companion_radio_ble_femon_smartui` | merged + update BIN |
 
 FakeTec и V4 TFT не входят в набор релизных файлов. Для V3 нужен новый `Heltec_v3_companion_radio_ble_smartui`: старый environment без `_smartui` сохраняет прежний набор возможностей и не заменяет его. Отдельная compile-only матрица CI проверяет общие display-драйверы; контрольные `Xiao_S3_WIO_companion_radio_ble` и `Heltec_t1_companion_radio_usb` не заявлены как релизные платы.
 
@@ -67,6 +68,7 @@ pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 pio run -e Heltec_v3_companion_radio_ble_smartui -t mergebin
 pio run -e heltec_v4_3_companion_radio_ble_femon_smartui -t mergebin
 pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j 1
+pio run -e heltec_v4_r8_companion_radio_ble_femon_smartui -t mergebin -j 1
 ```
 
 Для каждого environment получаются:
@@ -84,9 +86,11 @@ pio run -e Heltec_Wireless_Paper_companion_radio_ble_smartui_full -t mergebin -j
 Heltec_V3_UI_0.13
 Heltec_V4.3_UI_0.13
 Paper_UI_0.13
+Heltec_V4_R8_UI_0.13
 ```
 
 К каждому stem добавляются `-merged.bin` и `-update.bin`.
+R8 использует собственный board manifest с `qio_opi` / octal PSRAM 8 МБ и отдельную распиновку; обычный профиль V4.3 R2 не подходит. Релизный OLED-профиль не заменяется upstream-целью R8 без суффикса `_femon_smartui`. [Аппаратные особенности](SUPPORTED_BOARDS_RU.md#heltec-v4-r8-oled-fem-on).
 V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/зуммер. Не подменяйте его
 сборкой V4.3 только потому, что дисплеи одинакового размера.
 

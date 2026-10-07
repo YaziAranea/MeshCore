@@ -33,6 +33,10 @@ EXPECTED = (
         "Paper_UI_0.13",
         b"Paper SmartUI 0.13",
     ),
+    ImagePair(
+        "Heltec_V4_R8_UI_0.13",
+        b"V4 R8 SmartUI 0.13",
+    ),
 )
 
 
@@ -107,7 +111,7 @@ def main() -> int:
         nargs="?",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "firmware",
-        help="directory containing the two ESP32-S3 BIN pairs",
+        help="directory containing the V4.3, Paper and V4 R8 ESP32-S3 BIN pairs",
     )
     args = parser.parse_args()
 

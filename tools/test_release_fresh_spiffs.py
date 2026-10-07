@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Host regression for V4.3/Paper clean-install and update storage policy."""
+"""Host regression for V4.3/Paper/V4 R8 clean-install and update storage policy."""
 
 from __future__ import annotations
 
@@ -95,6 +95,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="smartui-all-spiffs-") as raw_folder:
         folder = Path(raw_folder)
         fixtures = {}
+        fixture_dirs = {}
         for pair in EXPECTED:
             directory, merged, layout = build_fixture(folder, pair, tool)
             result = validate_prepared_pair(directory, pair)
@@ -102,8 +103,28 @@ def main() -> None:
             assert (result[4]["offset"], result[4]["size"]) == layout
             validate_exact_application((directory / f"{pair.stem}-update.bin").read_bytes())
             fixtures[pair.stem] = (merged, layout)
+            fixture_dirs[pair.stem] = directory
             passed += 1
             print(f"[PASS] {pair.stem}: exact-layout canonical empty SPIFFS; pure update")
+
+        # R2 and R8 share the 16MB partition layout, but not board wiring or
+        # PSRAM type. Renaming one pair must never make it valid for the other.
+        r2 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4.3_UI_0.13")
+        r8 = next(pair for pair in EXPECTED if pair.stem == "Heltec_V4_R8_UI_0.13")
+        for original, target in ((r2, r8), (r8, r2)):
+            wrong = folder / f"wrong-board-{target.stem}"
+            wrong.mkdir()
+            for suffix in ("-merged.bin", "-update.bin"):
+                (wrong / (target.stem + suffix)).write_bytes(
+                    (fixture_dirs[original.stem] / (original.stem + suffix)).read_bytes())
+            try:
+                validate_prepared_pair(wrong, target)
+            except ValueError as error:
+                assert "version marker" in str(error)
+            else:
+                raise AssertionError("V4 R2/R8 pair accepted after cross-board rename")
+        passed += 1
+        print("[PASS] rejects R2/R8 interchange even with the same 16MB SPIFFS layout")
 
         paper, paper_layout = fixtures["Paper_UI_0.13"]
         try:
@@ -138,10 +159,12 @@ def main() -> None:
         print("[PASS] rejects prepared merged not bound to safe native recovery hash")
 
     v4 = (ROOT / "variants/heltec_v4/platformio.ini").read_text(encoding="utf-8")
+    r8 = (ROOT / "variants/heltec_v4_r8/platformio.ini").read_text(encoding="utf-8")
     paper = (ROOT / "variants/heltec_wireless_paper/platformio.ini").read_text(encoding="utf-8")
     for config, name in (
         (v4, "env:heltec_v4_3_companion_radio_ble_femon_smartui"),
         (paper, "Heltec_Wireless_Paper_companion_smartui_common"),
+        (r8, "env:heltec_v4_r8_companion_radio_ble_femon_smartui"),
     ):
         body = section(config, name)
         assert "custom_smartui_fresh_spiffs = yes" in body

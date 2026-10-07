@@ -174,7 +174,7 @@ static uint16_t uiToneNearestResonantOctave(uint16_t frequency, uint16_t resonan
 #endif
 
 #ifndef UI_V4_3_OLED_PROFILE
-  #if defined(HELTEC_LORA_V4_3_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
+  #if defined(HELTEC_LORA_V4_3_OLED) || defined(HELTEC_V4_R8_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
     #define UI_V4_3_OLED_PROFILE 1
   #else
     #define UI_V4_3_OLED_PROFILE 0
@@ -711,6 +711,10 @@ static const int8_t notify_gpio_pins[] = {0, 1, 9, 18, 19, 20, PIN_LED};
 static const int8_t notify_gpio_pins[] = {35, 40, 41, 47, 48};
 #elif defined(HELTEC_LORA_V4)
 static const int8_t notify_gpio_pins[] = {35, 3, 4, 40, 41, 47, 48};
+#elif defined(HELTEC_V4_R8_OLED)
+// R8 GPIO33..37 belong to octal PSRAM; GPIO40/42 control power,
+// GPIO38/39/41 belong to GNSS. Never offer those as notification outputs.
+static const int8_t notify_gpio_pins[] = {46, 4, 6, 15, 16, 47, 48};
 #elif defined(HELTEC_LORA_V3)
 static const int8_t notify_gpio_pins[] = {35, 40, 41, 3, 4};
 #elif defined(HELTEC_WIRELESS_PAPER)

@@ -15,7 +15,8 @@ public:
   void setRxModeEnable(void);
   void setRxModeEnableWhenMCUSleep(void);
   void setLNAEnable(bool enabled);
-  bool isLnaCanControl(void) { return true; }
+  bool isLnaCanControl(void) const { return true; }
+  bool isLNAEnabled(void) const { return lna_enabled; }
   void setLnaCanControl(bool can_control) { }
   LoRaFEMType getFEMType(void) const { return KCT8103L_PA; }
 

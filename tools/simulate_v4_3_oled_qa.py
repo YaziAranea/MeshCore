@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Exact 128x64 OLED checks for the Heltec V4.3 SmartUI profile.
+"""Exact 128x64 OLED checks for the Heltec V4.3 and V4 R8 SmartUI profiles.
 
 This imports the firmware's Utf8Cyrillic5x7 tables through the existing OLED
 simulator.  It specifically guards the GPS/mute/battery chrome that differs
@@ -176,11 +176,11 @@ def clock_scene(
     return oled.img, oled.overflows
 
 
-def adc_scene(style: tuple[str, int, bool]) -> tuple[Image.Image, list[str]]:
+def adc_scene(style: tuple[str, int, bool], coefficient: str = "5.420") -> tuple[Image.Image, list[str]]:
     oled = Oled(style)
     oled.text(W // 2, 14, "Калибр. АКБ", center=True, max_width=W - 2)
     oled.text(W // 2, 28, "АКБ: 4.09В", center=True, max_width=W - 2)
-    oled.text(W // 2, 40, "Коэф: 5.420", center=True, max_width=W - 2)
+    oled.text(W // 2, 40, f"Коэф: {coefficient}", center=True, max_width=W - 2)
     oled.text(W // 2, 52, "+/-", center=True, max_width=W - 2)
     return oled.img, oled.overflows
 
@@ -210,7 +210,7 @@ def ble_pin_scene(style: tuple[str, int, bool], node_name: str = "Heltec V4.3") 
     return oled.img, oled.overflows
 
 
-def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, list[str]]:
+def render_scene(style: tuple[str, int, bool], name: str, board: str = "v43") -> tuple[Image.Image, list[str]]:
     if name == "GPS OFF + mute":
         return clock_scene(style, "GPS OFF", True)
     if name == "GPS ... + mute":
@@ -218,8 +218,8 @@ def render_scene(style: tuple[str, int, bool], name: str) -> tuple[Image.Image, 
     if name == "GPS FIX":
         return clock_scene(style, "GPS FIX", False, sats=12)
     if name == "BLE PIN":
-        return ble_pin_scene(style)
-    return adc_scene(style)
+        return ble_pin_scene(style, "Heltec V4 R8 OLED" if board == "r8" else "Heltec V4.3")
+    return adc_scene(style, "5.072" if board == "r8" else "5.420")
 
 
 def validate_uptime_sweep() -> tuple[int, list[str]]:
@@ -279,6 +279,8 @@ def validate_clock_states() -> tuple[int, list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--board", choices=("v43", "r8"), default="v43",
+                        help="Same production compact OLED renderer, board-specific labels")
     parser.add_argument(
         "--out-dir",
         type=Path,
@@ -309,23 +311,24 @@ def main() -> int:
         y = label_h + row * (cell_h + gap)
         draw.text((4, y + 8), style[0], font=label_font, fill="white")
         for column, scene in enumerate(SCENES):
-            image, errors = render_scene(style, scene)
+            image, errors = render_scene(style, scene, args.board)
             failures.extend(f"{style[0]} / {scene}: {error}" for error in errors)
             preview = image.resize((cell_w, cell_h), Image.Resampling.NEAREST).convert("RGB")
             x = label_w + column * (cell_w + gap)
             sheet.paste(preview, (x, y))
 
-    matrix = args.out_dir / "V4_3_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png"
+    prefix = "V4_R8" if args.board == "r8" else "V4_3"
+    matrix = args.out_dir / f"{prefix}_OLED_SMARTUI_2_1_EXACT_QA_MATRIX.png"
     sheet.save(matrix)
     canonical, canonical_errors = clock_scene(STYLES[0], "GPS OFF", True)
     failures.extend(f"canonical: {error}" for error in canonical_errors)
     canonical.resize((W * 4, H * 4), Image.Resampling.NEAREST).save(
-        args.out_dir / "V4_3_OLED_CLOCK_GPS_MUTE.png"
+        args.out_dir / f"{prefix}_OLED_CLOCK_GPS_MUTE.png"
     )
     uptime_canonical, uptime_errors = clock_scene(STYLES[0], "GPS FIX", False, sats=12)
     failures.extend(f"uptime canonical: {error}" for error in uptime_errors)
     uptime_canonical.resize((W * 4, H * 4), Image.Resampling.NEAREST).save(
-        args.out_dir / "V4_3_OLED_CLOCK_UPTIME.png"
+        args.out_dir / f"{prefix}_OLED_CLOCK_UPTIME.png"
     )
 
     sweep_checks, sweep_failures = validate_uptime_sweep()
@@ -336,7 +339,7 @@ def main() -> int:
     if failures:
         for failure in failures:
             print(f"[FAIL] {failure}")
-    print(f"V4.3 OLED exact QA: {checks - len(failures)} passed, {len(failures)} failed")
+    print(f"{prefix} OLED exact QA: {checks - len(failures)} passed, {len(failures)} failed")
     print(f"Saved {matrix}")
     return 1 if failures else 0
 

@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {createHash,webcrypto} = require('node:crypto');
-const {verify,PROFILES} = require('./firmware.js');
+const {verify,PROFILES,reportedProfile} = require('./firmware.js');
 const COMMIT = '12345678' + 'a'.repeat(32);
 const VERSION = '0.13';
 const sha = data => createHash('sha256').update(data).digest('hex');
@@ -45,7 +45,8 @@ function fixture(id='v3', merged=false, source, version=VERSION) {
   return {profile,bytes,name,record,manifest, args(){return {name,bytes:this.bytes,manifestText:JSON.stringify(manifest),target:id,cryptoProvider:webcrypto};}};
 }
 
-test('preflight validates all six profiles and reconstructs split UF2 markers', async()=>{
+test('preflight validates all seven profiles and reconstructs split UF2 markers', async()=>{
+  assert.equal(PROFILES.length,7);
   for(const profile of PROFILES) {
     const f=fixture(profile.id);
     const result=await verify({...f.args(),info:{board:profile.reported,build:COMMIT.slice(0,8)}});
@@ -55,13 +56,38 @@ test('preflight validates all six profiles and reconstructs split UF2 markers', 
 });
 
 test('preflight retains 0.09 through 0.12 release compatibility for all six profiles', async()=>{
-  for(const version of ['0.09','0.10','0.11','0.12']) for(const profile of PROFILES) {
+  const legacyProfiles=PROFILES.filter(profile=>profile.id!=='v4r8');
+  assert.equal(legacyProfiles.length,6);
+  for(const version of ['0.09','0.10','0.11','0.12']) for(const profile of legacyProfiles) {
     const result=await verify(fixture(profile.id,false,undefined,version).args());
     assert.equal(result.board,profile.label);
   }
 });
+test('V4 R8 starts with 0.13 and remains distinct from ordinary V4.3 R2',async()=>{
+  const r8=PROFILES.find(profile=>profile.id==='v4r8');
+  assert.equal(r8.environment,'heltec_v4_r8_companion_radio_ble_femon_smartui');
+  assert.equal(r8.marker+' SmartUI '+VERSION,'V4 R8 SmartUI 0.13');
+  assert.equal(reportedProfile({board:'Heltec V4 R8 OLED'}),r8);
+  assert.equal(reportedProfile({board:'Heltec V4.3 OLED'}).id,'v43');
+  assert.equal(reportedProfile({board:'Heltec V4 R8 TFT'}),null);
+  for(const version of ['0.09','0.10','0.11','0.12','unknown']) {
+    await assert.rejects(verify(fixture('v4r8',false,undefined,version).args()),/не поддерживается/);
+  }
+  for(const version of ['0.13','0.14','1.0']) {
+    assert.equal((await verify(fixture('v4r8',false,undefined,version).args())).board,r8.label);
+  }
+  for(const [id,other] of [['v4r8','v43'],['v43','v4r8']]) for(const merged of [false,true]) {
+    const f=fixture(id,merged);
+    const otherProfile=PROFILES.find(profile=>profile.id===other);
+    await assert.rejects(verify({...f.args(),target:other}),/другой платы/);
+    await assert.rejects(verify({...f.args(),info:{board:otherProfile.reported}}),/другой платы/);
+    // A matching filename and manifest cannot relabel the embedded board marker.
+    f.record.board=otherProfile.label;f.record.environment=otherProfile.environment;
+    await assert.rejects(verify({...f.args(),target:other}),/платы\/версии/);
+  }
+});
 test('merged and update carry different explicit warnings, offsets and manual-model scope',async()=>{
-  for(const id of ['v3','v43','paper']) {
+  for(const id of ['v3','v43','v4r8','paper']) {
     const fresh=await verify(fixture(id,true).args());
     assert.equal(fresh.destructive,true);assert.equal(fresh.offset,'0x00000');assert.match(fresh.warning,/даже без Erase/);
     const update=await verify(fixture(id).args());assert.equal(update.offset,'0x10000');assert.match(update.warning,/bootloader/);assert.equal(update.matchedConnectedBoard,false);

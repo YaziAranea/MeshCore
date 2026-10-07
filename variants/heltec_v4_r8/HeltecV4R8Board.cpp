@@ -1,8 +1,13 @@
 #include "HeltecV4R8Board.h"
+#include <helpers/BoardLedControl.h>
+#include <driver/gpio.h>
 
 void HeltecV4R8Board::begin() {
   ESP32Board::begin();
 
+  // GPIO40 is digital-only, unlike the RTC-capable FEM control pins.
+  gpio_deep_sleep_hold_dis();
+  gpio_hold_dis((gpio_num_t)PIN_VEXT_EN);
   periph_power.begin();
   periph_power.claim();  // R8 VEXT also feeds the LoRa antenna boost rail.
 
@@ -30,7 +35,7 @@ void HeltecV4R8Board::begin() {
 }
 
 void HeltecV4R8Board::onBeforeTransmit(void) {
-  digitalWrite(P_LORA_TX_LED, HIGH);
+  digitalWrite(P_LORA_TX_LED, meshcoreBoardLedsEnabled() ? HIGH : LOW);
   loRaFEMControl.setTxModeEnable();
 }
 
@@ -42,7 +47,16 @@ void HeltecV4R8Board::onAfterTransmit(void) {
 void HeltecV4R8Board::shutdownPeripherals() {
   ESP32Board::shutdownPeripherals();
 
-  loRaFEMControl.setRxModeEnableWhenMCUSleep();
+  // Called only for explicit deep sleep/power-off, after LoRa and GPS stop.
+  // Keep the permanent Vext claim while awake, including display-off and
+  // automatic light sleep: this rail also supplies the FEM regulator.
+  loRaFEMControl.setSleepModeEnable();
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_KCT8103L_PA_CSD);
+  digitalWrite(P_LORA_PA_POWER, LOW);
+  rtc_gpio_hold_en((gpio_num_t)P_LORA_PA_POWER);
+  periph_power.release();
+  gpio_hold_en((gpio_num_t)PIN_VEXT_EN);
+  gpio_deep_sleep_hold_en();
 }
 
 uint16_t HeltecV4R8Board::getBattMilliVolts() {
@@ -54,7 +68,16 @@ uint16_t HeltecV4R8Board::getBattMilliVolts() {
   }
   raw = raw / 8;
 
-  return (adc_mult * raw);
+  return mesh::saturatingBatteryMilliVolts(adc_mult * raw);
+}
+
+bool HeltecV4R8Board::setLoRaFemLnaEnabled(bool enable) {
+#if defined(RADIO_FEM_RXGAIN) && (RADIO_FEM_RXGAIN == 0)
+  enable = false;
+#endif
+  loRaFEMControl.setLNAEnable(enable);
+  loRaFEMControl.setRxModeEnable();
+  return true;
 }
 
 const char* HeltecV4R8Board::getManufacturerName() const {

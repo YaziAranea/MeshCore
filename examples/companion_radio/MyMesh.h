@@ -132,7 +132,7 @@ struct NetworkStatusEntry {
 };
 
 #ifndef RECENT_CHAT_TABLE_SIZE
-  #if (defined(HELTEC_T114_WITH_DISPLAY) && defined(ST7789)) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_LORA_V4_3_OLED)
+  #if (defined(HELTEC_T114_WITH_DISPLAY) && defined(ST7789)) || defined(HELTEC_LORA_V4_TFT) || defined(HELTEC_LORA_V4_3_OLED) || defined(HELTEC_V4_R8_OLED)
     #define RECENT_CHAT_TABLE_SIZE 20
   #else
     #define RECENT_CHAT_TABLE_SIZE 12

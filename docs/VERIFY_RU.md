@@ -12,7 +12,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 Неопубликованные development-сборки можно взять из [GitHub Actions](https://github.com/YaziAranea/MeshCore/actions/workflows/smartui-ci.yml):
 
 - артефакт `smartui-ps17-validated-uf2` содержит три UF2 и `SHA256SUMS.txt`;
-- артефакт `smartui-ps17-validated-esp32-bin` содержит пары V3/V4.3/Wireless Paper FULL и `SHA256SUMS-ESP32.txt`;
+- артефакт `smartui-ps17-validated-esp32-bin` содержит пары V3/V4.3/V4 R8/Wireless Paper FULL и `SHA256SUMS-ESP32.txt`;
 - артефакт `smartui-public-release` содержит полный комплект 0.13, включая `RELEASE-MANIFEST.json`, помощник 1.6 и Developer Kit.
 
 GitHub хранит артефакт как ZIP. Распакуйте бинарники и их манифест в одну папку. Не сравнивайте файл одного Release/CI-run с манифестом другого.
@@ -100,7 +100,7 @@ shasum -a 256 T096_UI_0.13.uf2
 python tools/validate_release_uf2.py firmware
 ```
 
-Для V3 OLED, V4.3 OLED и Wireless Paper отдельно проверьте ESP32-S3 пары и подготовленную чистую SPIFFS:
+Для V3 OLED, V4.3 OLED, V4 R8 OLED и Wireless Paper отдельно проверьте ESP32-S3 пары и подготовленную чистую SPIFFS:
 
 ```text
 python tools/validate_release_esp32.py firmware
@@ -119,11 +119,14 @@ UF2-проверка контролирует magic values, family ID, адре�
 ```text
 python tools/simulate_smartui_ps17_qa.py --out qa_outputs/experimental-ui/core
 python tools/simulate_v4_3_oled_qa.py --out-dir qa_outputs/experimental-ui/oled
+python tools/simulate_v4_3_oled_qa.py --board r8 --out-dir qa_outputs/experimental-ui/r8
 python tools/simulate_wireless_paper_ps17_qa.py --out-dir qa_outputs/experimental-ui/paper
 python tools/simulate_dev2_settings.py
 python tools/generate_docs_assets.py
 ```
 
 Чистые прямоугольные границы недостаточны: обязательный текст должен остаться полным, значок — видимым, а его смысл — понятным человеку. Сопоставляйте bbox и реальный ink, затем смотрите PNG в масштабе 1× и целочисленном увеличении.
+
+R8 использует тот же компактный OLED-renderer 128×64, но проверяется отдельно с длинным названием платы и своим коэффициентом ADC. `test_heltec_v4_r8_profile.py` проверяет выбор этого профиля в production-коде. Геометрия не подтверждает работу реальных I²C, питания и периферии.
 
 Paper-скрипт дополнительно компилирует оригинальные C++-фрагменты `uiMarqueeOffset` и `E213Display::endFrame` с записывающими заглушками; нужен `g++` (на Windows можно WSL). Проверка CRC-повторов и каждого 24-го refresh не измеряет BUSY, задержку кнопки или ghosting. Физическую последовательность «набор → адресат → входящее ЛС → часы → полный refresh» нужно проверить отдельно.

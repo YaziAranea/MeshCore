@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and package one exact-source, six-board SmartUI release.
+"""Validate and package one exact-source, seven-board SmartUI release.
 
 Reads PlatformIO outputs or the release-named CI firmware directory. Does not
 build, flash, upload, move a tag, or overwrite an existing output directory.
@@ -33,7 +33,7 @@ TAG = "smartui-0.13"
 NOTES_NAME = "RELEASE_NOTES_SmartUI_0.13_RU.md"
 ARCHIVE_NAME = "SmartUI_0.13_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
-ASSET_COUNT = 17
+ASSET_COUNT = 19
 DISTRIBUTION = "public"
 PUBLICATION = {
     "draft": False, "prerelease": False, "make_latest": True,
@@ -48,10 +48,12 @@ ESP_ENVS = (
     "Heltec_v3_companion_radio_ble_smartui",
     "heltec_v4_3_companion_radio_ble_femon_smartui",
     "Heltec_Wireless_Paper_companion_radio_ble_smartui_full",
+    "heltec_v4_r8_companion_radio_ble_femon_smartui",
 )
 ESP_PAIRS = (v3.PAIR, *esp32.EXPECTED)
 BOARD_NAMES = ("T096 FEM ON", "T114", "ProMicro RA62",
-               "Heltec V3 OLED", "Heltec V4.3 OLED FEM ON", "Wireless Paper FULL")
+               "Heltec V3 OLED", "Heltec V4.3 OLED FEM ON", "Wireless Paper FULL",
+               "Heltec V4 R8 OLED FEM ON")
 FIRMWARE_NAMES = tuple(uf2.EXPECTED) + tuple(
     pair.stem + suffix for pair in ESP_PAIRS
     for suffix in ("-merged.bin", "-update.bin")
@@ -119,10 +121,14 @@ def resolve_commit(explicit: str | None = None) -> str:
 
 
 def input_files(build_dir: Path, firmware_dir: Path | None = None) -> list[tuple[Path, str]]:
+    require(len(NRF_ENVS) == len(uf2.EXPECTED) == 3
+            and len(ESP_ENVS) == len(ESP_PAIRS) == 4
+            and len(BOARD_NAMES) == 7,
+            "release profile mappings must contain exactly three nRF and four ESP32 boards")
     if firmware_dir is not None:
         require(firmware_dir.is_dir(), f"firmware directory missing: {firmware_dir}")
         actual = {p.name for p in firmware_dir.iterdir() if p.suffix in {".uf2", ".bin"}}
-        require(actual == set(FIRMWARE_NAMES), "firmware directory must contain exactly the nine release images")
+        require(actual == set(FIRMWARE_NAMES), "firmware directory must contain exactly the eleven release images")
         files = [(firmware_dir / name, name) for name in FIRMWARE_NAMES]
     else:
         files = [(build_dir / env / "firmware.uf2", name)
@@ -132,8 +138,8 @@ def input_files(build_dir: Path, firmware_dir: Path | None = None) -> list[tuple
                 (build_dir / env / "firmware-merged.bin", pair.stem + "-merged.bin"),
                 (build_dir / env / "firmware.bin", pair.stem + "-update.bin"),
             ))
-    require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
-            "six-board release contract must contain exactly nine firmware images")
+    require(len(files) == 11 and {name for _, name in files} == set(FIRMWARE_NAMES),
+            "seven-board release contract must contain exactly eleven firmware images")
     for source, _ in files:
         require(source.is_file() and not source.is_symlink() and source.stat().st_size > 0,
                 f"regular nonempty build artifact missing: {source}")
@@ -218,7 +224,7 @@ def verify_archive(archive: Path, paths: list[Path]) -> None:
     with zipfile.ZipFile(archive) as zipped:
         names = zipped.namelist()
         require(len(names) == len(set(names)) and set(names) == set(expected),
-                "ZIP entries differ from the exact six-board release payloads")
+                "ZIP entries differ from the exact seven-board release payloads")
         require(zipped.testzip() is None, "ZIP CRC failure")
         for name, path in expected.items():
             raw = zipped.read(name)
@@ -234,9 +240,9 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     validate_release_notes(text)
-    require(len(files) == 9 and {name for _, name in files} == set(FIRMWARE_NAMES),
-            "packaging requires the exact nine-image six-board set")
-    with tempfile.TemporaryDirectory(prefix="smartui-six-board-release-") as folder:
+    require(len(files) == 11 and {name for _, name in files} == set(FIRMWARE_NAMES),
+            "packaging requires the exact eleven-image seven-board set")
+    with tempfile.TemporaryDirectory(prefix="smartui-seven-board-release-") as folder:
         stage = Path(folder)
         for source, name in files:
             require(source.is_file() and not source.is_symlink(), f"regular artifact missing: {source}")
@@ -258,7 +264,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "meshcore_core_version": "1.17.1",
             "powersaving_upstream_commit": "a27e78e4da1389055b6dd16ce473112d25c8a5cd",
             "embedded_source_identity_verified": True,
-            "experimental": False, "board_count": 6, "firmware_count": 9,
+            "experimental": False, "board_count": 7, "firmware_count": 11,
             "asset_count": ASSET_COUNT,
             "publication": dict(PUBLICATION),
             "developer_kit": record(kit_path, source_commit=commit, cli_version=1,
@@ -281,7 +287,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
                 zipped.writestr(info, path.read_bytes(), compresslevel=9)
         verify_archive(archive, archive_payloads)
         require(len(list(stage.iterdir())) == ASSET_COUNT,
-                "release must contain exactly seventeen assets")
+                "release must contain exactly nineteen assets")
         shutil.copytree(stage, output)
     return {"directory": str(output), "tag": TAG, "commit": commit,
             "assets": [record(path) for path in sorted(output.iterdir())]}
@@ -291,7 +297,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="new release directory (must not exist)")
     parser.add_argument("--build-dir", type=Path, default=ROOT / ".pio/build")
-    parser.add_argument("--firmware-dir", type=Path, help="CI directory with exactly nine release-named images")
+    parser.add_argument("--firmware-dir", type=Path, help="CI directory with exactly eleven release-named images")
     parser.add_argument("--commit", help="must equal the clean checkout's full HEAD SHA")
     parser.add_argument("--mkspiffs", type=Path, help="pinned PlatformIO mkspiffs used by the V3 build")
     parser.add_argument("--sdkconfig", type=Path, help="ESP32-S3 Arduino SDK configuration from the V3 build")

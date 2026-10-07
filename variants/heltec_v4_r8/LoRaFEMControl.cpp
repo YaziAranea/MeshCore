@@ -5,9 +5,9 @@
 #include <esp_sleep.h>
 
 void LoRaFEMControl::init(void) {
+  rtc_gpio_hold_dis((gpio_num_t)P_LORA_PA_POWER);
   pinMode(P_LORA_PA_POWER, OUTPUT);
   digitalWrite(P_LORA_PA_POWER, HIGH);
-  rtc_gpio_hold_dis((gpio_num_t)P_LORA_PA_POWER);
 
   esp_reset_reason_t reason = esp_reset_reason();
   if (reason != ESP_RST_DEEPSLEEP) {

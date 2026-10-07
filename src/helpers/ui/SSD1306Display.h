@@ -8,7 +8,7 @@
 #include <helpers/RefCountedDigitalPin.h>
 
 #ifndef SSD1306_COMPACT_STYLE_PROFILE
-  #if defined(HELTEC_LORA_V4_3_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
+  #if defined(HELTEC_LORA_V4_3_OLED) || defined(HELTEC_V4_R8_OLED) || defined(PROMICRO) || defined(HELTEC_LORA_V3)
     #define SSD1306_COMPACT_STYLE_PROFILE 1
   #else
     #define SSD1306_COMPACT_STYLE_PROFILE 0
