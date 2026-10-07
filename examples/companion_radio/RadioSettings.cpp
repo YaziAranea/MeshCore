@@ -25,7 +25,9 @@ bool parseUnsignedList(const char* text, uint32_t* values, size_t count) {
 }
 
 bool validState(const RadioSettingsState& state) {
-  return validCompanionLoRaParams(state.frequency_mhz, state.bandwidth_khz,
+  float bw = state.bandwidth_khz, canonical;
+  if (canonicalSX1262Bandwidth(bw, canonical)) bw = canonical;
+  return validCompanionLoRaParams(state.frequency_mhz, bw,
                                   state.sf, state.cr) &&
          state.path_bytes >= 1 && state.path_bytes <= 3;
 }
@@ -71,8 +73,8 @@ bool RadioSettings::handle(const char* command, char* reply, size_t capacity,
           values[1] < 7000 || values[1] > 500000 ||
           values[2] < 5 || values[2] > 12 || values[3] < 5 || values[3] > 8 ||
           values[4] < 1 || values[4] > 3) { error("invalid"); return true; }
-      after.frequency_mhz = static_cast<float>(values[0]) / 1000.0f;
-      after.bandwidth_khz = static_cast<float>(values[1]) / 1000.0f;
+      after.frequency_mhz = companionFrequencyMHz(values[0]);
+      after.bandwidth_khz = companionBandwidthKHz(values[1]);
       after.sf = static_cast<uint8_t>(values[2]);
       after.cr = static_cast<uint8_t>(values[3]);
       after.path_bytes = static_cast<uint8_t>(values[4]);

@@ -65,11 +65,66 @@ static void expectUnchanged() {
   CHECK(state.path_bytes == persisted.path_bytes && state.advert_minutes == persisted.advert_minutes);
   CHECK(state.tx_dbm == 20 && state.repeat == persisted.repeat);
 }
+static uint32_t floatBits(float value) {
+  uint32_t bits; memcpy(&bits, &value, sizeof(bits)); return bits;
+}
+static float drift(float value, int ulps) {
+  uint32_t bits = floatBits(value) + ulps;
+  memcpy(&value, &bits, sizeof(value)); return value;
+}
 
 int main() {
   for (const std::string ns : {"ui", "settings"}) {
-    fresh();
     const std::string ok = "OK " + ns, err = "ERR " + ns;
+    struct Bandwidth { uint32_t hz; float khz; };
+    const Bandwidth bandwidths[] = {
+      {7800,7.8f}, {10400,10.4f}, {15600,15.6f}, {20800,20.8f}, {31250,31.25f},
+      {41700,41.7f}, {62500,62.5f}, {125000,125.0f}, {250000,250.0f}, {500000,500.0f}
+    };
+    for (const auto& bw : bandwidths) {
+      fresh();
+      const auto hz = std::to_string(bw.hz);
+      CHECK(call(ns + " radio set 868731 " + hz + " 7 7 1") ==
+          ok + " radio freq_khz=868731 bw_hz=" + hz + " sf=7 cr=7 path_bytes=1 tx_dbm=20 repeat=0");
+      CHECK(floatBits(state.bandwidth_khz) == floatBits(bw.khz));
+      CHECK(floatBits(persisted.bandwidth_khz) == floatBits(bw.khz));
+      CHECK(floatBits(hardware.bandwidth_khz) == floatBits(bw.khz));
+      CHECK(saves == 1 && applies == 1);
+      for (int delta : {-1, 1}) {
+        fresh();
+        CHECK(call(ns + " radio set 868731 " + std::to_string(bw.hz + delta) + " 7 7 1") == err + " invalid");
+        CHECK(saves == 0 && applies == 0 && writes == 0);
+        expectUnchanged();
+      }
+      // Profiles written before the fix can contain harmless binary32 drift,
+      // including a BW slightly above the nominal 500 kHz upper boundary.
+      for (int ulps : {-2, -1, 1, 2}) {
+        fresh();
+        state.bandwidth_khz = drift(bw.khz, ulps);
+        persisted = hardware = state;
+        CHECK(call(ns + " radio").find("bw_hz=" + hz + " ") != std::string::npos);
+        CHECK(call(ns + " radio set 868731 62500 7 7 1").find(ok + " radio ") == 0);
+        CHECK(floatBits(state.bandwidth_khz) == floatBits(62.5f));
+        CHECK(saves == 1 && applies == 1);
+      }
+    }
+    // Exact user report: ProMicro 869.618 / BW62.5 / SF8 / CR4/5 / 22 dBm
+    // to OMS 868.731 / BW62.5 / SF7 / CR4/7. Power must remain unchanged.
+    fresh();
+    state.frequency_mhz = 869.618f; state.sf = 8; state.cr = 5; state.tx_dbm = 22;
+    persisted = hardware = state;
+    CHECK(call(ns + " radio set 868731 62500 7 7 1") ==
+        ok + " radio freq_khz=868731 bw_hz=62500 sf=7 cr=7 path_bytes=1 tx_dbm=22 repeat=0");
+    CHECK(floatBits(state.bandwidth_khz) == floatBits(62.5f));
+    CHECK(state.tx_dbm == 22 && persisted.tx_dbm == 22 && hardware.tx_dbm == 22);
+    for (uint32_t frequency : {150000U, 960000U}) {
+      fresh();
+      const auto khz = std::to_string(frequency);
+      CHECK(call(ns + " radio set " + khz + " 62500 7 7 1") ==
+          ok + " radio freq_khz=" + khz + " bw_hz=62500 sf=7 cr=7 path_bytes=1 tx_dbm=20 repeat=0");
+      CHECK(saves == 1 && applies == 1);
+    }
+    fresh();
     CHECK(call(ns + " radio", false) == ok + " radio freq_khz=869161 bw_hz=62500 sf=7 cr=7 path_bytes=1 tx_dbm=20 repeat=0");
     CHECK(call(ns + " advert", false) == ok + " advert interval_min=30");
     CHECK(saves == 0 && applies == 0);
@@ -100,7 +155,7 @@ int main() {
       "radio set 869161  62500 7 7 2", "radio set +869161 62500 7 7 2",
       "radio set -1 62500 7 7 2", "radio set 869.161 62500 7 7 2",
       "radio set 4294967296 62500 7 7 2", "radio set 869161 4294967296 7 7 2",
-      "radio set 149999 62500 7 7 2", "radio set 2500001 62500 7 7 2",
+      "radio set 149999 62500 7 7 2", "radio set 960001 62500 7 7 2", "radio set 2500001 62500 7 7 2",
       "radio set 869161 500001 7 7 2", "radio set 869161 6999 7 7 2",
       "radio set 869161 62500 263 7 2", "radio set 869161 62500 7 263 2",
       "radio set 869161 62500 7 7 258", "radio set 869161 62500 7 7 0",

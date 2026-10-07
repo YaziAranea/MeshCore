@@ -407,28 +407,33 @@ def main():
         radio_hooks = Path(directory) / "radio_hooks.cpp"
         radio_hooks.write_text(radio_hooks_integration(), encoding="utf-8")
         compiler = shutil.which("g++") or shutil.which("clang++")
-        flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror", "-O1"]
+        flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror"]
         if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
             flags += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
         include = ROOT / "examples/companion_radio"
         for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue,
                       ROOT / "tools/radio_settings_test.cpp", radio_hooks):
-            output = Path(directory) / suite.stem
             paths = [suite, include / "SmartUiCli.cpp"]
-            if suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp"):
+            radio_suite = suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp")
+            if radio_suite:
                 paths += [include / "RadioSettings.cpp"]
-            if compiler:
-                build = [compiler, *flags, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]
-                execute = [str(output)]
-            elif os.name == "nt":
-                def linux(path):
-                    return subprocess.check_output(["wsl", "--exec", "wslpath", "-a", str(path)], text=True).strip()
-                build = ["wsl", "--exec", "g++", *flags, "-I" + linux(include), "-I" + linux(ROOT / "src"), *map(linux, paths), "-o", linux(output)]
-                execute = ["wsl", "--exec", linux(output)]
-            else:
-                raise RuntimeError("Host C++ compiler required; no skipped test success")
-            subprocess.run(build, check=True)
-            subprocess.run(execute, check=True)
+            # nRF52 builds use -Ofast; normal optimization alone misses the
+            # reciprocal-conversion rounding that rejected valid presets.
+            for optimization in (("-O1", "-Ofast") if radio_suite else ("-O1",)):
+                output = Path(directory) / (suite.stem + optimization)
+                if compiler:
+                    build = [compiler, *flags, optimization, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]
+                    execute = [str(output)]
+                elif os.name == "nt":
+                    def linux(path):
+                        return subprocess.check_output(["wsl", "--exec", "wslpath", "-a", str(path)], text=True).strip()
+                    build = ["wsl", "--exec", "g++", *flags, optimization, "-I" + linux(include), "-I" + linux(ROOT / "src"), *map(linux, paths), "-o", linux(output)]
+                    execute = ["wsl", "--exec", linux(output)]
+                else:
+                    raise RuntimeError("Host C++ compiler required; no skipped test success")
+                print(f"{suite.name} {optimization}", flush=True)
+                subprocess.run(build, check=True)
+                subprocess.run(execute, check=True)
 
 
 if __name__ == "__main__":

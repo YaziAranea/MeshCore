@@ -31,6 +31,9 @@ public:
 
   bool setParamsChecked(float freq, float bw, uint8_t sf, uint8_t cr) override {
     if (!validateParams(freq, bw, sf, cr)) return false;
+    float canonical_bw;
+    if (!canonicalSX1262Bandwidth(bw, canonical_bw)) return false;
+    bw = canonical_bw; // Same exact bandwidth for the chip and time-on-air cache.
     // A caller can restore the previous parameters after a partial SPI error.
     // Until a complete application succeeds, never send on an unknown channel.
     _config_valid = false;

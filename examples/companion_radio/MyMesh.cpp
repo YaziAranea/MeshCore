@@ -535,6 +535,8 @@ static bool setCompanionRadioParamsChecked(float freq, float bw, uint8_t sf, uin
 static void applyCompanionRxPowerSaving(uint8_t sf, float bw) {
 #ifdef WRAPPER_CLASS
   RxPowerSavingControl* control = &radio_driver;
+  float canonical_bw;
+  if (canonicalSX1262Bandwidth(bw, canonical_bw)) bw = canonical_bw;
 
   // setRxPowerSaving() rejects out-of-range periods without touching the
   // wrapper's state, so on any failure we must explicitly stand the duty cycle
@@ -2439,9 +2441,11 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t freq;
     memcpy(&freq, &cmd_frame[i], 4);
     i += 4;
+    const float frequency_mhz = companionFrequencyMHz(freq);
     uint32_t bw;
     memcpy(&bw, &cmd_frame[i], 4);
     i += 4;
+    const float bandwidth_khz = companionBandwidthKHz(bw);
     uint8_t sf = cmd_frame[i++];
     uint8_t cr = cmd_frame[i++];
     uint8_t repeat = 0;  // default - false
@@ -2451,15 +2455,15 @@ void MyMesh::handleCmdFrame(size_t len) {
 
     if (repeat && !isValidClientRepeatFreq(freq)) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (validateCompanionRadioParams((float)freq / 1000.0f,
-                                           (float)bw / 1000.0f, sf, cr)) {
+    } else if (validateCompanionRadioParams(frequency_mhz,
+                                           bandwidth_khz, sf, cr)) {
       const uint8_t old_sf = _prefs.sf;
       const uint8_t old_cr = _prefs.cr;
       const float old_freq = _prefs.freq;
       const float old_bw = _prefs.bw;
       const bool old_repeat = _prefs.isRepeatEn();
-      if (!setCompanionRadioParamsChecked((float)freq / 1000.0f,
-                                          (float)bw / 1000.0f, sf, cr)) {
+      if (!setCompanionRadioParamsChecked(frequency_mhz,
+                                          bandwidth_khz, sf, cr)) {
         // A SPI failure may have changed only part of the radio profile.
         // Restore before reporting failure; the wrapper blocks TX/RX if the
         // restore also fails. Preferences have not been changed or saved.
@@ -2470,8 +2474,8 @@ void MyMesh::handleCmdFrame(size_t len) {
       } else {
         _prefs.sf = sf;
         _prefs.cr = cr;
-        _prefs.freq = (float)freq / 1000.0f;
-        _prefs.bw = (float)bw / 1000.0f;
+        _prefs.freq = frequency_mhz;
+        _prefs.bw = bandwidth_khz;
         _prefs.setRepeatEn(repeat != 0);
         if (savePrefs()) {
           applyCompanionRxPowerSaving(_prefs.sf, _prefs.bw);

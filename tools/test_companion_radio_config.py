@@ -105,6 +105,7 @@ struct TestRadio : RxPowerSavingControl {
   bool _config_valid=true;
   bool _rx_ps_armed=false;
   uint8_t _preamble_sf=9;
+  float cached_bandwidth=125;
   uint32_t applied_rx=0, applied_sleep=0;
   unsigned config_calls=0, rxps_calls=0, legacy_calls=0, receive_calls=0;
   void idle() { _radio->standby(); }
@@ -119,7 +120,7 @@ struct TestRadio : RxPowerSavingControl {
 ''' + body(common, 'bool RadioLibWrapper::startSendRaw(') + r'''
   }
   static unsigned preambleLengthForSF(uint8_t sf) { return sf <= 8 ? 32 : 16; }
-  PacketMillis calcMaxPacketMillis(uint8_t, float, uint8_t, unsigned) { return {}; }
+  PacketMillis calcMaxPacketMillis(uint8_t, float bw, uint8_t, unsigned) { cached_bandwidth=bw;return {}; }
   bool validateParams(float freq, float bw, uint8_t sf, uint8_t cr) const {
 ''' + body(wrapper, 'bool validateParams(') + r'''
   }
@@ -189,9 +190,81 @@ void expect_old() {
   assert(chip.frequency==868 && chip.bandwidth==125 && chip.sf==9 && chip.cr==5 && chip.preamble==16);
   assert(persisted.freq==868 && persisted.bw==125);
 }
+uint32_t floatBits(float value) {
+  uint32_t bits;memcpy(&bits,&value,sizeof(bits));return bits;
+}
+float drift(float value,int ulps) {
+  uint32_t bits=floatBits(value)+ulps;memcpy(&value,&bits,sizeof(value));return value;
+}
 int main() {
-  for(float bw : {7.8f,10.4f,15.6f,20.8f,31.25f,41.7f,62.5f,125.0f,250.0f,500.0f})
-    assert(validSX1262LoRaParams(868,bw,9,5));
+  struct Bandwidth { uint32_t hz;float khz; };
+  const Bandwidth bandwidths[] = {
+    {7800,7.8f},{10400,10.4f},{15600,15.6f},{20800,20.8f},{31250,31.25f},
+    {41700,41.7f},{62500,62.5f},{125000,125.0f},{250000,250.0f},{500000,500.0f}
+  };
+  for(const auto& bw : bandwidths) {
+    assert(validSX1262LoRaParams(868,bw.khz,9,5));
+    assert(floatBits(companionBandwidthKHz(bw.hz))==floatBits(bw.khz));
+    reset();request(868731,bw.hz,7,7);
+    assert(response==0 && saves==1 && radio_driver._config_valid);
+    assert(static_cast<uint32_t>(_prefs.freq*1000.0f+0.5f)==868731);
+    assert(floatBits(_prefs.bw)==floatBits(bw.khz));
+    assert(floatBits(persisted.bw)==floatBits(bw.khz));
+    assert(floatBits(chip.bandwidth)==floatBits(bw.khz));
+    assert(floatBits(radio_driver.cached_bandwidth)==floatBits(bw.khz));
+    for(int ulps : {-3,-2,-1,0,1,2,3}) {
+      const float old=drift(bw.khz,ulps);float canonical=0;
+      const bool accepted=ulps>=-2 && ulps<=2;
+      assert(canonicalSX1262Bandwidth(old,canonical)==accepted);
+      assert(validSX1262LoRaParams(868,old,9,5)==accepted);
+      if(accepted) {
+        assert(floatBits(canonical)==floatBits(bw.khz));
+        reset();assert(radio_driver.setParamsChecked(868,old,9,5));
+        assert(floatBits(chip.bandwidth)==floatBits(bw.khz));
+        assert(floatBits(radio_driver.cached_bandwidth)==floatBits(bw.khz));
+      }
+    }
+#ifdef WRAPPER_CLASS
+    for(int delta : {-1,1}) {
+      reset();request(868731,bw.hz+delta,7,7);
+      assert(response==ERR_CODE_ILLEGAL_ARG && saves==0 && chip.writes==0);
+      expect_old();
+    }
+    for(int ulps : {-2,-1,1,2}) {
+      // Saved pre-fix drift must neither force a factory preset nor break a
+      // rollback. Driver and time-on-air cache receive the canonical value.
+      const float old=drift(bw.khz,ulps);
+      reset();_prefs.bw=old;persisted=_prefs;chip.bandwidth=bw.khz;
+      assert(boot());
+      assert(saves==0 && !_radio_startup_error && radio_driver._config_valid);
+      assert(floatBits(chip.bandwidth)==floatBits(bw.khz));
+      assert(floatBits(radio_driver.cached_bandwidth)==floatBits(bw.khz));
+      for(int stage=0;stage<=5;++stage) {
+        reset();_prefs.bw=old;persisted=_prefs;chip.bandwidth=bw.khz;
+        if(stage) { chip.fail_stage=stage;chip.failures=1; }
+        else save_ok=false;
+        request();
+        assert(response==(stage ? ERR_CODE_BAD_STATE : ERR_CODE_FILE_IO_ERROR));
+        assert(saves==(stage ? 0U : 1U) && radio_driver._config_valid);
+        assert(floatBits(_prefs.bw)==floatBits(old) && floatBits(persisted.bw)==floatBits(old));
+        assert(floatBits(chip.bandwidth)==floatBits(bw.khz));
+        assert(floatBits(radio_driver.cached_bandwidth)==floatBits(bw.khz));
+        assert(_prefs.freq==868 && chip.frequency==868 && persisted.freq==868);
+      }
+    }
+#endif
+  }
+  // Exact OMS migration reported for ProMicro, through binary CMD11 as well.
+  reset();_prefs.freq=869.618f;_prefs.bw=62.5f;_prefs.sf=8;_prefs.cr=5;
+  persisted=_prefs;chip.frequency=_prefs.freq;chip.bandwidth=_prefs.bw;chip.sf=8;chip.cr=5;
+  request(868731,62500,7,7);
+  assert(response==0 && saves==1 && chip.sf==7 && chip.cr==7);
+  assert(floatBits(chip.bandwidth)==floatBits(62.5f));
+  assert(floatBits(persisted.bw)==floatBits(62.5f));
+  assert(!validCompanionLoRaParams(NAN,125,9,5));
+  assert(!validCompanionLoRaParams(868,NAN,9,5));
+  assert(!validCompanionLoRaParams(INFINITY,125,9,5));
+  assert(!validCompanionLoRaParams(868,INFINITY,9,5));
   assert(!validSX1262LoRaParams(NAN,125,9,5));
   assert(!validSX1262LoRaParams(868,NAN,9,5));
   assert(!validSX1262LoRaParams(INFINITY,125,9,5));
@@ -201,6 +274,17 @@ int main() {
   assert(!validSX1262LoRaParams(868,125,4,5));
   assert(!validSX1262LoRaParams(868,125,9,9));
 #ifdef WRAPPER_CLASS
+  for(uint32_t frequency : {150000U,960000U}) {
+    reset();request(frequency,62500,7,7);
+    assert(response==0 && saves==1 && radio_driver._config_valid);
+    assert(static_cast<uint32_t>(chip.frequency*1000.0f+0.5f)==frequency);
+    assert(chip.frequency==_prefs.freq && chip.frequency==persisted.freq);
+  }
+  for(uint32_t frequency : {149999U,960001U}) {
+    reset();request(frequency,62500,7,7);
+    assert(response==ERR_CODE_ILLEGAL_ARG && saves==0 && chip.writes==0);
+    expect_old();
+  }
   for (uint32_t bw : {126000U,300000U,7000U,500001U}) {
     reset();request(868000,bw);
     assert(response==ERR_CODE_ILLEGAL_ARG && saves==0 && chip.writes==0);
@@ -258,18 +342,20 @@ int main() {
         include = ROOT / 'src/helpers/radiolib'
         calculator = include / 'RXPowerSaving.cpp'
         for checked in (True, False):
-            flags = ['-std=c++14', '-Wall', '-Wextra', '-Werror', '-O2']
-            if checked:
-                flags.append('-DWRAPPER_CLASS=TestRadio')
-            binary = folder / ('checked' if checked else 'legacy')
-            if shutil.which('g++'):
-                compile_cmd = ['g++', *flags, '-I', str(include), str(source), str(calculator), '-o', str(binary)]
-                run_cmd = [str(binary)]
-            else:
-                compile_cmd = ['wsl', '--exec', 'g++', *flags, '-I', linux(include), linux(source), linux(calculator), '-o', linux(binary)]
-                run_cmd = ['wsl', '--exec', linux(binary)]
-            subprocess.run(compile_cmd, check=True, timeout=40)
-            subprocess.run(run_cmd, check=True, timeout=10)
+            for optimization in ('-O2', '-Ofast'):
+                flags = ['-std=c++14', '-Wall', '-Wextra', '-Werror', optimization]
+                if checked:
+                    flags.append('-DWRAPPER_CLASS=TestRadio')
+                binary = folder / (('checked' if checked else 'legacy') + optimization)
+                if shutil.which('g++'):
+                    compile_cmd = ['g++', *flags, '-I', str(include), str(source), str(calculator), '-o', str(binary)]
+                    run_cmd = [str(binary)]
+                else:
+                    compile_cmd = ['wsl', '--exec', 'g++', *flags, '-I', linux(include), linux(source), linux(calculator), '-o', linux(binary)]
+                    run_cmd = ['wsl', '--exec', linux(binary)]
+                print(f"companion radio {'checked' if checked else 'legacy'} {optimization}", flush=True)
+                subprocess.run(compile_cmd, check=True, timeout=40)
+                subprocess.run(run_cmd, check=True, timeout=10)
 
 
 if __name__ == '__main__':
