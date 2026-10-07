@@ -94,7 +94,7 @@ def package(output, commit, *, root=ROOT, development=False):
             "source_commit": commit, "distribution": "public", "stage": "release",
         }
     manifest.update(transport="companion-cli", command=66, response=29,
-                    companion_protocol_version=13, local_only=True, sync=False, events=False)
+                    companion_protocol_version=14, local_only=True, sync=False, events=False)
     manifest["files"] = [{"name": name, "bytes": len(raw), "sha256": digest(raw)}
                          for name, raw in sorted(payloads.items())]
     payloads[MANIFEST_NAME] = (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")

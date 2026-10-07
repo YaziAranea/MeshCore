@@ -5,8 +5,9 @@
 
 namespace smartui {
 
-// Local CMD66/RESP29 backport, discovered through smartui_cli:1. This does
-// not advertise protocol v14 or grant remote mesh CLI permission. Prefixes
+// Local CMD66/RESP29 (protocol v14), discovered through smartui_cli:1 or the
+// version code. Remote mesh CLI is not executed: a type-3 command from another
+// node goes to the app, as upstream does for a contact without permission. Prefixes
 // correlate responses only: commands are not cached or deduplicated.
 class SmartUiCli {
 public:

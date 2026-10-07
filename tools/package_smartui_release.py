@@ -269,7 +269,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "publication": dict(PUBLICATION),
             "developer_kit": record(kit_path, source_commit=commit, cli_version=1,
                                     transport="companion-cli",
-                                    companion_protocol_version=13, local_only=True),
+                                    companion_protocol_version=14, local_only=True),
             "firmware": [record(stage / name, **firmware_metadata(name, commit))
                          for name in sorted(FIRMWARE_NAMES)],
             "files": [record(path) for path in payloads],

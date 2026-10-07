@@ -23,11 +23,15 @@ def integration():
     source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
     header = (ROOT / "examples/companion_radio/MyMesh.h").read_text(encoding="utf-8")
     main_source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
-    assert "#define FIRMWARE_VER_CODE 13" in header
+    assert "#define FIRMWARE_VER_CODE 14" in header
     assert 'vars.append("smartui_cli", "1")' in source
     assert 'vars.append("smartui_api"' not in source
     assert "handleSmartUiApiFrame(" not in source
     assert "onCLICommandRecv(" not in source  # Remote execution was not backported.
+    remote = scope(source, "void MyMesh::onCliCommandMessage(")
+    assert "queueMessage(from, TXT_TYPE_CLI_COMMAND" in remote
+    for runner in ("executeLocalCli", "executeMeshCoreCliCommand", "executeSmartUiCliCommand", "handleCommand"):
+        assert runner not in remote, runner  # A type-3 command from the mesh is only handed to the app.
     # The archived command-201 implementation may remain as inactive source,
     # but it must never regain a router, runtime ledger or UI callback in the
     # production entry point. Local unread/reminder state belongs to UITask.
