@@ -6,7 +6,7 @@
 #include "SmartUiCli.h"
 
 /*------------ Frame Protocol --------------*/
-#define FIRMWARE_VER_CODE 13
+#define FIRMWARE_VER_CODE 14
 
 #ifndef FIRMWARE_BUILD_DATE
 #define FIRMWARE_BUILD_DATE "14 Aug 2026"
@@ -204,6 +204,19 @@ public:
   bool localRadioSettingsBusy();
   bool localRepeatFrequencyAllowed(uint32_t khz) const { return isValidClientRepeatFreq(khz); }
   void applyLocalAdvertInterval() { updateAutoAdvertTimer(); }
+  // Upstream CLI names on CMD66. Arguments are validated by the caller; each
+  // persists like the binary command with the same effect and rolls back RAM
+  // when the save fails.
+  bool setLocalNodeName(const char* name);
+  bool setLocalBlePin(uint32_t pin);
+  bool setLocalTxPower(int8_t dbm);
+  bool setLocalTuning(float rx_delay, float airtime_factor);
+  bool setLocalMultiAcks(uint8_t count);
+  bool setLocalPathHashMode(uint8_t mode);
+  bool setLocalRxBoostedGain(bool boosted, bool& supported);
+  bool setLocalTimezoneMinutes(int16_t minutes);
+  // Returns only when pending contact changes could not be saved first.
+  void rebootLocal();
   // A new local client must not inherit a previous client's iterator, signing
   // buffer or pending management requests. The radio/offline inbox is retained.
   void resetLocalAppSession();
@@ -284,6 +297,8 @@ protected:
                      const char *text) override;
   void onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                          const char *text) override;
+  void onCliCommandMessage(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
+                           const char *text) override;
   void onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const uint8_t *sender_prefix, const char *text) override;
   void onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,

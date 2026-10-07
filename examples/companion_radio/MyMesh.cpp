@@ -1037,6 +1037,16 @@ void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint3
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
 
+// Protocol v14. Upstream runs the command for a contact with the remote-CLI flag (0x10)
+// and hands it to the app otherwise; remote execution is not supported here, so every
+// such command goes to the app as it would from a contact without that flag.
+void MyMesh::onCliCommandMessage(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
+                                 const char *text) {
+  markConnectionActive(from); // in case this is from a server, and we have a connection
+  noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
+  queueMessage(from, TXT_TYPE_CLI_COMMAND, pkt, sender_timestamp, NULL, 0, text);
+}
+
 void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                                  const uint8_t *sender_prefix, const char *text) {
   markConnectionActive(from);
@@ -1761,6 +1771,79 @@ bool MyMesh::localRadioSettingsHealthy() const {
 bool MyMesh::localRadioSettingsBusy() {
   return hasPendingWork() || radio_driver.isReceiving() || !radio_driver.isInRecvMode();
 }
+
+// The setters below mirror CMD_SET_ADVERT_NAME, CMD_SET_DEVICE_PIN,
+// CMD_SET_RADIO_TX_POWER, CMD_SET_TUNING_PARAMS, CMD_SET_OTHER_PARAMS
+// (multi-acks), CMD_SET_PATH_HASH_MODE and CMD_REBOOT.
+bool MyMesh::setLocalNodeName(const char* name) {
+  const size_t length = strlen(name);
+  if (length == 0 || length >= sizeof(_prefs.node_name)) return false;
+  const NodePrefs before = _prefs;
+  memcpy(_prefs.node_name, name, length + 1);
+  return commitPrefsOrRollback(before);
+}
+
+bool MyMesh::setLocalBlePin(uint32_t pin) {
+  if (!(pin == 0 || (pin >= 100000 && pin <= 999999))) return false;
+  const NodePrefs before = _prefs;
+  _prefs.ble_pin = pin;
+  return commitPrefsOrRollback(before);
+}
+
+bool MyMesh::setLocalTxPower(int8_t dbm) {
+  if (dbm < -9 || dbm > MAX_LORA_TX_POWER) return false;
+  const int8_t old_power = _prefs.tx_power_dbm;
+  _prefs.tx_power_dbm = dbm;
+  if (!savePrefs()) {
+    _prefs.tx_power_dbm = old_power;
+    return false;
+  }
+  radio_driver.setTxPower(_prefs.tx_power_dbm);
+  return true;
+}
+
+bool MyMesh::setLocalTuning(float rx_delay, float airtime_factor) {
+  const NodePrefs before = _prefs;
+  _prefs.rx_delay_base = rx_delay;
+  _prefs.airtime_factor = airtime_factor;
+  return commitPrefsOrRollback(before);
+}
+
+bool MyMesh::setLocalMultiAcks(uint8_t count) {
+  const NodePrefs before = _prefs;
+  _prefs.multi_acks = count;
+  return commitPrefsOrRollback(before);
+}
+
+bool MyMesh::setLocalPathHashMode(uint8_t mode) {
+  if (mode >= 3) return false;
+  const NodePrefs before = _prefs;
+  _prefs.path_hash_mode = mode;
+  return commitPrefsOrRollback(before);
+}
+
+bool MyMesh::setLocalRxBoostedGain(bool boosted, bool& supported) {
+  supported = radio_driver.setRxBoostedGainMode(boosted);
+  if (!supported) {
+    radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain != 0);
+    return false;
+  }
+  const NodePrefs before = _prefs;
+  _prefs.rx_boosted_gain = boosted ? 1 : 0;
+  return commitPrefsOrRollback(before);  // A failed save re-applies the old gain.
+}
+
+bool MyMesh::setLocalTimezoneMinutes(int16_t minutes) {
+  if (normalizeTimezoneOffsetMinutes(minutes) != minutes) return false;
+  const NodePrefs before = _prefs;
+  _prefs.timezone_offset_minutes = minutes;
+  return commitPrefsOrRollback(before);
+}
+
+void MyMesh::rebootLocal() {
+  if (!flushPendingStorage()) return;
+  board.reboot();
+}
 #endif
 
 void MyMesh::updateAutoAdvertTimer() {
@@ -1920,7 +2003,9 @@ bool MyMesh::executeLocalCli(void* context, const char* command, char* reply, si
   } else if (strcmp(command, "ui") == 0 || strncmp(command, "ui ", 3) == 0) {
     return executeSmartUiCliCommand(command, reply, capacity);
   } else {
-    return false;  // No rescue/raw CLI, filesystem, or remote-command fallback.
+    // Upstream companion commands only: no rescue/raw CLI, filesystem, or
+    // remote-command fallback.
+    return executeMeshCoreCliCommand(command, reply, capacity);
   }
   if (written < 0 || static_cast<size_t>(written) >= capacity)
     snprintf(reply, capacity, "Error: response too long");
@@ -2061,16 +2146,16 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key_prefix = &cmd_frame[i];
     i += 6;
     ContactInfo *recipient = lookupContactByPubKey(pub_key_prefix, 6);
-    if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA)) {
+    if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND)) {
       char *text = (char *)&cmd_frame[i];
       int tlen = len - i;
       uint32_t est_timeout;
       text[tlen] = 0; // ensure null
       int result;
       uint32_t expected_ack;
-      if (txt_type == TXT_TYPE_CLI_DATA) {
+      if (txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND) {
         msg_timestamp = getRTCClock()->getCurrentTimeUnique(); // Use node's RTC instead of app timestamp to avoid tripping replay protection
-        result = sendCommandData(*recipient, msg_timestamp, attempt, text, est_timeout);
+        result = sendCommandData(*recipient, msg_timestamp, attempt, txt_type, text, est_timeout);
         expected_ack = 0; // no Ack expected
       } else {
         result = sendMessage(*recipient, msg_timestamp, attempt, text, expected_ack, est_timeout);

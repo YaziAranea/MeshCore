@@ -7,11 +7,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from smartui_cli import CliClient, CliError, decode_reply, discover, encode_command, matches, record
 from transports import FrameDecoder, StreamTransport
 
+UPSTREAM_WRITES = ("set name Дача", "set pin 654321", "set tx 20", "set af 2.5", "set dutycycle 10",
+                   "set rxdelay 1.5", "set multi.acks 2", "set path.hash.mode 1", "set radio.rxgain on",
+                   "set tz.offset 5.5", "set radio 869.618,62.5,8,8")
+UPSTREAM_READS = ("get freq", "get tx", "get af", "get dutycycle", "get rxdelay", "get multi.acks",
+                  "get path.hash.mode", "get radio.rxgain", "get tz.offset", "get wifi.status", "get wifi.ip")
 
 class Board:
-    def __init__(self, readonly=False, discovery="smartui_cli:1"):
+    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None):
         self.requests, self.closed = [], False
         self.readonly, self.discovery, self.error, self.timeout = readonly, discovery, None, False
+        self.meshcore, self.name, self.tx = meshcore, "Тестовая нода", "20"
 
     def close(self):
         self.closed = True
@@ -23,7 +29,7 @@ class Board:
         if self.timeout:
             raise TimeoutError()
         if request[0] == 22:
-            reply = bytes([13, 13])
+            reply = bytes([13, 14 if self.meshcore else 13])
         elif request[0] == 40:
             reply = b"\x15" + self.discovery.encode()
         else:
@@ -34,10 +40,24 @@ class Board:
                 if command == "ui hello":
                     text = ("OK ui hello version=1 firmware=0.12 max_command=156 max_reply=156 "
                             f"write={int(not self.readonly)} sync=0 events=0")
+                    if self.meshcore is not None:
+                        text += f" meshcore={self.meshcore}"
+                elif self.meshcore == 1 and command in UPSTREAM_READS:
+                    text = "> " + (self.tx if command == "get tx" else "1")
+                elif self.meshcore == 1 and command.startswith("set "):
+                    key, value = command[4:].split(" ", 1)
+                    if self.readonly:
+                        text = "Error: readonly"
+                    else:
+                        if key == "name":
+                            self.name = value
+                        elif key == "tx":
+                            self.tx = value
+                        text = "> pin is now " + value if key == "pin" else "OK"
                 elif command.startswith("ui get "):
                     text = "OK ui get key=" + command[7:] + " value=7"
                 elif command == "get name":
-                    text = "Тестовая нода"
+                    text = "> " + self.name if self.meshcore == 1 else self.name
                 elif command == "ui test":
                     text = "OK ui test"
                 else:
@@ -54,6 +74,80 @@ class CliTests(unittest.TestCase):
         client.connect()
         self.addCleanup(client.close)
         return client, board
+
+    def test_protocol_14_extra_hello_and_supported_upstream_read_write(self):
+        client, board = self.connected(meshcore=1)
+        self.assertEqual(client.hello["meshcore"], "1")
+        self.assertEqual(client.field("get", "volume"), "7")
+        for command in UPSTREAM_READS:
+            self.assertTrue(client.execute(command).startswith("> "))
+        for command in UPSTREAM_WRITES:
+            self.assertRegex(client.execute(command), r"^(?:OK|> pin is now)")
+        self.assertEqual(client.execute("get name"), "> Дача")
+        self.assertEqual(client.execute("get tx"), "> 20")
+
+    def test_upstream_capability_gate_and_readonly_every_write(self):
+        for capability in (None, 0, 2):
+            client, board = self.connected(meshcore=capability)
+            before = len(board.requests)
+            for command in UPSTREAM_READS + UPSTREAM_WRITES:
+                with self.assertRaises(CliError) as error:
+                    client.execute(command)
+                self.assertEqual(error.exception.code, "meshcore_unsupported")
+            self.assertEqual(len(board.requests), before)
+            self.assertFalse(client.uncertain)
+            self.assertEqual(client.field("get", "volume"), "7")
+        client, board = self.connected(meshcore=1, readonly=True)
+        before = len(board.requests)
+        for command in UPSTREAM_WRITES:
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "readonly")
+        self.assertEqual(len(board.requests), before)
+        for command in UPSTREAM_READS:
+            self.assertTrue(client.execute(command).startswith("> "))
+
+    def test_utf8_names_count_bytes_and_whitelist_stays_bounded(self):
+        self.assertEqual(encode_command("ab", "set name Дача")[4:].decode(), "set name Дача")
+        exact = "set name " + "я" * 73 + "a"
+        self.assertEqual(len(encode_command("ab", exact)), 160)
+        for command in (exact + "a", "set name \ud800", "set name X\nreboot", "ui имя", "set tx ２０",
+                        "set wifi.pwd secret", "get wifi.pwd", "set unknown 1", "get unknown",
+                        "reboot", "poweroff", "shutdown", "erase", "rm /prefs.json"):
+            with self.subTest(command=repr(command)), self.assertRaises(CliError) as error:
+                encode_command("00", command)
+            self.assertEqual(error.exception.code, "input")
+
+    def test_upstream_error_variants_redacted_no_retry_and_lost_ack_uncertain(self):
+        client, board = self.connected(meshcore=1)
+        for message in ("Error, secret invalid", "ERROR: secret invalid", "Error: secret storage"):
+            board.error = message
+            before = len(board.requests)
+            with self.assertRaises(CliError) as error:
+                client.execute("set tx 23")
+            self.assertEqual(error.exception.code, "failed")
+            self.assertNotIn("secret", str(error.exception))
+            self.assertEqual(len(board.requests), before + 1)
+            self.assertFalse(client.uncertain)
+        board.timeout = True
+        with self.assertRaises(CliError) as error:
+            client.execute("set tx 20")
+        self.assertEqual(error.exception.code, "timeout")
+        before = len(board.requests)
+        with self.assertRaises(CliError) as error:
+            client.execute("get tx")
+        self.assertEqual(error.exception.code, "uncertain")
+        self.assertEqual(len(board.requests), before)
+
+    def test_terminal_commands_never_sent_or_mistaken_for_success(self):
+        client, board = self.connected(meshcore=1)
+        before = len(board.requests)
+        for command in ("reboot", "poweroff", "shutdown"):
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "input")
+        self.assertEqual(len(board.requests), before)
+        self.assertFalse(client.uncertain)
 
     def test_exact_encoding_and_max_length(self):
         self.assertEqual(encode_command("a9", "ui get volume"), b"Ba9|ui get volume")

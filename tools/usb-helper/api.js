@@ -13,6 +13,7 @@
     TIMEOUT:'Ответ не получен. Результат операции неизвестен; автоматического повтора не было.',
     PROTOCOL:'Некорректный ответ ноды. Состояние не подтверждено; переподключитесь.',
     UNSUPPORTED:'Нода не сообщает smartui_cli:1. Для API SmartUI 0.11 используйте архивный Helper 1.4; прежние настройки доступны через консоль.',
+    MESHCORE_UNSUPPORTED:'Нода не сообщает meshcore=1 в ui hello. Эти команды оригинального MeshCore недоступны; используйте поддержанные ui-команды.',
     DENIED:'Нода разрешает только чтение. Изменение не выполнено.',
     FAILED:'Команда отклонена. Изменение не подтверждено.',
     INPUT:'Недопустимая команда или значение.',EXHAUSTED:'Теги запросов исчерпаны. Подключитесь заново.',
@@ -40,13 +41,24 @@
     constructor(code){super(errors[code]||errors.FAILED);this.code=code;this.safe=true;}
   }
   const fail=code=>new CliError(code);
+  const legacyReads=['board','ver','get name','get radio'];
+  const meshcoreReads=['get freq','get tx','get af','get dutycycle','get rxdelay','get multi.acks',
+    'get path.hash.mode','get radio.rxgain','get tz.offset','get wifi.status','get wifi.ip'];
+  const meshcoreSet=/^set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|(?:af|dutycycle|rxdelay|tz\.offset) [-+]?(?:\d+(?:\.\d*)?|\.\d+)|radio\.rxgain (?:on|off)|radio [-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?\d+,[-+]?\d+)$/u;
+  const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command);
   function tagFor(index){
     if(!Number.isInteger(index)||index<0||index>=alphabet.length**2)throw fail('EXHAUSTED');
     return alphabet[Math.floor(index/alphabet.length)]+alphabet[index%alphabet.length];
   }
   function validateCommand(command){
-    if(typeof command!=='string'||command.length<2||command.length>156||/[^\x20-\x7e]/.test(command)||
-      !(command.startsWith('ui ')||['board','ver','get name','get radio'].includes(command)))throw fail('INPUT');
+    if(typeof command!=='string'||command.length<2||/[\x00-\x1f\x7f]/.test(command))throw fail('INPUT');
+    const bytes=encoder.encode(command);
+    // TextEncoder replaces lone UTF-16 surrogates. Reject, never change a name silently.
+    if(bytes.length>156||new TextDecoder().decode(bytes)!==command)throw fail('INPUT');
+    if(command.startsWith('set name ')){
+      if(!meshcoreSet.test(command))throw fail('INPUT');
+    }else if(/[^\x20-\x7e]/.test(command)||
+      !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||meshcoreSet.test(command)))throw fail('INPUT');
     return command;
   }
   function encodeCommand(tag,command){
@@ -61,7 +73,7 @@
     try{text=new TextDecoder('utf-8',{fatal:true}).decode(packet.slice(4));}catch(_){throw fail('PROTOCOL');}
     if(!text||/[\x00-\x1f\x7f]/.test(text)||(ascii&&/[^\x20-\x7e]/.test(text)))throw fail('PROTOCOL');
     if(text==='Unknown command'){const error=fail('FAILED');error.reason='unsupported';error.message=reasonMessages.unsupported;throw error;}
-    if(text.startsWith('Error: '))throw fail('FAILED'); // Never surface raw CLI error text.
+    if(/^(?:Error[:,]|ERROR:)/.test(text))throw fail('FAILED'); // Never surface raw CLI error text.
     const reason=/^ERR ui ([a-z_]+)$/.exec(text)?.[1];
     if(reason){const error=fail(reason==='readonly'?'DENIED':'FAILED');error.reason=reason;
       error.message=reasonMessages[reason]||errors.FAILED;throw error;}
@@ -186,10 +198,12 @@
       if(this.state.busy||this.closing)throw fail('BUSY');
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
-      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+      validateCommand(command);
+      if(needsMeshcore(command)&&this.state.hello.meshcore!=='1')throw fail('MESHCORE_UNSUPPORTED');
+      mutate=mutate||command.startsWith('set ')||/^ui (set |test$|radio set |advert set |adc (apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
       if(mutate&&this.state.hello.write!=='1')throw fail('DENIED');
       const session=this.session;
-      validateCommand(command);this.update({busy:true});
+      this.update({busy:true});
       try{const reply=await this.command(command);if(this.session!==session||session.stopped)throw fail('CLOSED');this.audit(mutate?'write':'read');return reply;}
       catch(error){const safe=error instanceof CliError?error:fail('PROTOCOL');
         if(this.session===session&&!session.stopped&&['TIMEOUT','PROTOCOL','CLOSED','MODE','EXHAUSTED'].includes(safe.code))this.update({uncertain:true,phase:'uncertain'});

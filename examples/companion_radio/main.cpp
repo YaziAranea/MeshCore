@@ -38,6 +38,7 @@ MultiSerialInterface interface_manager;
   #include "AdcCalibrationService.h"
   #include "SmartUiCliSettings.h"
   #include "RadioSettings.h"
+  #include "MeshCoreCli.h"
   #include "SmartUiSync.h"
 #endif
 
@@ -137,6 +138,7 @@ static smartui::DeviceSettings device_settings;
 static smartui::DeviceSettings cli_device_settings;
 static smartui::RadioSettings radio_settings;
 static smartui::AdcCalibrationService adc_calibration_service;
+static smartui::MeshCoreCli meshcore_cli;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
@@ -436,13 +438,94 @@ static bool apiSetToneBridge(bool enabled) {
 #endif
 }
 
+// Upstream MeshCore command names on CMD66. Each setter is the one the binary
+// companion command with the same effect uses.
+static smartui::MeshCoreCliResult cliResult(bool ok) {
+  return ok ? smartui::MeshCoreCliResult::OK : smartui::MeshCoreCliResult::STORAGE;
+}
+static smartui::MeshCoreCliState readMeshCoreCliState() {
+  const NodePrefs& p = *the_mesh.getNodePrefs();
+  smartui::MeshCoreCliState s;
+  s.freq = p.freq;
+  s.bw = p.bw;
+  s.sf = p.sf;
+  s.cr = p.cr;
+  s.tx_dbm = p.tx_power_dbm;
+  s.max_tx_dbm = MAX_LORA_TX_POWER;
+  s.airtime_factor = p.airtime_factor;
+  s.rx_delay = p.rx_delay_base;
+  s.multi_acks = p.multi_acks;
+  s.path_hash_mode = p.path_hash_mode;
+  s.rx_gain = p.rx_boosted_gain != 0;
+  s.tz_minutes = p.timezone_offset_minutes;
+  return s;
+}
+static smartui::MeshCoreCliResult cliSetName(const char* name) {
+  return cliResult(the_mesh.setLocalNodeName(name));
+}
+static smartui::MeshCoreCliResult cliSetPin(uint32_t pin) {
+  return cliResult(the_mesh.setLocalBlePin(pin));
+}
+static smartui::MeshCoreCliResult cliSetTxPower(int8_t dbm) {
+  return cliResult(the_mesh.setLocalTxPower(dbm));
+}
+static smartui::MeshCoreCliResult cliSetTuning(float rx_delay, float airtime_factor) {
+  return cliResult(the_mesh.setLocalTuning(rx_delay, airtime_factor));
+}
+static smartui::MeshCoreCliResult cliSetMultiAcks(uint8_t count) {
+  return cliResult(the_mesh.setLocalMultiAcks(count));
+}
+static smartui::MeshCoreCliResult cliSetPathHashMode(uint8_t mode) {
+  return cliResult(the_mesh.setLocalPathHashMode(mode));
+}
+static smartui::MeshCoreCliResult cliSetRxGain(bool boosted) {
+  // The same gate as FEM: never retune the receiver under TX, RX or queued work.
+  if (the_mesh.localRadioSettingsBusy()) return smartui::MeshCoreCliResult::BUSY;
+  bool supported = true;
+  const bool saved = the_mesh.setLocalRxBoostedGain(boosted, supported);
+  if (!supported) return smartui::MeshCoreCliResult::UNSUPPORTED;
+  return cliResult(saved);
+}
+static smartui::MeshCoreCliResult cliSetTimezoneMinutes(int16_t minutes) {
+  return cliResult(the_mesh.setLocalTimezoneMinutes(minutes));
+}
+static bool cliRadioCommand(const char* command, char* reply, size_t capacity, bool allowed) {
+  return radio_settings.handle(command, reply, capacity, allowed);
+}
+static smartui::MeshCoreCliResult cliReboot() {
+  the_mesh.rebootLocal();  // Returns only when pending contacts could not be saved.
+  return smartui::MeshCoreCliResult::STORAGE;
+}
+static smartui::MeshCoreCliResult cliPowerOff() {
+  if (!the_mesh.flushPendingStorage()) return smartui::MeshCoreCliResult::STORAGE;
+#ifdef DISPLAY_CLASS
+  ui_task.shutdown();
+#else
+  board.powerOff();
+#endif
+  return smartui::MeshCoreCliResult::UNSUPPORTED;  // This board stayed on.
+}
+static bool cliWifiStatus(bool& associated, char* ip, size_t capacity) {
+  const CompanionStatus current = connection_controller.status();
+  if (!(current.capabilities & COMPANION_CAP_WIFI)) return false;
+  associated = current.wifiAssociated;
+  snprintf(ip, capacity, "%s", current.wifiLocalIp);
+  return true;
+}
+static bool cliBusy() { return connection_controller.deviceApiBusy(); }
+
+bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity) {
+  return meshcore_cli.handle(command, reply, capacity,
+                             connection_controller.deviceApiWritesAllowed());
+}
+
 // Standard CMD66 carries short SmartUI commands. The archived 0.11 C9
 // protocol, inbox ownership and event pushes are not enabled in this release.
 bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
   const bool writable = connection_controller.deviceApiWritesAllowed();
   if (strcmp(command, "ui hello") == 0) {
     snprintf(reply, capacity,
-        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0",
+        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1",
         SMARTUI_VERSION, writable ? 1U : 0U);
     return true;
   }
@@ -859,6 +942,22 @@ void setup() {
   radio_hooks.busy = radioSettingsBusy;
   radio_hooks.healthy = radioSettingsHealthy;
   radio_settings.begin(radio_hooks);
+  smartui::MeshCoreCliHooks meshcore_hooks;
+  meshcore_hooks.read = readMeshCoreCliState;
+  meshcore_hooks.setName = cliSetName;
+  meshcore_hooks.setPin = cliSetPin;
+  meshcore_hooks.setTxPower = cliSetTxPower;
+  meshcore_hooks.setTuning = cliSetTuning;
+  meshcore_hooks.setMultiAcks = cliSetMultiAcks;
+  meshcore_hooks.setPathHashMode = cliSetPathHashMode;
+  meshcore_hooks.setRxGain = cliSetRxGain;
+  meshcore_hooks.setTimezoneMinutes = cliSetTimezoneMinutes;
+  meshcore_hooks.radioCommand = cliRadioCommand;
+  meshcore_hooks.reboot = cliReboot;
+  meshcore_hooks.powerOff = cliPowerOff;
+  meshcore_hooks.wifiStatus = cliWifiStatus;
+  meshcore_hooks.busy = cliBusy;
+  meshcore_cli.begin(meshcore_hooks);
 #endif
 
   board.onBootComplete();

@@ -90,17 +90,17 @@ class PublicReleasePolicyTests(unittest.TestCase):
                          "discover -s tools/smartui-api/tests"):
             self.assertNotIn(archived, workflow)
 
-    def test_local_cli_backport_does_not_claim_full_v14_or_publish_c9(self):
+    def test_companion_cli_claims_v14_without_remote_execution_or_c9(self):
         mesh = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
         header = (ROOT / "examples/companion_radio/MyMesh.h").read_text(encoding="utf-8")
-        self.assertIn("#define FIRMWARE_VER_CODE 13", header)
+        self.assertIn("#define FIRMWARE_VER_CODE 14", header)
         self.assertIn('vars.append("smartui_cli", "1")', mesh)
         self.assertNotIn('vars.append("smartui_api"', mesh)
         self.assertNotIn("handleSmartUiApiFrame(", mesh)
         self.assertNotIn("onCLICommandRecv(", mesh)
         package = (ROOT / "tools/package_smartui_release.py").read_text(encoding="utf-8")
         self.assertIn("cli_version=1", package)
-        self.assertIn("companion_protocol_version=13, local_only=True", package)
+        self.assertIn("companion_protocol_version=14, local_only=True", package)
 
     def test_display_free_source_profiles_keep_the_same_board_wiring(self):
         source = (ROOT / "platformio.smartui-headless.ini").read_text(encoding="utf-8")

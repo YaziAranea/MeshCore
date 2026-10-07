@@ -61,17 +61,24 @@ int main() {
   for (const auto& command : {std::string(), std::string("AA|"), std::string("A|ver"),
       std::string("!A|ver"), std::string("AA||ver"), std::string("ui\nget"),
       std::string("ui\rget"), std::string("ui\tget"), std::string("ui\x7f"),
-      std::string("ui\xc3\xa9"), std::string("ui\0set", 6)}) {
+      std::string("ui\xc3"), std::string("ui\xc0\xaf"), std::string("ui\xed\xa0\x80"),
+      std::string("ui\xff"), std::string("ui\0set", 6)}) {
     assert(run(cli, request(command)).find("Error:") != std::string::npos);
   }
   assert(calls == before);
   assert(run(cli, request("AA|ui\nget")) == "AA|Error: invalid command");
   assert(run(cli, request(std::string("a9|ui\0get", 9))) == "a9|Error: invalid command");
-  assert(run(cli, request("Z1|ui\xc3\xa9")) == "Z1|Error: invalid command");
+  assert(run(cli, request("Z1|ui\xc3")) == "Z1|Error: invalid command");
   assert(calls == before);
+  // Upstream commands carry UTF-8 text; it reaches the dispatcher unchanged.
+  assert(run(cli, request("Z1|set name \xd0\x94\xd0\xb0\xd1\x87\xd0\xb0")) == "Z1|OK");
+  assert(last_command == "set name \xd0\x94\xd0\xb0\xd1\x87\xd0\xb0");
+  assert(run(cli, request("set name \xf0\x9f\x93\xa1")) == "OK");
+  assert(last_command == "set name \xf0\x9f\x93\xa1");
+  assert(calls == before + 2);
   assert(run(cli, request(std::string(157, 'x'))) == "Error: command too long");
   assert(run(cli, request("AA|" + std::string(157, 'x'))) == "Error: command too long");
-  assert(calls == before);
+  assert(calls == before + 2);
   reply_text = std::string(156, 'r');
   assert(run(cli, request(std::string(156, 'x'))).size() == 156);
   assert(run(cli, request("AA|" + std::string(156, 'x'))).size() == 159);
