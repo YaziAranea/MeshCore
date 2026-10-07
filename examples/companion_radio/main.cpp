@@ -452,6 +452,7 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
                     strncmp(command, "ui get ", 7) == 0 ||
                     strncmp(command, "ui melody ", 10) == 0 ||
                     strcmp(command, "ui adc service") == 0 ||
+                    strcmp(command, "ui adc manual") == 0 ||
                     strcmp(command, "ui adc service stop") == 0;
   if (!read && connection_controller.deviceApiBusy()) {
     snprintf(reply, capacity, "ERR ui busy");

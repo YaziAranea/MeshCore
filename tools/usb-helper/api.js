@@ -186,7 +186,7 @@
       if(this.state.busy||this.closing)throw fail('BUSY');
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
-      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+      mutate=mutate||/^ui (set |test$|radio set |advert set |adc (apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
       if(mutate&&this.state.hello.write!=='1')throw fail('DENIED');
       const session=this.session;
       validateCommand(command);this.update({busy:true});

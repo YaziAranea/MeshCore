@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { ReadableStream, WritableStream } = require('node:stream/web');
-const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, measuredMilliVolts } = require('./core.js');
+const { ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts } = require('./core.js');
 
 const STATUS = 'Mode=BLE companion=idle via=none USB-service=on WiFi-config=no link=down IP=none approval=none';
 const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
@@ -37,6 +37,16 @@ test('ADC service strict capability/status records and old caps compatibility',(
   assert.deepEqual(parseAdcService(wireRecord('adc_service',base)),base);
   assert.deepEqual(parseAdcService('OK ui adc_service supported=1 active=0 remaining_ms=0 external=0','ui'),{supported:1,active:0,remaining_ms:0,external:0});
   for(const patch of [{remaining_ms:120001},{remaining_ms:0},{supported:0},{external:0},{active:0},{external:2},{extra:0}])assert.equal(parseAdcService(wireRecord('adc_service',{...base,...patch})),null);
+});
+
+test('manual ADC strict discovery, decimals and board bounds',()=>{
+  assert.deepEqual(parseAdcManual('OK settings adc_manual supported=1'),{supported:1});
+  assert.deepEqual(parseAdcManual('OK ui adc_manual supported=0','ui'),{supported:0});
+  for(const line of ['OK settings adc_manual supported=2','OK settings adc_manual supported=1 supported=0','OK settings adc_manual supported=1 extra=0'])assert.equal(parseAdcManual(line),null);
+  const caps={adc_min:1.36125,adc_max:2.26875};
+  for(const text of ['1.815','1,815000',' 1.815000 '])assert.equal(adcMultiplier(text,caps),'1.815000');
+  for(const text of ['NaN','Infinity','1e0','-1.8','+1.8','1.8150001','1.8.0','1,8,0','1.8\n2','0',''])assert.throws(()=>adcMultiplier(text,caps));
+  for(const text of ['1.361249','2.268751'])assert.throws(()=>adcMultiplier(text,caps),code('SETTINGS_RANGE'));
 });
 
 class FakePort {
@@ -116,6 +126,12 @@ class FakePort {
     if (this.options.settings && command.startsWith('settings ')) {
       if (command==='settings caps') this.reply(wireRecord('caps',this.settingsCaps));
       else if (command==='settings get') this.reply(wireRecord('get',this.settingsState));
+      else if (command==='settings adc manual') this.reply(this.options.manualAdc===undefined?'ERR settings invalid':'OK settings adc_manual supported='+Number(this.options.manualAdc));
+      else if (command.startsWith('settings adc set ')) {
+        if(!this.options.manualAdc){this.reply('ERR settings unsupported');return;}
+        this.settingsState.adc_multiplier=Number(command.split(' ').at(-1));Object.assign(this.adcService,{active:0,remaining_ms:0});
+        if(!this.options.dropAdcAck)this.reply('OK settings adc_set');
+      }
       else if (command.startsWith('settings adc service')) {
         if (!this.settingsCaps.adc_service) { this.reply('ERR settings unsupported'); return; }
         if (command.endsWith(' start')) {
@@ -795,7 +811,7 @@ test('settings are explicitly advertised, automatically read and never probed on
   await assert.rejects(legacy.instance.loadDeviceSettings(),code('SETTINGS_UNAVAILABLE'));
   await legacy.instance.disconnect();
   const f=await connected({settings:true,fragment:1});
-  assert.deepEqual(f.port.commands.slice(-2),['settings caps','settings get']);
+  assert.deepEqual(f.port.commands.slice(-3),['settings caps','settings get','settings adc manual']);
   assert.deepEqual(f.instance.state.deviceSettings,SETTINGS);
   const copy=f.instance.state;copy.settingsCaps.adc=0;copy.deviceSettings.volume=1;
   assert.equal(f.instance.state.settingsCaps.adc,1);assert.equal(f.instance.state.deviceSettings.volume,10);
@@ -965,6 +981,33 @@ test('ADC service is discovered, explicit, fixed snapshot, and stopped on discon
   await f.instance.disconnect();
   assert.equal(f.port.commands.filter(c=>c.endsWith('service stop')).length,1);
   assert.equal(f.instance.state.adcService,null);assert.equal(f.instance.state.adcPreview,null);
+});
+
+test('manual ADC probe is compatible; direct save needs confirmation and verifies readback without sampling',async()=>{
+  const old=await connected({settings:true});assert.equal(old.instance.state.adcManualSupported,false);assert.equal(old.instance.state.verified,true);await old.instance.disconnect();
+  const f=await connected({settings:true,manualAdc:true,settingsCaps:{adc_min:1.36125,adc_max:2.26875,adc_service:1},settingsState:{adc_multiplier:1.97,adc_default:1.815,battery_mv:2770}});
+  assert.equal(f.instance.state.adcManualSupported,true);
+  await assert.rejects(f.instance.setAdcMultiplier('1.815'),code('ADC_CONFIRM'));
+  await f.instance.startAdcService({confirmed:true});
+  const saved=await f.instance.setAdcMultiplier('1,815000',{confirmed:true});
+  assert.equal(saved.adc_multiplier,1.815);assert.equal(saved.battery_protection,1);assert.equal(f.instance.state.adcService.active,0);
+  assert.equal(f.port.commands.filter(c=>c==='settings adc set 1.815000').length,1);
+  assert.equal(f.port.commands.some(c=>c.startsWith('settings adc preview')),false);
+  await f.instance.disconnect();
+});
+
+test('manual ADC lost ACK or mismatched readback blocks new writes and never repeats set',async()=>{
+  for(const mismatch of [false,true]){
+    let set=false;
+    const f=await connected({settings:true,manualAdc:true,dropAdcAck:!mismatch,onCommand(command,port){
+      if(command.startsWith('settings adc set '))set=true;
+      if(mismatch&&set&&command==='settings get'){port.reply(wireRecord('get',{...port.settingsState,adc_multiplier:4.99}));return false;}
+    }});
+    await assert.rejects(f.instance.setAdcMultiplier('4.8',{confirmed:true}),code('SETTINGS_UNCERTAIN'));
+    assert.equal(f.instance.state.verified,false);assert.equal(f.instance.state.deviceSettings,null);
+    await assert.rejects(f.instance.setAdcMultiplier('4.7',{confirmed:true}),code('NOT_VERIFIED'));
+    assert.equal(f.port.commands.filter(c=>c.startsWith('settings adc set ')).length,1);await f.instance.disconnect();
+  }
 });
 
 test('ADC service save and expiration clear preview; USB denial does not retry',async()=>{

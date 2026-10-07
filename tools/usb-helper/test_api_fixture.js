@@ -34,6 +34,11 @@ function installApiMock(options={}) {
       else if(cmd==='ui connection')text='OK ui connection mode=usb client=usb caps=7 write='+(options.readonly?'0':'1');
       else if(cmd==='ui mode status')text='OK ui mode pending=none error=none';
       else if(cmd==='ui test')text=options.readonly?'ERR ui readonly':'OK ui test';
+      else if(cmd==='ui adc manual')text=options.manualAdc===undefined?'ERR ui invalid':'OK ui adc_manual supported='+Number(options.manualAdc);
+      else if(cmd.startsWith('ui adc set ')){
+        if(options.readonly||!options.manualAdc)text='ERR ui '+(options.readonly?'readonly':'unsupported');
+        else{this.settings.adc_multiplier=Number(cmd.split(' ').at(-1));this.adcServiceDeadline=0;text='OK ui adc_set';if(this.dropAdcAck)return;}
+      }
       else if(cmd.startsWith('ui adc service')){
         if(!this.caps.adc_service)text='ERR ui unsupported';
         else if(cmd.endsWith(' start')&&(options.readonly||!this.adcService.external))text='ERR ui '+(options.readonly?'readonly':'usb_required');

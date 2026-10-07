@@ -6,6 +6,7 @@
   let confirmation = null;
   let renderedReplies = Array(9).fill(null);
   let firmwareBusy = false;
+  let adcOperation = null;
   let droppedFirmware = null, droppedManifest = null;
   const settingsDirty = new Set();
   const modeNames = {ble:"Bluetooth",wifi:"Wi-Fi",usb:"USB-компаньон"};
@@ -107,6 +108,9 @@
     $("adc-measured").disabled=!ready || !caps.adc;
     $("adc-preview").disabled=!ready || !caps.adc;
     $("adc-reset").disabled=!ready || !caps.adc;
+    $("adc-manual-value").disabled=!ready||!state.adcManualSupported;
+    $("adc-manual-save").disabled=!ready||!state.adcManualSupported||!$("adc-manual-value").value.trim();
+    $("adc-manual-hint").textContent=state.status?.readOnly?"Запись недоступна: нода сообщает режим только для чтения.":state.adcManualSupported?"Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.":"Прямой ввод не поддерживается этой прошивкой. Обновите файлы SmartUI 0.14; расчёт по мультиметру остаётся доступен.";
     const preview=state.adcPreview;
     $("adc-preview-box").hidden=!preview;
     $("adc-apply").disabled=!ready || !preview || Date.now()>=preview.expiresAt;
@@ -122,7 +126,7 @@
     $("adc-service-status").textContent=!service ? "Состояние окна не подтверждено. Нажмите «Проверить окно»." : service.active
       ? "Окно активно · осталось по данным ноды: "+Math.ceil(service.remaining_ms/1000)+" с. Проверяем каждые 5 секунд."
       : service.external ? "Окно выключено. Обычная защита питания действует." : "Окно выключено. Нода не подтвердила питание USB.";
-    if (!state.connected) $("adc-measured").value="";
+    if (!state.connected) {$("adc-measured").value="";$("adc-manual-value").value="";}
   }
   for (const profile of SmartUiFirmware.PROFILES) {
     const option = document.createElement("option"); option.value = profile.id; option.textContent = profile.label; $("firmware-board").append(option);
@@ -191,7 +195,7 @@
     window.dispatchEvent(new CustomEvent("smartui-console-state",{detail:state}));
   }
   const client = new SmartUiConsole.ConsoleClient({
-    onState(next) { state = next; if (!state.connected) clearPassword(); render(); },
+    onState(next) { const lost=state.connected&&!next.connected;state = next; if (!state.connected) clearPassword(); render();if(lost){for(const id of ['adc-result','adc-manual-result'])adcNote(adcOperation?.id===id?'USB отключён. Сохранение не подтверждено; переподключитесь и прочитайте ADC.':'USB отключён. Подключите ноду для проверки ADC.',adcOperation?.id===id?'error':'info',id);} },
     onStatus(status) { state = {...state,status}; render(); },
     onEvent:event,
   });
@@ -234,22 +238,37 @@
     if (settingsDirty.size && !await confirmAction("Прочитать значения с ноды заново? Несохранённые изменения в полях помощника будут отменены.")) return;
     settingsDirty.clear(); await run(()=>client.loadDeviceSettings());
   };
-  $("adc-measured").oninput=()=>client.clearAdcPreview();
+  const adcNote=(text,kind='info',id='adc-result')=>{$(id).textContent=text;$(id).classList.add('adc-feedback');$(id).dataset.kind=kind;};
+  async function runAdc(operation,{progress='Выполняем запрос к ноде…',success,id='adc-result'}={}) {
+    const session=client._session,token={session,id};adcOperation=token;adcNote(progress,'info',id);
+    try{const result=await operation();if(session===client._session&&success)adcNote(typeof success==='function'?success(result):success,'success',id);return result;}
+    catch(error){if(session===client._session){const text=error?.safe?error.message:'Ответ не подтверждён. Переподключитесь и прочитайте настройки.';adcNote(text,'error',id);feedback(text,'error');}}
+    finally{if(adcOperation===token)adcOperation=null;}
+  }
+  $("adc-measured").oninput=()=>{client.clearAdcPreview();adcNote('Замер изменён. Рассчитайте поправку заново.');};
+  $("adc-manual-value").oninput=()=>{client.clearAdcPreview();adcNote('Коэффициент ещё не сохранён. Проверьте значение и нажмите «Сохранить коэффициент».','info','adc-manual-result');renderDeviceSettings();};
+  $("adc-manual-save").onclick=async()=>{
+    const session=client._session,text=$("adc-manual-value").value;
+    let value;try{value=SmartUiConsole.adcMultiplier(text,state.settingsCaps);}catch(error){adcNote(error.message,'error','adc-manual-result');return;}
+    if(!await confirmAction('Сохранить ADC-множитель '+value+' напрямую? Используйте только проверенный коэффициент для этой платы. Он влияет на показание напряжения и защиту аккумулятора.'))return;
+    if(session!==client._session||text!==$("adc-manual-value").value||!state.connected||!state.verified){adcNote('Подключение или значение изменилось. Проверьте ввод и подтвердите заново.','error','adc-manual-result');return;}
+    await runAdc(()=>client.setAdcMultiplier(value,{confirmed:true}),{id:'adc-manual-result',progress:'Сохраняем коэффициент '+value+' и читаем обратно…',success:s=>{adcNote('Коэффициент сохранён вручную. Для нового расчёта нужен свежий замер.');return 'Сохранено на ноде и проверено: '+s.adc_multiplier.toFixed(6)+'. Напряжение ProMicro сверяйте от АКБ: USB искажает измерение.';}});
+  };
   $("adc-service-start").onclick=async()=>{
     const session=client._session;
-    if (await confirmAction("На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB и свежий замер мультиметром. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.") && session===client._session && state.connected && state.verified) await run(()=>client.startAdcService({confirmed:true}));
+    if (await confirmAction("На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB. Для расчёта нужен свежий замер мультиметром; для прямого ввода — проверенный коэффициент. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.") && session===client._session && state.connected && state.verified) await run(()=>client.startAdcService({confirmed:true}));
   };
   $("adc-service-stop").onclick=()=>run(()=>client.stopAdcService());
   $("adc-service-refresh").onclick=()=>run(()=>client.loadAdcService());
   setInterval(()=>{
     if (state.connected&&state.verified&&!state.busy&&!state.testPassed&&state.adcService?.active) void run(()=>client.loadAdcService());
   },5000);
-  $("adc-preview").onclick=()=>run(()=>client.previewAdc($("adc-measured").value));
+  $("adc-preview").onclick=()=>runAdc(()=>client.previewAdc($("adc-measured").value),{progress:'Получаем опорный замер и рассчитываем поправку…',success:p=>'Рассчитано: '+p.multiplier.toFixed(6)+'. Пока не сохранено — проверьте результат и нажмите «Сохранить калибровку».'});
   $("adc-apply").onclick=async()=>{
-    if (await confirmAction("Сохранить рассчитанную калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Поправка влияет на оценку заряда и защиту питания.")) await run(()=>client.applyAdc({confirmed:true}));
+    if (await confirmAction("Сохранить рассчитанную калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Поправка влияет на оценку заряда и защиту питания.")) await runAdc(()=>client.applyAdc({confirmed:true}),{progress:'Сохраняем калибровку и читаем обратно…',success:s=>'Калибровка сохранена и проверена: '+s.adc_multiplier.toFixed(6)+'.'});
   };
   $("adc-reset").onclick=async()=>{
-    if (await confirmAction("Вернуть только калибровку ADC к заводскому множителю этой платы? Контакты, ключ ноды и остальные настройки не удаляются.")) await run(()=>client.resetAdc({confirmed:true}));
+    if (await confirmAction("Вернуть только калибровку ADC к заводскому множителю этой платы? Контакты, ключ ноды и остальные настройки не удаляются.")) await runAdc(()=>client.resetAdc({confirmed:true}),{progress:'Восстанавливаем заводской коэффициент…',success:s=>'Заводской коэффициент сохранён и проверен: '+s.adc_multiplier.toFixed(6)+'.'});
   };
   $("settings-test").onclick=()=>run(()=>client.testDeviceNotification());
   $("replies-load").onclick = () => run(async () => {

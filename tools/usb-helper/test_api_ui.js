@@ -4,7 +4,7 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:url'),{chromium}=require('playwright');
 const {installApiMock}=require('./test_api_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_1.7.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_1.8.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -82,6 +82,59 @@ test('ADC preview expiring during confirmation cannot send a stale apply',async(
     await p.locator('#confirm-yes').click();
     assert.match(await p.locator('#api-adc-result').textContent(),/Расчёт устарел/);
     assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui adc apply'))),false);
+  }finally{await f.close();}
+});
+
+test('manual ADC CLI uses explicit input/readback without battery reference and reports source locally',async()=>{
+  const f=await fixture({manualAdc:true,caps:{adc_service:1},adcMin:1.36125,adcMax:2.26875,settings:{adc_multiplier:1.97,adc_default:1.815,battery_mv:2770}});
+  try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.evaluate(()=>__apiMock.adcSourceMissing=true);
+    await p.locator('#api-adc-measured').fill('3.32');await p.locator('#api-adc-preview').click();await ready(p);
+    assert.match(await p.locator('#api-adc-result').textContent(),/ProMicro/);assert.equal(await p.locator('#api-adc-result').getAttribute('data-kind'),'error');
+    await p.locator('#api-adc-manual-value').fill('2,109806');
+    await p.locator('#api-adc-manual-save').click();assert.match(await p.locator('#confirm-text').textContent(),/2\.109806/);await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui adc set '))),false);
+    await p.locator('#api-adc-manual-save').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.match(await p.locator('#api-adc-manual-result').textContent(),/Сохранено на ноде и проверено: 2\.109806/);
+    assert.equal(await p.locator('#api-adc-result').getAttribute('data-kind'),'info');
+    assert.match(await p.locator('#api-adc-result').textContent(),/Коэффициент сохранён вручную/);
+    assert.match(await p.locator('#api-adc-value').textContent(),/Сохранённый ADC-множитель: 2\.109806/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui adc set 2.109806').length),1);
+    await geometry(p);await p.locator('#api-adc').screenshot({path:path.join(output,'helper-1.8-cli-adc-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-adc').screenshot({path:path.join(output,'helper-1.8-cli-adc-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('manual ADC CLI old firmware, readonly, changed input and unsupported probe remain safe',async()=>{
+  for(const options of [{},{readonly:true,manualAdc:true}]){const f=await fixture(options);try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();assert.equal(await p.locator('#api-adc-manual-value').isDisabled(),true);assert.equal(await p.locator('#api-settings-load').isEnabled(),true);}finally{await f.close();}}
+  const f=await fixture({manualAdc:true});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.locator('#api-adc-manual-value').fill('4.8');await p.locator('#api-adc-manual-save').click();
+    await p.evaluate(()=>{const x=document.getElementById('api-adc-manual-value');x.value='4.7';x.dispatchEvent(new Event('input'));});await p.locator('#confirm-yes').click();
+    assert.match(await p.locator('#api-adc-manual-result').textContent(),/значение изменилось/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui adc set '))),false);
+  }finally{await f.close();}
+});
+
+test('manual ADC CLI lost acknowledgement or lost USB stays local and never retries',async()=>{
+  for(const unplug of [false,true]){const f=await fixture({manualAdc:true,clock:true});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.evaluate(()=>__apiMock.dropAdcAck=true);await p.locator('#api-adc-manual-value').fill('4.8');await p.locator('#api-adc-manual-save').click();await p.locator('#confirm-yes').click();
+    await p.waitForFunction(()=>__apiMock.commands.includes('ui adc set 4.800000'));
+    if(unplug)await p.evaluate(()=>__apiMock.controller.error(new Error('USB lost')));else await p.clock.fastForward(6100);
+    await p.waitForFunction(()=>document.getElementById('api-adc-manual-result').dataset.kind==='error');
+    assert.match(await p.locator('#api-adc-manual-result').textContent(),/неизвестен|не подтверждено|недоступна/);
+    assert.equal(await p.locator('#api-adc-manual-save').isDisabled(),true);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c.startsWith('ui adc set ')).length),1);
+  }finally{await f.close();}}
+});
+
+test('manual ADC CLI readback mismatch becomes local uncertainty, never false success',async()=>{
+  const f=await fixture({manualAdc:true});try{const p=f.page;await connect(p);await p.locator('#api-adc summary').click();
+    await p.evaluate(()=>{const m=__apiMock,original=m.handle;m.handle=function(packet){original.call(this,packet);if(this.commands.at(-1)==='ui adc set 4.800000')this.settings.adc_multiplier=4.81;};});
+    await p.locator('#api-adc-manual-value').fill('4.8');await p.locator('#api-adc-manual-save').click();await p.locator('#confirm-yes').click();
+    await p.waitForFunction(()=>document.getElementById('api-adc-manual-result').dataset.kind==='error');
+    assert.match(await p.locator('#api-adc-manual-result').textContent(),/операция не подтверждена/);
+    assert.equal(await p.locator('#api-adc-manual-save').isDisabled(),true);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c.startsWith('ui adc set ')).length),1);
   }finally{await f.close();}
 });
 

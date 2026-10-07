@@ -17,7 +17,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.7.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_1.8.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -37,7 +37,7 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
@@ -89,7 +89,13 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
       if(this.settings && command.startsWith('settings ')) {
         if(command==='settings caps') this.emit(this.settingsRecord('caps',this.settingsCaps));
         else if(command==='settings get') this.emit(this.settingsRecord('get',this.settingsState));
+        else if(command==='settings adc manual')this.emit(manualAdc===undefined?'ERR settings invalid':'OK settings adc_manual supported='+Number(manualAdc));
         else if(this.settingsFailure) this.emit('ERR settings '+this.settingsFailure);
+        else if(command.startsWith('settings adc set ')){
+          if(!manualAdc){this.emit('ERR settings unsupported');return;}
+          this.settingsState.adc_multiplier=Number(command.split(' ').at(-1));this.adcServiceDeadline=0;
+          if(!this.dropAdcAck)this.emit('OK settings adc_set');
+        }
         else if(command.startsWith('settings adc service')) {
           if(!this.settingsCaps.adc_service){this.emit('ERR settings unsupported');return;}
           if(command.endsWith(' start')){
@@ -178,9 +184,10 @@ async function fixture(options = {}) {
   const page = await context.newPage();
   const errors = [];
   const network = [];
+  if(options.clock)await page.clock.install({time:new Date('2026-01-01T12:00:00Z')});
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature) });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -698,6 +705,53 @@ test('ADC start consent cannot outlive its console session',async()=>{
   }finally{await f.close();}
 });
 
+test('manual ADC console: comma input, confirmation, saved readback and desktop/mobile layout',async()=>{
+  const f=await fixture({settings:true,manualAdc:true,info:RELEASE_DEVICE_INFO,settingsCaps:{adc_min:1.36125,adc_max:2.26875,adc_service:1}});
+  try{const p=f.page;await p.evaluate(()=>Object.assign(__serialMock.settingsState,{adc_multiplier:1.97,adc_default:1.815,battery_mv:2770}));await connect(p);
+    assert.equal(await p.locator('#adc-current').textContent(),'1.970000');
+    await p.locator('#adc-manual-value').fill('2,109806');
+    assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc set'))),false);
+    await confirm(p,'#adc-manual-save',false);assert.equal(await p.locator('#adc-current').textContent(),'1.970000');
+    await p.locator('#adc-manual-save').click();assert.match(await p.locator('#confirm-text').textContent(),/2\.109806/);await p.locator('#confirm-yes').click();
+    await p.waitForFunction(()=>document.getElementById('adc-manual-result').textContent.includes('Сохранено на ноде и проверено'));
+    assert.equal(await p.locator('#adc-current').textContent(),'2.109806');
+    assert.equal(await p.evaluate(()=>__serialMock.commands.filter(c=>c==='settings adc set 2.109806').length),1);
+    assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc preview'))),false);
+    await p.locator('#adc-manual-value').fill('1,815000');await p.locator('#adc-service-refresh').click();
+    await p.waitForFunction(()=>!document.getElementById('adc-manual-save').disabled);
+    assert.equal(await p.locator('#adc-manual-value').inputValue(),'1,815000');
+    await noOverlap(p);await p.locator('#adc-fields').screenshot({path:path.join(output,'helper-1.8-adc-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await noOverlap(p);await p.locator('#adc-fields').screenshot({path:path.join(output,'helper-1.8-adc-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('manual ADC console rejects changed consent, bad range and old firmware without hiding connection',async()=>{
+  const old=await fixture({settings:true,info:RELEASE_DEVICE_INFO});try{await connect(old.page);assert.equal(await old.page.locator('#adc-manual-value').isDisabled(),true);assert.match(await old.page.locator('#adc-manual-hint').textContent(),/не поддерживается/);}finally{await old.close();}
+  const f=await fixture({settings:true,manualAdc:true,info:RELEASE_DEVICE_INFO});try{const p=f.page;await connect(p);
+    await p.locator('#adc-manual-value').fill('999');await p.locator('#adc-manual-save').click();assert.match(await p.locator('#adc-manual-result').textContent(),/диапазона/);
+    await p.locator('#adc-manual-value').fill('4.8');await p.locator('#adc-manual-save').click();
+    await p.evaluate(()=>{const x=document.getElementById('adc-manual-value');x.value='4.7';x.dispatchEvent(new Event('input'));});await p.locator('#confirm-yes').click();
+    assert.match(await p.locator('#adc-manual-result').textContent(),/значение изменилось/);
+    assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc set'))),false);
+    await p.evaluate(()=>__serialMock.settingsFailure='source');await p.locator('#adc-measured').fill('3.82');await p.locator('#adc-preview').click();
+    await p.waitForFunction(()=>document.getElementById('adc-result').textContent.includes('ProMicro'));
+    assert.equal(await p.locator('#adc-result').getAttribute('data-kind'),'error');
+    assert.equal(await p.locator('#adc-apply').isDisabled(),true);
+  }finally{await f.close();}
+});
+
+test('manual ADC console lost ACK and unplug show local uncertainty without automatic retry',async()=>{
+  for(const unplug of [false,true]){const f=await fixture({settings:true,manualAdc:true,info:RELEASE_DEVICE_INFO,clock:true});try{const p=f.page;await connect(p);
+    await p.evaluate(()=>__serialMock.dropAdcAck=true);await p.locator('#adc-manual-value').fill('4.8');await confirm(p,'#adc-manual-save',true);
+    await p.waitForFunction(()=>__serialMock.commands.includes('settings adc set 4.800000'));
+    if(unplug)await p.evaluate(()=>__serialMock.unplug());else await p.clock.fastForward(6100);
+    await p.waitForFunction(()=>document.getElementById('adc-manual-result').dataset.kind==='error');
+    assert.match(await p.locator('#adc-manual-result').textContent(),/неизвестен|не подтверждено/);
+    assert.equal(await p.locator('#adc-manual-save').isDisabled(),true);
+    assert.equal(await p.evaluate(()=>__serialMock.commands.filter(c=>c.startsWith('settings adc set')).length),1);
+  }finally{await f.close();}}
+});
+
 test('read-only Settings 1 shows current values but disables every mutation',async()=>{
   const f=await fixture({settings:true,info:DEVICE_INFO,readOnly:true});
   try {
@@ -705,7 +759,7 @@ test('read-only Settings 1 shows current values but disables every mutation',asy
     assert.equal(await f.page.locator('#device-fields').isVisible(),true);
     assert.equal(await f.page.locator('#settings-status').textContent(),'Только чтение');
     assert.equal(await f.page.locator('#settings-load').isEnabled(),true);
-    for(const id of ['setting-volume','save-volume','adc-measured','adc-preview','adc-reset','settings-test']) assert.equal(await f.page.locator('#'+id).isEnabled(),false,id);
+    for(const id of ['setting-volume','save-volume','adc-measured','adc-preview','adc-reset','settings-test','adc-manual-value','adc-manual-save']) assert.equal(await f.page.locator('#'+id).isEnabled(),false,id);
     assert.match(await f.page.locator('#battery-voltage').textContent(),/3,800/);
     assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set'))),false);
   } finally {await f.close();}

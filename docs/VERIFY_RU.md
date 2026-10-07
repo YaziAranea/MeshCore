@@ -13,7 +13,7 @@ SHA-256 позволяет убедиться, что скачанный UF2 и�
 
 - артефакт `smartui-ps17-validated-uf2` содержит три UF2 и `SHA256SUMS.txt`;
 - артефакт `smartui-ps17-validated-esp32-bin` содержит пары V3/V4.3/V4 R8/Wireless Paper FULL и `SHA256SUMS-ESP32.txt`;
-- артефакт `smartui-public-release` содержит полный комплект 0.14, включая `RELEASE-MANIFEST.json`, помощник 1.7 и Developer Kit.
+- артефакт `smartui-public-release` содержит полный комплект 0.14, включая `RELEASE-MANIFEST.json`, помощник 1.8 и Developer Kit.
 
 GitHub хранит артефакт как ZIP. Распакуйте бинарники и их манифест в одну папку. Не сравнивайте файл одного Release/CI-run с манифестом другого.
 

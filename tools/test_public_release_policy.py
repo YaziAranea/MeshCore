@@ -76,11 +76,15 @@ class PublicReleasePolicyTests(unittest.TestCase):
                      "test_device_settings.py", "test_adc_calibration_service.py", "test_headless_runtime.py",
                      "test_periodic_agc_ui.py", "test_periodic_agc.py",
                      "test_agc_maintenance.py", "test_smartui_cli.py", "test_fem_prefs.py",
-                     "test_smartui_developer_kit.py", "test_heltec_v4_r8_profile.py"):
+                     "test_smartui_developer_kit.py", "test_heltec_v4_r8_profile.py",
+                     "test_prune_superseded_helper_assets.py"):
             self.assertIn("python tools/" + test, workflow)
         for profile in ("SmartUI_ProMicro_headless", "SmartUI_Paper_headless"):
             self.assertIn("- " + profile, workflow)
         self.assertIn("node --test tools/usb-helper/test_ui.js", workflow)
+        self.assertIn('python tools/prune_superseded_helper_assets.py "$release_json"', publish)
+        self.assertLess(publish.index('gh release upload "$tag"'), publish.index('python tools/prune_superseded_helper_assets.py'))
+        self.assertLess(publish.index('python tools/prune_superseded_helper_assets.py'), publish.index('assert local.keys() == assets.keys()'))
         self.assertIn("python -B -m unittest discover -s tools/smartui-cli/tests -v", workflow)
         for archived in ("python tools/test_smartui_api.py", "python tools/test_smartui_sync_api.py",
                          "discover -s tools/smartui-api/tests"):

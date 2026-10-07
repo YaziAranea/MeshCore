@@ -227,7 +227,7 @@ int main() {
 
   connection_controller.busy = true;
   for (const char* command : {"ui caps v", "ui get battery_mv", "ui melody 0",
-                              "ui adc service", "ui adc service stop"}) {
+                              "ui adc service", "ui adc service stop", "ui adc manual"}) {
     assert(call(command) == "OK ui backend");
     assert(last_command == command && !backend_allowed);
   }
@@ -235,10 +235,12 @@ int main() {
   assert(call("ui set volume 2") == "ERR ui busy" && backend_calls == reads);
   assert(call("ui adc preview 3320") == "ERR ui busy" && backend_calls == reads);
   assert(call("ui adc service start") == "ERR ui busy" && backend_calls == reads);
+  assert(call("ui adc set 1.815") == "ERR ui busy" && backend_calls == reads);
   assert(call("ui test") == "ERR ui busy" && backend_calls == reads);
   connection_controller.busy = false;
   assert(call("ui set volume 2") == "ERR ui readonly" && backend_calls == reads);
   assert(call("ui adc service start") == "ERR ui readonly" && backend_calls == reads);
+  assert(call("ui adc set 1.815") == "ERR ui readonly" && backend_calls == reads);
 
   connection_controller.writable = true;
   assert(call("ui test") == "OK ui backend" && backend_allowed);

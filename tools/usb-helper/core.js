@@ -75,6 +75,8 @@
     ADC_INPUT: 'Введите измеренное мультиметром напряжение от 2,500 до 4,500 В, например 3,82.',
     ADC_CONFIRM: 'Сначала выполните расчёт, затем явно подтвердите сохранение.',
     ADC_SERVICE_CONFIRM: 'Временное окно калибровки включается только после отдельного подтверждения.',
+    ADC_MANUAL_INPUT: 'Введите известный коэффициент: положительное число с точкой или запятой, не более 6 знаков после неё.',
+    ADC_MANUAL_UNAVAILABLE: 'Эта прошивка не поддерживает прямой ввод ADC. Обновите файлы SmartUI 0.14; расчёт по мультиметру остаётся доступен.',
     ADC_USB_REQUIRED: 'Нода не подтвердила питание USB и локальное USB-подключение. Сервисное окно не включено.'
   });
   const DEFAULT_TIMEOUTS = Object.freeze({ command: 6000, test: 25000, usb: 2000, close: 1500, candidate: 120000, adcPreview: 60000 });
@@ -198,6 +200,18 @@
     if (r.active ? (!r.supported || !r.external || r.remaining_ms===0) : r.remaining_ms!==0) return null;
     return {...r};
   }
+  function parseAdcManual(line, transport='settings') {
+    if (!['settings','ui'].includes(transport)) return null;
+    const r=record(line,'OK '+transport+' adc_manual',['supported']);
+    return r&&integer(r.supported,0,1)?{...r}:null;
+  }
+  function adcMultiplier(text,caps) {
+    if(typeof text!=='string'||!/^\d+(?:[.,]\d{1,6})?$/.test(text.trim()))throw failure('ADC_MANUAL_INPUT');
+    const value=Number(text.trim().replace(',','.'));
+    if(!Number.isFinite(value)||value<=0)throw failure('ADC_MANUAL_INPUT');
+    if(!caps||value<Number(caps.adc_min)||value>Number(caps.adc_max))throw failure('SETTINGS_RANGE');
+    return value.toFixed(6);
+  }
   function parseDeviceSettings(line, caps) {
     const r = record(line, 'OK settings get', ['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted']);
     if (!r || !caps || !integer(r.battery_mv,0,65535) || !integer(r.volume,1,10) || !integer(r.melody,0,255)) return null;
@@ -236,7 +250,7 @@
       for (const key of Object.keys(DEFAULT_TIMEOUTS)) {
         if (Number.isFinite(timeouts[key]) && timeouts[key] > 0) this._timeouts[key] = timeouts[key];
       }
-      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null, deviceSettings:null, adcPreview:null, adcService:null };
+      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null, deviceSettings:null, adcPreview:null, adcService:null,adcManualSupported:false };
       this._session = null;
       this._operation = null;
       this._closing = null;
@@ -332,7 +346,7 @@
           // Native Web Serial's open defaults are sufficient for this console.
           session.reader = port.readable.getReader();
           session.writer = port.writable.getWriter();
-          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null });
+          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
           session.readTask = this._readLoop(session);
           await this._resync(session);
           let helpSeen = false;
@@ -421,7 +435,7 @@
       if (this._session === session) this._session = null;
       this._clearCandidate();
       clearTimeout(this._adcTimer); this._adcTimer = null;
-      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null });
+      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
       this._call('onStatus', null);
       const closing = (async () => {
         if (session.openTask) await this._bounded(session.openTask);
@@ -738,6 +752,13 @@
       this._stateChanged({settingsCaps:caps,deviceSettings:settings});
       if (caps.adc_service) await this._readAdcService(session);
       else this._stateChanged({adcService:null});
+      const manual=caps.adc && !this._state.status?.readOnly ? await this._exchange(session,'settings adc manual',line=>{
+        if(['ERR settings invalid','ERR settings unsupported',RX.unknown].includes(line))return success({supported:0});
+        const value=parseAdcManual(line);if(value)return success(value);
+        const error=settingsError(line);if(error)return rejected(error);
+        if(line.startsWith('OK settings'))return rejected('PROTOCOL');
+      }) : {supported:0};
+      this._assertCurrent(session);this._stateChanged({adcManualSupported:Boolean(manual.supported)});
       return settings;
     }
     async _readAdcService(session, command='settings adc service') {
@@ -808,7 +829,7 @@
         const settings = await this._settingsExchange(session,'settings get',line => parseDeviceSettings(line,this._state.settingsCaps));
         if (!verify(settings)) throw failure('PROTOCOL');
         this._stateChanged({deviceSettings:settings});
-        if (this._state.settingsCaps.adc_service && /^settings adc (apply|reset)/.test(command)) await this._readAdcService(session);
+        if (this._state.settingsCaps.adc_service && /^settings adc (apply|reset|set)/.test(command)) await this._readAdcService(session);
         this._event('success','Настройка сохранена и прочитана обратно с ноды.');
         return settings;
       } catch (error) {
@@ -853,6 +874,15 @@
       return this._operate(async session => {
         this._requireSettings('adc'); if (!confirmed) throw failure('ADC_CONFIRM');
         return this._commitDeviceSettings(session,'settings adc reset','OK settings adc_reset',settings => Math.abs(settings.adc_multiplier-settings.adc_default)<=0.000002);
+      },{mutate:true});
+    }
+    async setAdcMultiplier(text,{confirmed=false}={}) {
+      if(!confirmed)throw failure('ADC_CONFIRM');
+      return this._operate(async session=>{
+        this._requireSettings('adc');
+        if(!this._state.adcManualSupported)throw failure('ADC_MANUAL_UNAVAILABLE');
+        const value=adcMultiplier(text,this._state.settingsCaps);
+        return this._commitDeviceSettings(session,'settings adc set '+value,'OK settings adc_set',settings=>Math.abs(settings.adc_multiplier-Number(value))<=0.000002);
       },{mutate:true});
     }
     async testDeviceNotification() {
@@ -947,5 +977,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
 }));

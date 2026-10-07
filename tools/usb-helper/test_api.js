@@ -63,6 +63,7 @@ test('ADC service start is inferred mutation; stop remains allowed during read-o
   try{
     const before=f.port.commands.length;
     await assert.rejects(f.client.execute('ui adc service start'),{code:'DENIED'});
+    await assert.rejects(f.client.execute('ui adc set 1.815000'),{code:'DENIED'});
     assert.equal(f.port.commands.length,before);
     assert.match(await f.client.execute('ui adc service stop'),/^OK ui adc_service supported=1 active=0/);
   }finally{await f.client.disconnect();}

@@ -113,6 +113,10 @@
     .radio-status { min-height:25px; margin:16px 0 0; color:var(--accent); font-size:14px; }
     .radio-status[data-kind="error"] { color:var(--error); }
     .radio-status[data-kind="warning"] { color:var(--warn); }
+    .adc-feedback { padding:10px 12px; border-radius:9px; background:var(--surface); overflow-wrap:anywhere; }
+    .adc-feedback[data-kind="error"] { color:var(--error); border-left:3px solid var(--error); }
+    .adc-feedback[data-kind="success"] { color:var(--accent); border-left:3px solid var(--accent); }
+    #adc-manual-fields,#api-adc-manual-fields { margin-top:22px; padding-top:4px; border-top:1px solid var(--edge); }
     .advert-panel { border-left:1px solid var(--edge); padding-left:22px; }
     #advert-interval { width:100%; }
     .reply-row { padding:18px 0; border-top:1px solid var(--edge); }
@@ -138,7 +142,7 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ближе к вашей сети.</h1><p class="subtitle">Выберите город. Настройте ноду под себя.<br>Без аккаунта, облака и лишних действий.</p></div>
-    <div><span class="tag">Помощник 1.7 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><span class="tag">Помощник 1.8 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
   <aside class="app-rail"><p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#radio-section">Город и радио</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
   <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
@@ -216,21 +220,31 @@
         <section id="battery-panel" class="device-panel" aria-labelledby="battery-title">
           <p class="panel-kicker">Питание</p><h3 id="battery-title">Аккумулятор и калибровка</h3>
           <div id="adc-fields">
-            <dl class="measurement"><div><dt>Напряжение ноды</dt><dd id="battery-voltage">—</dd></div><div><dt>ADC-множитель</dt><dd id="adc-current" class="small-value">—</dd></div></dl>
+            <dl class="measurement"><div><dt>Напряжение ноды</dt><dd id="battery-voltage">—</dd></div><div><dt>Сохранённый ADC-множитель</dt><dd id="adc-current" class="small-value">—</dd></div></dl>
             <p id="adc-range" class="hint">Заводской множитель и границы появятся после чтения.</p>
-            <div id="adc-service-box" class="preview-box" hidden>
-              <h4>Нода выключается до калибровки?</h4>
-              <p class="hint">Сервисное окно на 2 минуты — только при подтверждённом USB-питании. Оно временно приостанавливает отключение по неверному ADC, но не исправляет измерение.</p>
-              <p class="safety-note">Не используйте как обычный режим работы. Сохранение ADC, тайм-аут или потеря USB возвращают защиту. Пороги 3,2 / 2,7 В не меняются.</p>
-              <p id="adc-service-status" role="status" class="hint">Состояние не прочитано.</p>
-              <div class="buttons"><button id="adc-service-start" disabled>Открыть окно на 2 минуты</button><button id="adc-service-stop" disabled>Завершить калибровку</button><button id="adc-service-refresh" disabled>Проверить окно</button></div>
-            </div>
+            <p class="hint">Выберите один из двух способов калибровки.</p>
+            <h4>Способ 1: рассчитать по мультиметру</h4>
             <label class="field" for="adc-measured">Напряжение мультиметра, В</label><input id="adc-measured" inputmode="decimal" type="text" autocomplete="off" placeholder="Например, 3,82" aria-describedby="adc-instructions" disabled>
             <p id="adc-instructions" class="hint">Измерьте напряжение непосредственно на аккумуляторе. Введите 2,500–4,500 В. Расчёт не меняет настройки.</p>
             <p id="adc-source-warning" class="safety-note">ProMicro: USB искажает замер АКБ. На короткое время отключите USB, измерьте аккумулятор мультиметром и дайте ноде получить замер от АКБ. Подключите USB без перезапуска. При необходимости откройте сервисное окно, сразу рассчитайте и сохраните поправку. Опорный замер годен 2 минуты; сервисное окно не продлевает этот срок. Снятие USB завершает окно.</p>
             <div class="buttons"><button id="adc-preview" disabled>Рассчитать поправку</button></div>
             <div id="adc-preview-box" class="preview-box" hidden><p id="adc-preview-result" role="status"></p><div class="buttons"><button id="adc-apply" class="primary" disabled>Сохранить калибровку</button></div><p class="hint">Расчёт действует до 60 секунд. Изменение другой настройки отменяет его.</p></div>
+            <p id="adc-result" class="hint" role="status" aria-live="polite">Введите замер. Расчёт не меняет настройки.</p>
+            <div id="adc-manual-fields">
+              <h4>Способ 2: ввести известный коэффициент</h4>
+              <p id="adc-manual-hint" class="hint">Если правильный множитель уже известен, его можно сохранить напрямую, без опорного замера. Не подбирайте значение наугад.</p>
+              <p class="hint">Проверка подтверждает коэффициент, не напряжение. На ProMicro USB искажает напряжение; результат сверяйте с мультиметром при питании от аккумулятора.</p>
+              <label class="field" for="adc-manual-value">Новый ADC-множитель</label><input id="adc-manual-value" type="text" inputmode="decimal" autocomplete="off" placeholder="Например, 1,815000" aria-describedby="adc-manual-hint adc-manual-result" disabled>
+              <div class="buttons"><button id="adc-manual-save" disabled>Сохранить коэффициент</button></div>
+              <p id="adc-manual-result" class="hint" role="status" aria-live="polite">Значение ещё не введено. Сам ввод ничего не сохраняет.</p>
+            </div>
             <div class="buttons"><button id="adc-reset" disabled>Заводская калибровка ADC</button></div>
+            <div id="adc-service-box" class="preview-box" hidden>
+              <strong>Выключается до калибровки?</strong>
+              <p class="safety-note">Окно на 2 минуты при USB временно приостанавливает отсечку ADC. Только для настройки: сохранение, тайм-аут или потеря USB возвращают защиту. Пороги 3,2 / 2,7 В не меняются.</p>
+              <p id="adc-service-status" role="status" class="hint">Состояние не прочитано.</p>
+              <div class="buttons"><button id="adc-service-start" disabled>Открыть окно на 2 минуты</button><button id="adc-service-stop" disabled>Завершить калибровку</button><button id="adc-service-refresh" disabled>Проверить окно</button></div>
+            </div>
           </div>
           <div id="battery-settings"></div>
           <p id="battery-protection-warning" class="safety-note">Защита включена: порог 3,2 В. При выключении остаётся нижняя отсечка 2,7 В — это не безопасная цель разряда. Нужны исправный BMS и проверенный ADC. Внешнее питание может менять поведение отключения.</p>

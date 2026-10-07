@@ -257,7 +257,14 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
 
   const char* backend_prefix = nullptr;
   const char* value = nullptr;
-  if (strcmp(command, "ui adc service") == 0) {
+  bool decimal_value = false;
+  if (strcmp(command, "ui adc manual") == 0) {
+    backend_prefix = "api adc manual";
+  } else if (strncmp(command, "ui adc set", 10) == 0) {
+    backend_prefix = "api adc set ";
+    value = command + 10;
+    decimal_value = true;
+  } else if (strcmp(command, "ui adc service") == 0) {
     backend_prefix = "api adc service";
   } else if (strcmp(command, "ui adc service start") == 0) {
     backend_prefix = "api adc service start";
@@ -278,7 +285,8 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
   if (backend_prefix != nullptr) {
     char backend_command[64];
     if (value != nullptr) {
-      if (*value != ' ' || !isUnsigned(value + 1)) {
+      if (*value != ' ' || value[1] == 0 ||
+          (!decimal_value && !isUnsigned(value + 1))) {
         response(reply, capacity, "ERR ui invalid");
         return true;
       }

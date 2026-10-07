@@ -527,6 +527,7 @@ jobs:
           node --test tools/usb-helper/test_api.js
           node --test tools/usb-helper/test_presets.js
           python tools/test_usb_helper_package.py
+          python tools/test_prune_superseded_helper_assets.py
           python tools/test_release_source_identity.py
 
       - name: Check connection UI navigation and real-font layouts
@@ -797,6 +798,11 @@ jobs:
           # New releases remain drafts until all 19 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
           # This public release becomes Latest only after the complete bundle passes.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
+          # A helper filename can change during an explicitly authorized hotfix.
+          # Remove only known superseded helpers after all replacements verify;
+          # unknown extras abort, and the complete bundle is checked again below.
+          python tools/prune_superseded_helper_assets.py "$release_json"
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
           python - "$release_json" <<'PY'
           import hashlib

@@ -111,7 +111,8 @@ class CliTests(unittest.TestCase):
         client, board = self.connected(readonly=True)
         for command in ("ui set volume 2", "ui test", "ui adc apply 7", "ui adc reset",
                         "ui wifi begin", "ui wifi password 74657374", "ui mode ble",
-                        "ui radio set 868731 62500 7 7 2", "ui advert set 120", "ui adc service start"):
+                        "ui radio set 868731 62500 7 7 2", "ui advert set 120", "ui adc service start",
+                        "ui adc set 1.815000"):
             before = len(board.requests)
             with self.assertRaises(CliError) as e:
                 client.execute(command)
@@ -127,6 +128,16 @@ class CliTests(unittest.TestCase):
             self.assertEqual(client.execute(command), reply)
         board.error = "OK ui caps key=adc_service value=1"
         self.assertEqual(client.field("caps", "adc_service"), "1")
+
+    def test_adc_manual_probe_readonly_and_explicit_write(self):
+        client, board = self.connected(readonly=True)
+        board.error = "OK ui adc_manual supported=1"
+        self.assertEqual(record(client.execute("ui adc manual"), "OK ui adc_manual"), {"supported": "1"})
+        writable, device = self.connected()
+        device.error = "OK ui adc_set"
+        self.assertEqual(writable.execute("ui adc set 1.815000"), "OK ui adc_set")
+        device.error = "OK ui get key=adc_multiplier value=1.815000"
+        self.assertEqual(writable.field("get", "adc_multiplier"), "1.815000")
 
     def test_timeout_poison_and_no_after_close_io(self):
         client, board = self.connected()

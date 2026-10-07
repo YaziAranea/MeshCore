@@ -1316,6 +1316,7 @@ void ConnectionController::printHelp() {
 
 void ConnectionController::handleDeviceSettingsCommand(const char* line) {
   const bool service_read_or_stop = strcmp(line, "settings adc service") == 0 ||
+      strcmp(line, "settings adc manual") == 0 ||
       strcmp(line, "settings adc service stop") == 0;
   if (_wifi_setup_stage != WifiSetupStage::IDLE && !service_read_or_stop) {
     printConsole("ERR settings busy\r\n");
@@ -1590,6 +1591,7 @@ void ConnectionController::printStorageLegacy() {
 void ConnectionController::handleConsoleLine(char* raw_line) {
   // These fail-safe commands never become an SSID/password or require writes.
   if (strcmp(raw_line, "settings adc service") == 0 ||
+      strcmp(raw_line, "settings adc manual") == 0 ||
       strcmp(raw_line, "settings adc service stop") == 0) {
     handleDeviceSettingsCommand(raw_line);
     return;

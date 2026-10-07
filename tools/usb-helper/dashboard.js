@@ -1,11 +1,12 @@
 'use strict';
 (() => {
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
-  let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null;
+  let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null,adcManualSupported=false;
   const settingEdits=new Map(),melodyNames=new Map();
   let radioState=null,advertState=null,radioSupport=null,advertSupport=null,networkRunning=false;
   const catalog=globalThis.SmartUiPresets;
   let binaryState={connected:false,busy:false,phase:'disconnected',hello:null,uncertain:false};
+  let adcOperation=null;
   const grid=document.querySelector('.grid');
   const consolePanels=[$('device-section'),$('replies-section'),$('wifi-title').closest('section'),$('mode-title').closest('section')];
   const consoleNotices=[...document.querySelectorAll('main > .notice')];
@@ -19,7 +20,7 @@
     <p id="cli-scope" class="notice">Настройки подключённой ноды через CMD66. Сообщения не читаются; синхронизация прочтения и события API 0.11 не поддерживаются. Для старой 0.11 сохранён <a href="https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.11" target="_blank" rel="noopener noreferrer">архивный Helper 1.4</a>.</p>
     <div class="api-workspace" style="margin-top:20px">
       <section id="api-settings" class="card wide"><div class="section-heading"><div><p class="panel-kicker">Устройство и радио</p><h2>Настройки ноды · локальный CLI</h2></div><span id="api-settings-status" class="status-pill">Не прочитано</span></div><p class="hint">Только поддерживаемые сборкой функции. У каждого изменения отдельное сохранение и контрольное чтение.</p><div class="buttons"><button id="api-settings-load" disabled>Прочитать настройки</button><button id="api-notify-test" disabled>Проверить уведомление</button></div><div id="api-settings-fields"></div>
-      <details id="api-adc"><summary>Калибровка аккумулятора</summary><p id="api-adc-value" class="hint">Нет измерения</p><p id="api-adc-source-warning" class="safety-note">ProMicro: при USB питание искажает замер АКБ. Запустите ноду от АКБ, дождитесь измерения, подключите USB без перезапуска и рассчитайте поправку в течение 2 минут. Прошивка использует сохранённый опорный замер, а не текущее напряжение USB.</p><label class="field" for="api-adc-measured">Напряжение мультиметра, В</label><input id="api-adc-measured" type="text" inputmode="decimal" placeholder="Например, 3,82"><div class="buttons"><button id="api-adc-preview" disabled>Рассчитать поправку</button><button id="api-adc-apply" disabled>Сохранить калибровку</button><button id="api-adc-reset" disabled>Заводская калибровка ADC</button></div><p id="api-adc-result" class="hint">Расчёт не меняет настройки. Сохранение требует подтверждения.</p></details>
+      <details id="api-adc"><summary>Калибровка аккумулятора</summary><p id="api-adc-value" class="hint">Нет измерения</p><p id="api-adc-range" class="hint"></p><p class="hint">Выберите один из двух способов калибровки.</p><h4>Способ 1: рассчитать по мультиметру</h4><p id="api-adc-source-warning" class="safety-note"></p><label class="field" for="api-adc-measured">Напряжение мультиметра, В</label><input id="api-adc-measured" type="text" inputmode="decimal" placeholder="Например, 3,82"><div class="buttons"><button id="api-adc-preview" disabled>Рассчитать поправку</button><button id="api-adc-apply" disabled>Сохранить калибровку</button></div><p id="api-adc-result" class="hint" role="status" aria-live="polite">Расчёт не меняет настройки. Сохранение требует подтверждения.</p><div id="api-adc-reset-actions" class="buttons"><button id="api-adc-reset" disabled>Заводская калибровка ADC</button></div></details>
       <p class="safety-note">AGC-сброс — пробная профилактика каждые 60 с с отсрочкой при активности. Мост звука требует совместимого плавающего пьезоизлучателя между двумя штатными выводами; не подключайте такой выход к земле. Возможности сборки не доказывают наличие внешнего оборудования.</p></section>
       <section id="api-wifi" class="card wide"><p class="panel-kicker">Локальная сеть</p><h2>Wi-Fi без потери настроек</h2><p class="hint">USB остаётся подключённым во время проверки. Старые данные заменяются только после успешного теста и отдельного сохранения. TCP без пароля и TLS — только доверенная сеть, без доступа из интернета.</p><form id="api-wifi-form" autocomplete="off"><label class="field" for="api-ssid">Имя сети (SSID)</label><input id="api-ssid" type="text" autocomplete="off" spellcheck="false"><label class="field" for="api-password">Пароль сети</label><input id="api-password" type="password" autocomplete="new-password"><label class="check"><input id="api-open-network" type="checkbox">Сеть без пароля — понимаю риск</label><div class="buttons"><button id="api-wifi-test" type="submit" class="primary" disabled>Проверить сеть</button><button id="api-wifi-status" type="button" disabled>Результат проверки</button><button id="api-wifi-save" type="button" disabled>Сохранить сеть</button><button id="api-wifi-cancel" type="button" disabled>Отменить</button></div></form><p id="api-wifi-state" class="hint">Доступность определяется прошивкой. Через 120 секунд бездействия проверка отменяется.</p></section>
       <section id="api-developer" class="card wide"><p class="panel-kicker">Интеграция</p><h2>Проверка команд CLI</h2><p class="hint">Одна команда за раз. Стандартный вывод скрывает значения, текст и секреты; сырые пакеты не записываются. Команды изменения требуют подтверждения.</p><label class="field" for="api-command">Команда</label><input id="api-command" type="text" autocomplete="off" spellcheck="false" placeholder="ui get volume"><div class="buttons"><button id="api-command-send" disabled>Выполнить</button></div><p id="api-command-result" role="status">Ожидает команды. Для Wi-Fi используйте форму выше: секреты в командную строку не вводите.</p></section>
@@ -28,7 +29,12 @@
   $('firmware-section').before(workspace);
   const serviceBox=$('adc-service-box').cloneNode(true);
   for(const element of [serviceBox,...serviceBox.querySelectorAll('[id]')])element.id='api-'+element.id;
-  $('api-adc-value').after(serviceBox);
+  $('api-adc').append(serviceBox);
+  const manualBox=$('adc-manual-fields').cloneNode(true);
+  for(const element of [manualBox,...manualBox.querySelectorAll('[id]')])element.id='api-'+element.id;
+  manualBox.querySelector('label').htmlFor='api-adc-manual-value';
+  manualBox.querySelector('input').setAttribute('aria-describedby','api-adc-manual-hint api-adc-manual-result');
+  $('api-adc-reset-actions').before(manualBox);
   $('api-adc-source-warning').textContent=$('adc-source-warning').textContent;
   const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service'];
   const GET_KEYS=['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted','agc_reset','fem_lna','fem_pa','bridge'];
@@ -57,6 +63,9 @@
     $('api-adc-preview').disabled=!available()||caps?.adc!=='1';
     $('api-adc-reset').disabled=!writable()||caps?.adc!=='1';
     $('api-adc-apply').disabled=!writable()||!preview||Date.now()>=preview.expires;
+    $('api-adc-manual-value').disabled=!writable()||!adcManualSupported;
+    $('api-adc-manual-save').disabled=!writable()||!adcManualSupported||!$('api-adc-manual-value').value.trim();
+    $('api-adc-manual-hint').textContent=binaryState.hello?.write==='0'?'Запись недоступна: нода сообщает режим только для чтения.':adcManualSupported?'Правильный множитель уже известен? Сохраните напрямую, без опорного замера. Не подбирайте значение наугад.':'Прямой ввод не поддерживается этой прошивкой. Обновите файлы SmartUI 0.14; расчёт по мультиметру остаётся доступен.';
     $('api-adc-service-box').hidden=caps?.adc_service!=='1';
     $('api-adc-service-start').disabled=!writable()||caps?.adc_service!=='1'||!adcService?.external||Boolean(adcService?.active);
     $('api-adc-service-stop').disabled=!available()||!adcService?.active;
@@ -74,7 +83,7 @@
     }finally{running=false;renderShell();}
   }
   const client=new api.CliClient({
-    onState(next){binaryState=next;if(!next.connected){$('api-password').value='';$('api-adc-measured').value='';preview=null;adcService=null;caps=null;settings=null;settingEdits.clear();melodyNames.clear();if(next.uncertain)acknowledgedLoss=true;}if(next.uncertain){adcService=null;preview=null;}renderShell();},
+    onState(next){const lost=binaryState.connected&&!next.connected;binaryState=next;if(!next.connected){$('api-password').value='';$('api-adc-measured').value='';$('api-adc-manual-value').value='';adcManualSupported=false;preview=null;adcService=null;caps=null;settings=null;settingEdits.clear();melodyNames.clear();if(next.uncertain)acknowledgedLoss=true;}if(next.uncertain){adcService=null;preview=null;}renderShell();if(lost){for(const id of ['api-adc-result','api-adc-manual-result'])adcNote(adcOperation?.id===id?'USB отключён. Сохранение не подтверждено; переподключитесь и прочитайте ADC.':'USB отключён. Подключите ноду для проверки ADC.',adcOperation?.id===id?'error':'info',id);}},
     onEvent({action,result}){log(result==='ok'?(action==='write'?'Ответ на изменение получен; проверяем результат.':action==='connect'?'Локальный CLI подключён.':'Ответ на чтение получен.'):'Операция не подтверждена.');}
   });
   const rec=async(command,prefix,mutate=false)=>api.record(await client.execute(command,{mutate}),prefix);
@@ -210,6 +219,11 @@
     const sharedCaps=SmartUiConsole.parseSettingsCaps(line('OK settings caps',capKeys,caps));
     if(!sharedCaps||!SmartUiConsole.parseDeviceSettings(line('OK settings get',valueKeys,settings),sharedCaps)||!['0','1'].includes(caps.adc_service))throw new api.CliError('PROTOCOL');
     if(caps.adc_service==='1')await readAdcService();else adcService=null;
+    adcManualSupported=false;
+    if(caps.adc==='1'&&binaryState.hello?.write==='1')try{
+      const manual=SmartUiConsole.parseAdcManual(await client.execute('ui adc manual'),'ui');
+      if(!manual)throw new api.CliError('PROTOCOL');adcManualSupported=Boolean(manual.supported);
+    }catch(error){if(!['invalid','unsupported'].includes(error.reason))throw error;}
     if(caps.melody_names==='1'&&caps.sound==='1'){
       const maximum=numeric(caps.melody_max,255);
       for(let id=0;id<=maximum;id++)if(!melodyNames.has(id)){
@@ -237,7 +251,8 @@
       };
       controls.append(select,save);row.append(caption,controls,status);container.append(row);
     }
-    $('api-adc').hidden=caps.adc!=='1';$('api-adc-value').textContent='Напряжение: '+(Number(settings.battery_mv)?(Number(settings.battery_mv)/1000).toFixed(3)+' В':'нет данных')+' · ADC: '+settings.adc_multiplier;
+    $('api-adc').hidden=caps.adc!=='1';$('api-adc-value').textContent='Напряжение: '+(Number(settings.battery_mv)?(Number(settings.battery_mv)/1000).toFixed(3)+' В':'нет данных')+' · Сохранённый ADC-множитель: '+settings.adc_multiplier;
+    $('api-adc-range').textContent='Заводской: '+settings.adc_default+'. Допустимо: '+caps.adc_min+'–'+caps.adc_max+'.';
     $('api-settings-status').textContent='Прочитано с ноды';renderShell();
   }
   async function wifiStatus(){wifiState=await rec('ui wifi status','OK ui wifi');if(!['supported','configured','associated'].every(key=>['0','1'].includes(wifiState[key]))||!(wifiState.ip==='none'||/^(?:\d{1,3}\.){3}\d{1,3}$/.test(wifiState.ip)&&wifiState.ip.split('.').every(n=>Number(n)<=255)))throw new api.CliError('PROTOCOL');const names={idle:'Нет незавершённой настройки',ssid:'Ожидает имя сети',password:'Ожидает пароль',ready:'Можно начать проверку',testing:'Проверка идёт — запросите результат через несколько секунд',test_ok:'Проверка успешна. Сеть ещё не сохранена',saved:'Сеть сохранена',cancelled:'Проверка отменена',failed:'Проверка не прошла; старые настройки сохранены',timeout:'Время проверки истекло'};$('api-wifi-state').textContent=names[wifiState.state]||'Состояние не распознано';renderShell();}
@@ -269,19 +284,43 @@
 
   $('api-notify-test').onclick=()=>run(async()=>{if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');note('Команда теста принята. Используются сохранённые параметры; общая тишина и выключенные каналы учитываются. Это не проверка исправности оборудования.');});
 
-  $('api-adc-measured').oninput=()=>{preview=null;renderShell();};
+  const adcNote=(text,kind='info',id='api-adc-result')=>{$(id).textContent=text;$(id).classList.add('adc-feedback');$(id).dataset.kind=kind;};
+  async function runAdc(operation,{progress='Выполняем запрос к ноде…',success,id='api-adc-result'}={}){
+    if(running)return;
+    const session=client.session,token={session,id};adcOperation=token;adcNote(progress,'info',id);
+    await run(async()=>{try{const value=await operation();if(session===client.session&&success)adcNote(typeof success==='function'?success(value):success,'success',id);}
+      catch(error){if(session===client.session&&binaryState.connected)adcNote(error?.safe?error.message:'Ответ не подтверждён. Переподключитесь и прочитайте настройки.','error',id);throw error;}
+      finally{if(adcOperation===token)adcOperation=null;}});
+  }
+  $('api-adc-measured').oninput=()=>{preview=null;adcNote('Замер изменён. Рассчитайте поправку заново.');renderShell();};
+  $('api-adc-manual-value').oninput=()=>{preview=null;adcNote('Коэффициент ещё не сохранён. Проверьте значение и нажмите «Сохранить коэффициент».','info','api-adc-manual-result');renderShell();};
+  $('api-adc-manual-save').onclick=async()=>{
+    const session=client.session,text=$('api-adc-manual-value').value;
+    let value;try{value=SmartUiConsole.adcMultiplier(text,caps);}catch(error){adcNote(error.message,'error','api-adc-manual-result');return;}
+    if(!await legacy.confirmAction('Сохранить ADC-множитель '+value+' напрямую? Используйте только проверенный коэффициент для этой платы. Он влияет на показание напряжения и защиту аккумулятора.'))return;
+    if(session!==client.session||text!==$('api-adc-manual-value').value||!writable()){adcNote('Подключение или значение изменилось. Проверьте ввод и подтвердите заново.','error','api-adc-manual-result');return;}
+    await runAdc(async()=>{
+      preview=null;let acknowledged=false;
+      try{
+        const reply=await client.execute('ui adc set '+value,{mutate:true});
+        if(reply!=='OK ui adc_set')throw new api.CliError('PROTOCOL');acknowledged=true;
+        await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-Number(value))>0.000002)throw new api.CliError('PROTOCOL');
+        return Number(settings.adc_multiplier).toFixed(6);
+      }catch(error){if(acknowledged&&session===client.session){client.update({uncertain:true,phase:'uncertain'});throw new api.CliError('UNCERTAIN');}throw error;}
+    },{id:'api-adc-manual-result',progress:'Сохраняем коэффициент '+value+' и читаем обратно…',success:s=>{adcNote('Коэффициент сохранён вручную. Для нового расчёта нужен свежий замер.');return 'Сохранено на ноде и проверено: '+s+'. Напряжение ProMicro сверяйте от АКБ: USB искажает измерение.';}});
+  };
   $('api-adc-service-start').onclick=async()=>{
     const session=client.session;
-    if(!await legacy.confirmAction('На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB и свежий замер мультиметром. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.'))return;
+    if(!await legacy.confirmAction('На 2 минуты приостановить отключение по показаниям ADC? Нужно подтверждённое питание USB. Для расчёта нужен свежий замер мультиметром; для прямого ввода — проверенный коэффициент. После сохранения, тайм-аута или потери USB защита вернётся автоматически. Это только сервисная калибровка, не обычный режим работы.'))return;
     if(session!==client.session||!writable())return;
     await run(async()=>{preview=null;await readAdcService('start');$('api-adc-result').textContent='Сервисное окно открыто. Рассчитайте и сохраните ADC по свежему измерению.';note('Сервисное окно подтверждено нодой. Таймер не продлевается при чтении состояния.','warning');});
   };
   $('api-adc-service-stop').onclick=()=>run(async()=>{preview=null;await readAdcService('stop');$('api-adc-result').textContent='Сервисное окно закрыто. Несохранённая калибровка не применялась.';note('Нода подтвердила завершение сервисного окна.');});
   $('api-adc-service-refresh').onclick=()=>run(()=>readAdcService());
   setInterval(()=>{if(available()&&adcService?.active)void run(()=>readAdcService());},5000);
-  $('api-adc-preview').onclick=()=>run(async()=>{const mv=SmartUiConsole.measuredMilliVolts($('api-adc-measured').value);preview=null;$('api-adc-result').textContent='Запрашиваем опорный замер. Настройки не изменены.';const p=await rec('ui adc preview '+mv,'OK ui adc_preview');
+  $('api-adc-preview').onclick=()=>runAdc(async()=>{const mv=SmartUiConsole.measuredMilliVolts($('api-adc-measured').value);preview=null;$('api-adc-result').textContent='Запрашиваем опорный замер. Настройки не изменены.';const p=await rec('ui adc preview '+mv,'OK ui adc_preview');
     if(numeric(p.token)<1||numeric(p.sampled_mv,65535)<1||Number(p.measured_mv)!==mv||!Number.isFinite(Number(p.multiplier))||Number(p.multiplier)<Number(caps.adc_min)-0.000002||Number(p.multiplier)>Number(caps.adc_max)+0.000002)throw new api.CliError('PROTOCOL');
-    preview={...p,expires:Date.now()+60000};$('api-adc-result').textContent='Расчёт, ещё не сохранён: ADC '+p.multiplier+' · Опорный замер: '+p.sampled_mv+' мВ.';});
+    preview={...p,expires:Date.now()+60000};adcNote('Расчёт, ещё не сохранён: ADC '+p.multiplier+' · Опорный замер: '+p.sampled_mv+' мВ. Проверьте и нажмите «Сохранить калибровку».');});
   $('api-adc-apply').onclick=async()=>{
     const candidate=preview,session=client.session;
     const expired=()=>!candidate||preview!==candidate||session!==client.session||Date.now()>=candidate.expires;
@@ -289,9 +328,9 @@
     if(expired()){stale();return;}
     if(!await legacy.confirmAction('Сохранить калибровку ADC? Убедитесь, что напряжение измерено мультиметром непосредственно на аккумуляторе. Изменение влияет на защиту питания.'))return;
     if(expired()||!writable()){stale();return;}
-    await run(async()=>{const expected=Number(candidate.multiplier);const reply=await client.execute('ui adc apply '+candidate.token,{mutate:true});if(reply!=='OK ui adc_apply')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-expected)>0.000002)throw new api.CliError('PROTOCOL');$('api-adc-result').textContent='Калибровка подтверждена и прочитана обратно с ноды.';});
+    await runAdc(async()=>{const expected=Number(candidate.multiplier);const reply=await client.execute('ui adc apply '+candidate.token,{mutate:true});if(reply!=='OK ui adc_apply')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-expected)>0.000002)throw new api.CliError('PROTOCOL');return Number(settings.adc_multiplier).toFixed(6);},{progress:'Сохраняем калибровку и читаем обратно…',success:s=>'Калибровка подтверждена и прочитана обратно с ноды: '+s+'.'});
   };
-  $('api-adc-reset').onclick=async()=>{if(!await legacy.confirmAction('Вернуть только заводскую калибровку ADC? Контакты, ключи и остальные настройки сохранятся.'))return;await run(async()=>{const reply=await client.execute('ui adc reset',{mutate:true});if(reply!=='OK ui adc_reset')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-Number(settings.adc_default))>0.000002)throw new api.CliError('PROTOCOL');});};
+  $('api-adc-reset').onclick=async()=>{if(!await legacy.confirmAction('Вернуть только заводскую калибровку ADC? Контакты, ключи и остальные настройки сохранятся.'))return;await runAdc(async()=>{const reply=await client.execute('ui adc reset',{mutate:true});if(reply!=='OK ui adc_reset')throw new api.CliError('PROTOCOL');await loadSettings();if(Math.abs(Number(settings.adc_multiplier)-Number(settings.adc_default))>0.000002)throw new api.CliError('PROTOCOL');return Number(settings.adc_multiplier).toFixed(6);},{progress:'Восстанавливаем заводской коэффициент…',success:s=>'Заводской коэффициент сохранён и проверен: '+s+'.'});};
   $('api-wifi-form').onsubmit=e=>{e.preventDefault();run(async()=>{
     let password=$('api-password').value;const ssid=$('api-ssid').value;SmartUiConsole.validateCredentials(ssid,password,{openNetwork:$('api-open-network').checked,allowReservedSsid:true});$('api-password').value='';
     await exact('ui wifi begin','OK ui wifi begin state=ssid');await exact('ui wifi ssid '+api.toHex(ssid),'OK ui wifi ssid state=password');

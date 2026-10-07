@@ -20,6 +20,35 @@ bool unsignedNumber(const char* text, uint32_t& number) {
   return true;
 }
 
+bool adcDecimal(const char* text, float& number) {
+  // Decimal ASCII only. Parse bounded integer micro-units before touching
+  // floats, so -Ofast cannot turn NaN/Inf/exponent input into an accepted ADC.
+  if (text == nullptr || *text < '0' || *text > '9') return false;
+  uint32_t whole = 0, fraction = 0, scale = 1;
+  unsigned length = 0, digits = 0;
+  while (*text >= '0' && *text <= '9') {
+    const uint32_t digit = static_cast<uint32_t>(*text++ - '0');
+    if (++length > 17 || whole > (UINT32_MAX - digit) / 10U) return false;
+    whole = whole * 10U + digit;
+  }
+  if (*text == '.') {
+    ++text;
+    if (++length > 17) return false;
+    while (*text >= '0' && *text <= '9') {
+      if (++digits > 6 || ++length > 17) return false;
+      fraction = fraction * 10U + static_cast<uint32_t>(*text++ - '0');
+      scale *= 10U;
+    }
+    if (digits == 0) return false;
+  }
+  if (*text != 0) return false;
+  const uint64_t micro_units = static_cast<uint64_t>(whole) * 1000000U +
+      static_cast<uint64_t>(fraction) * (1000000U / scale);
+  if (micro_units > UINT32_MAX) return false;
+  number = static_cast<float>(static_cast<double>(micro_units) / 1000000.0);
+  return true;
+}
+
 void response(char* reply, size_t capacity, const char* message) {
   if (reply != nullptr && capacity > 0) snprintf(reply, capacity, "%s", message);
 }
@@ -85,6 +114,10 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
         before.board_led, before.unread_led, (caps.effective_notify_mode & VIBE_MODE) ? 1U : 0U,
         before.gps_source == 0 ? before.gps : 0U, before.battery_protection,
         caps.battery_protection ? (before.battery_protection ? 3200U : 2700U) : 0U, before.muted);
+    return true;
+  }
+  if (strcmp(command, "settings adc manual") == 0) {
+    snprintf(reply, capacity, "OK settings adc_manual supported=%u", caps.adc ? 1U : 0U);
     return true;
   }
   if (strcmp(command, "settings adc service") == 0 ||
@@ -153,6 +186,25 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
     return true;
   }
   DeviceSettingsState after = before;
+  if (strncmp(command, "settings adc set ", 17) == 0) {
+    float requested, normalized;
+    if (!adcDecimal(command + 17, requested))
+      response(reply, capacity, "ERR settings invalid");
+    else if (!caps.adc)
+      response(reply, capacity, "ERR settings unsupported");
+    // Zero is reserved for the explicit reset command, not a manual override.
+    else if (requested <= 0.0f ||
+             !mesh::normalizeAdcMultiplier(requested, caps.adc_default, normalized))
+      response(reply, capacity, "ERR settings range");
+    else {
+      after.adc_override = normalized;
+      after.profile = 0;
+      const bool saved = commit(before, after, true);
+      if (saved && _hooks.adcCommitted) _hooks.adcCommitted();
+      response(reply, capacity, saved ? "OK settings adc_set" : "ERR settings storage");
+    }
+    return true;
+  }
   if (strncmp(command, "settings adc apply ", 19) == 0) {
     uint32_t token;
     if (!unsignedNumber(command + 19, token)) {

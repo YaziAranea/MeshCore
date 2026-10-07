@@ -32,6 +32,14 @@ def main():
             raise RuntimeError("Host C++ compiler required; no skipped test success")
         subprocess.run(build, check=True)
         subprocess.run(execute, check=True)
+        # Exercise the strict fixed-point manual parser under the nRF52
+        # optimization mode too. Invalid tokens must not reach float parsing.
+        for optimization in ("-O1", "-Ofast"):
+            manual_build = [part.replace("device_settings_test.cpp", "adc_manual_test.cpp")
+                            if isinstance(part, str) else part for part in build]
+            manual_build[manual_build.index("-O1")] = optimization
+            subprocess.run(manual_build, check=True)
+            subprocess.run(execute, check=True)
 
 
 if __name__ == "__main__":
