@@ -32,5 +32,7 @@ private:
 
 #if defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR
 bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity);
+// Upstream MeshCore companion command names (set tx, get af, reboot, ...).
+bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity);
 void resetSmartUiCliSession();
 #endif
