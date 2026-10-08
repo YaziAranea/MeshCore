@@ -153,8 +153,27 @@ def profile_pin(path: str, expected: int) -> None:
     assert match and int(match[1]) == expected, f"unexpected TX LED pin in {path}"
 
 
-def notification_policy_harness(source: str, flags: dict, external_pin: int) -> str:
+def notification_policy_harness(
+    source: str, flags: dict, external_pin: int, invalid_pins: tuple = (),
+) -> str:
     """Use the production notification handler to prove master/external policy."""
+    invalid_checks = ""
+    if invalid_pins:
+        pins = ",".join(str(pin) for pin in invalid_pins)
+        invalid_checks = rf'''
+  // Invalid saved pins must fall back safely, never drive an unmapped GPIO,
+  // and must not bypass the disabled onboard-LED master through that fallback.
+  for (int pin : {{{pins}}}) {{
+    assert(!isNotifyGpioPinAllowed(pin));
+    task._msg_alert_pin=pin;
+    assert(task.getMsgAlertPin()==getDefaultNotifyGpioPin());
+    assert(task.getMsgAlertPin()==PIN_LED);
+    io.clear(); task.triggerMsgAlert();
+    assert(io.size()==1);
+    assert(io.back().pin==PIN_LED && io.back().value!=PIN_MSG_ALERT_ACTIVE);
+    for (const auto& entry : io) assert(entry.pin!=pin);
+  }}
+'''
     return build_harness(source, flags) + rf'''
 int main() {{
   UITask task;
@@ -167,9 +186,14 @@ int main() {{
   assert(io.back().pin==PIN_LED && io.back().value!=PIN_MSG_ALERT_ACTIVE);
 
   // The board master must not suppress an independently selected external LED.
+  assert(isNotifyGpioPinAllowed({external_pin}));
+  assert(!isNotifyGpioPinBlockedByBuild({external_pin}));
   task._msg_alert_pin={external_pin};
+  assert(task.getMsgAlertPin()=={external_pin});
   io.clear(); task.triggerMsgAlert();
   assert(lights({external_pin})==1);
+
+  {invalid_checks}
 
   task.board_leds=true;
   task._msg_alert_pin=PIN_LED;
@@ -255,12 +279,14 @@ def main() -> None:
 
     notify_source = NOTIFY_UI.read_text(encoding="utf-8")
     notify_profiles = {
-        "notify_promicro": ("promicro", "ProMicro_ra62_companion_radio_ble", 1),
-        "notify_t114": ("heltec_t114", "Heltec_t114_companion_radio_ble", 0),
+        "notify_promicro": ("promicro", "ProMicro_ra62_companion_radio_ble", 1, ()),
+        # T114 Arduino pins 0/1 are unmapped (0xff); pin 5 is a real external GPIO.
+        "notify_t114": ("heltec_t114", "Heltec_t114_companion_radio_ble", 5, (0, 1)),
     }
-    for stem, (board, env, external_pin) in notify_profiles.items():
+    for stem, (board, env, external_pin, invalid_pins) in notify_profiles.items():
         flags = board_defines(board, env)
-        print(run_cpp(notification_policy_harness(notify_source, flags, external_pin), stem), end="")
+        code = notification_policy_harness(notify_source, flags, external_pin, invalid_pins)
+        print(run_cpp(code, stem), end="")
 
     for stem, args in callbacks.items():
         class_name, methods, pin, on, off, fem = args
