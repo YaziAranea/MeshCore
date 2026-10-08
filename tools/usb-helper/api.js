@@ -25,6 +25,7 @@
     unavailable:'Сервис временно недоступен. Прочитайте состояние после восстановления подключения.',
     invalid:'Нода отклонила недопустимое значение или команду.',
     length:'Команда слишком длинная.',busy:'Нода занята. Дождитесь завершения операции.',
+    muted:'Общая тишина включена. Выключите её и сохраните перед прослушиванием.',
     readonly:errors.DENIED,storage:'Сохранение не подтверждено: ошибка хранилища. Прочитайте настройки заново.',
     stale:'Расчёт устарел. Прочитайте настройки и повторите расчёт.',
     source:'Запустите ProMicro от АКБ, дождитесь измерения, подключите USB без перезапуска и рассчитайте поправку в течение 2 минут.',
@@ -54,7 +55,7 @@
   const extendedWrite=new RegExp('^set (?:'+extendedKeys+') (?:-?\\d+|on|off)$');
   const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command)||extendedRead.test(command)||extendedWrite.test(command);
   const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command)&&!isFriendly(command);
-  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |name |reply set |tx set |test$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |name |reply set |tx set |test$|sound preview$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
   function tagFor(index){
     if(!Number.isInteger(index)||index<0||index>=alphabet.length**2)throw fail('EXHAUSTED');
     return alphabet[Math.floor(index/alphabet.length)]+alphabet[index%alphabet.length];
@@ -78,7 +79,7 @@
     const uiWrite=/^ui set (?:sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|muted|agc_reset|fem_lna|fem_pa|bridge) \d+$/;
     const extendedUiRead=new RegExp('^ui (?:get (?:'+extendedKeys+')|schema [a-z][a-z0-9_]*|identity|tx|reply get [1-9])$');
     const extendedUiWrite=new RegExp('^ui set (?:'+extendedKeys+') -?\\d+$');
-    if(!(uiRead.test(command)||uiWrite.test(command)||extendedUiRead.test(command)||extendedUiWrite.test(command)||extendedRead.test(command)||extendedWrite.test(command)||command==='ui test'||legacyReads.includes(command)||
+    if(!(uiRead.test(command)||uiWrite.test(command)||extendedUiRead.test(command)||extendedUiWrite.test(command)||extendedRead.test(command)||extendedWrite.test(command)||['ui test','ui sound preview','ui caps sound_preview'].includes(command)||legacyReads.includes(command)||
       meshcoreReads.includes(command)||(meshcoreSet.test(command)&&!command.startsWith('set pin '))||
       friendlyReads.test(command)||friendlyWrites.test(command)&&!/^adc |^set adc/.test(command)))throw fail('INPUT');
     const write=mutates(command);
@@ -233,7 +234,8 @@
       try{const reply=await this.command(command);if(this.session!==session||session.stopped)throw fail('CLOSED');this.audit(mutate?'write':'read');return reply;}
       catch(error){const safe=error instanceof CliError?error:fail('PROTOCOL');
         if(this.session===session&&!session.stopped&&['TIMEOUT','PROTOCOL','CLOSED','MODE','EXHAUSTED'].includes(safe.code))this.update({uncertain:true,phase:'uncertain'});
-        this.audit(mutate?'write':'read',safe.code);throw safe;
+        const unsupportedProbe=!mutate&&command.startsWith('ui caps ')&&['unsupported','invalid'].includes(safe.reason);
+        this.audit(mutate?'write':'read',unsupportedProbe?'not_supported':safe.code);throw safe;
       }finally{if(this.session===session&&!session.stopped)this.update({busy:false});}
     }
     async disconnect(){

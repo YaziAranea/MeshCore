@@ -13130,6 +13130,33 @@ void UITask::messageVibeHandler() {
       (uint32_t)(_msg_vibe_on ? MSG_VIBE_ON_MILLIS : MSG_VIBE_OFF_MILLIS));
 }
 
+smartui::SoundPreviewResult UITask::previewSavedMelody() {
+#ifdef PIN_MSG_TONE
+  using Result = smartui::SoundPreviewResult;
+  if (!_node_prefs || notify_tone_count == 0) return Result::UNSUPPORTED;
+  if (areNotificationsMuted()) return Result::MUTED;
+  // Do not replace an incoming notification or disturb its reminder sequence.
+  if (_msg_tone_active || _important_notify_active || _msg_vibe_until != 0)
+    return Result::BUSY;
+  const int pin = getMsgTonePin();
+  if (pin < 0 || pin != _msg_tone_pin || pin == getMsgVibePin() ||
+      (!areBoardLedsEnabled() && isBoardLedPin(pin))) return Result::PIN_CONFLICT;
+#if UI_NOTIFY_GPIO_SELECT
+  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) return Result::PIN_CONFLICT;
+#endif
+#ifdef PIN_MSG_ALERT
+  if (_msg_alert_until != 0 && pin == getMsgAlertPin()) return Result::BUSY;
+#endif
+  // An explicit audition ignores the notification mask, but not global mute.
+  // No preferences, pin assignments, pending messages or flash are changed.
+  startMsgTone(_node_prefs->notify_tone_id);
+  _msg_tone_repeat_left = 0;
+  return _msg_tone_active ? Result::STARTED : Result::UNSUPPORTED;
+#else
+  return smartui::SoundPreviewResult::UNSUPPORTED;
+#endif
+}
+
 void UITask::previewNotifyMode() {
   if (areNotificationsMuted()) return;
 #if UI_NOTIFY_ONLY_IMPORTANT_MESSAGES == 1

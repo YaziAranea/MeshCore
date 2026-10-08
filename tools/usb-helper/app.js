@@ -11,6 +11,8 @@
   const settingsDirty = new Set();
   const modeNames = {ble:"Bluetooth",wifi:"Wi-Fi",usb:"USB-компаньон"};
   const supported = Boolean(window.isSecureContext && navigator.serial);
+  const previewButton=document.createElement('button');previewButton.id='sound-preview';previewButton.textContent='Прослушать мелодию';previewButton.disabled=true;$('settings-test').before(previewButton);
+  const previewHint=document.createElement('p');previewHint.id='sound-preview-hint';previewHint.className='hint';$('settings-test').parentElement.before(previewHint);
   // Keep the existing connect -> Wi-Fi -> mode workflow ahead of optional tools.
   $("device-section").before($("mode-title").closest("section"));
   const replyDefaults = ["Да","Нет","Потом","Сейчас","Завтра","Сегодня","Привет","Пока","Тест?"];
@@ -74,10 +76,16 @@
     const ready=readReady && !state.status?.readOnly && Boolean(caps && saved);
     if (!state.connected) settingsDirty.clear();
     $("settings-load").disabled=!readReady || !state.settingsSupported;
+    $("sound-read").disabled=!readReady || !state.settingsSupported;
+    previewButton.disabled=!ready||!state.soundPreviewSupported||!caps?.sound;
+    previewHint.textContent=!saved?'Сначала считайте настройки звука.':!state.soundPreviewSupported?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
     $("device-fields").hidden=!caps;
     $("settings-status").textContent=!state.connected ? "Ожидает подключения" : !state.settingsSupported ? "Совместимый режим" : !saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
     $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
     $('settings-notify-state').textContent=SmartUiConsole.notificationStatus(saved,caps);
+    const soundStatus=$('sound-action-status');
+    if(!state.connected){soundStatus.textContent='Подключите ноду и считайте звук и пины.';delete soundStatus.dataset.action;}
+    else if(saved&&!soundStatus.dataset.action)soundStatus.textContent='Показаны настройки, прочитанные с ноды. «Считать звук и пины» обновит их.';
     const names={adc:"ADC",sound:"звук",board_led:"LED платы",unread_led:"LED уведомлений",vibration:"вибрация",gps:"GPS",battery_protection:"защита АКБ"};
     $("settings-capabilities").textContent=caps ? "Поддержка сборки: "+Object.entries(names).filter(([key])=>caps[key]).map(([,name])=>name).join(", ")+". "+(caps.display ? "Драйвер экрана активен." : "Настройка без дисплея.") : "Новые настройки доступны в SmartUI 0.08 с протоколом Settings 1. Возможности определяются ответом ноды, не её названием.";
     renderAdcService(readReady,ready);
@@ -118,7 +126,7 @@
     $("adc-fields").hidden=!adcVisible;
     $("battery-protection-warning").hidden=!caps.battery_protection;
     for(const group of ['sound','lights','gps','display','system'])$(group+'-panel').hidden=!hasVisibleSettings(group);
-    $("lights-panel").classList.toggle("device-panel-wide",!caps.gps);
+    $("lights-panel").classList.remove("device-panel-wide");
     $("battery-voltage").textContent=saved?.battery_mv ? (saved.battery_mv/1000).toLocaleString("ru-RU",{minimumFractionDigits:3,maximumFractionDigits:3})+" В" : "Нет данных";
     $("adc-current").textContent=saved ? saved.adc_multiplier.toFixed(6) : "—";
     $("adc-range").textContent="Заводской: "+(saved ? saved.adc_default.toFixed(6) : "—")+". Допустимо: "+caps.adc_min.toFixed(6)+"–"+caps.adc_max.toFixed(6)+".";
@@ -258,6 +266,25 @@
     if (settingsDirty.size && !await confirmAction("Прочитать значения с ноды заново? Несохранённые изменения в полях помощника будут отменены.")) return;
     settingsDirty.clear(); await run(()=>client.loadDeviceSettings());
   };
+  const soundNote=(text,kind='info')=>{const box=$('sound-action-status');box.textContent=text;box.dataset.kind=kind;box.dataset.action='1';};
+  $('sound-read').onclick=async()=>{
+    const dirty=SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingsDirty.has(key));
+    if(dirty&&!await confirmAction('Считать звук и пины с ноды? Несохранённые поля звука и индикации будут заменены фактическими значениями. Остальные поля сохранятся.'))return;
+    await run(async()=>{soundNote('Считываем фактические настройки звука и пинов…');
+      try{await client.loadDeviceSettings();for(const key of SmartUiConsole.SOUND_SETTING_KEYS)settingsDirty.delete(key);renderDeviceSettings();soundNote('Прочитано с ноды в '+new Date().toLocaleTimeString('ru-RU')+'. '+SmartUiConsole.notificationStatus(state.deviceSettings,state.settingsCaps));}
+      catch(error){soundNote(error.safe?error.message:'Не удалось прочитать звук и пины. Старые значения не подтверждены.','error');throw error;}
+    });
+  };
+  previewButton.onclick=async()=>{
+    const session=client._session;
+    if(SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingsDirty.has(key))&&!await confirmAction('Есть несохранённые поля звука. Прослушать мелодию с прежними настройками, сохранёнными на ноде?'))return;
+    if(session!==client._session)return;
+    await run(async()=>{try{
+      soundNote('Читаем настройки перед прослушиванием…');await client.loadDeviceSettings();
+      if(Number(state.deviceSettings?.muted)===1){soundNote('Общая тишина включена. Выключите её и сохраните: прослушивание не меняет этот переключатель.','warning');return;}
+      await client.previewSound();soundNote('Нода приняла запуск сохранённой мелодии '+state.deviceSettings.melody+' на выводе '+state.deviceSettings.tone_pin+'. Настройки уведомлений не изменены. Проверьте звук на устройстве.');
+    }catch(error){soundNote(error.safe?error.message:'Запуск мелодии не подтверждён.','error');throw error;}});
+  };
   const adcNote=(text,kind='info',id='adc-result')=>{$(id).textContent=text;$(id).classList.add('adc-feedback');$(id).dataset.kind=kind;};
   async function runAdc(operation,{progress='Выполняем запрос к ноде…',success,id='adc-result'}={}) {
     const session=client._session,token={session,id};adcOperation=token;adcNote(progress,'info',id);
@@ -294,7 +321,11 @@
     const session=client._session;
     if(settingsDirty.size&&!await confirmAction('Есть несохранённые поля. Проверить уведомление с прежними настройками, уже сохранёнными на ноде?'))return;
     if(session!==client._session)return;
-    await run(()=>client.testDeviceNotification());
+    await run(async()=>{try{
+      soundNote('Читаем настройки перед проверкой уведомления…');await client.loadDeviceSettings();
+      if(Number(state.deviceSettings?.muted)===1){soundNote('Общая тишина включена: уведомление подавлено. Выключите её и сохраните, если хотите проверить уведомление.','warning');return;}
+      await client.testDeviceNotification();soundNote('Запрос уведомления принят. '+SmartUiConsole.notificationStatus(state.deviceSettings,state.settingsCaps));
+    }catch(error){soundNote(error.safe?error.message:'Тест не подтверждён.','error');throw error;}});
   };
   $("replies-load").onclick = () => run(async () => {
     const replies = await client.loadQuickReplies();

@@ -139,7 +139,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |name |reply set |tx set |test$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
+    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |name |reply set |tx set |test$|sound preview$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:

@@ -6,12 +6,12 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
   <title>SmartUI · Локальный центр управления</title>
   <style>
-    :root { color-scheme:dark; --bg:#0b1418; --panel:#142126; --edge:#30444a; --text:#f0f6f4; --muted:#b0c3c5; --accent:#9ce7c0; --blue:#accdf2; --warn:#ffda9a; --error:#ffb7b7; --surface:#0f1b20; }
+    :root { color-scheme:dark; --bg:#0e1118; --panel:#181e29; --edge:#303b4d; --text:#f3f6fc; --muted:#aebbd0; --accent:#8bb6ff; --blue:#b5cfff; --warn:#f3d095; --error:#ffadb4; --surface:#111722; }
     * { box-sizing:border-box; }
     html { scroll-behavior:smooth; scroll-padding-top:24px; }
     body { margin:0; color:var(--text); background:var(--bg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
-    main { max-width:1480px; margin:auto; padding:44px 36px 28px 270px; }
-    header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:34px; }
+    main { max-width:1480px; margin:auto; padding:36px 36px 28px 270px; }
+    header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:28px; }
     h1,h2,h3,p { margin:0; }
     h1 { font-size:clamp(28px,3.1vw,42px); font-weight:650; letter-spacing:-1.5px; line-height:1.15; }
     h2 { font-size:22px; font-weight:650; letter-spacing:-.45px; margin-bottom:8px; }
@@ -25,60 +25,60 @@
     .tag,.status-pill,#settings-status { display:inline-flex; border:1px solid var(--edge); border-radius:99px; padding:6px 11px; font-size:12px; color:var(--muted); }
     .local-badge { display:flex; align-items:center; gap:7px; color:var(--accent); font-size:12px; }
     .local-badge::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
-    .app-rail { position:fixed; inset:0 auto 0 max(0px,calc((100vw - 1480px)/2)); width:234px; padding:42px 18px; border-right:1px solid var(--edge); background:#0d191e; }
+    .app-rail { position:fixed; inset:0 auto 0 max(0px,calc((100vw - 1480px)/2)); width:234px; padding:36px 18px; border-right:1px solid var(--edge); background:#111722; }
     .rail-brand { display:flex; align-items:center; gap:10px; font-size:24px; font-weight:720; letter-spacing:-.8px; margin:0 12px 3px; }
     .mesh-mark { width:29px; height:29px; color:var(--accent); flex-shrink:0; }
     .rail-sub { color:var(--muted); font-size:12px; margin:0 12px 34px; }
     .rail-foot { position:absolute; bottom:26px; margin:0 12px; color:var(--muted); font-size:12px; }
     .tool-nav { display:flex; flex-direction:column; gap:5px; }
-    .tool-nav a { display:flex; align-items:center; gap:10px; min-height:46px; padding:11px 13px; border-radius:12px; color:var(--muted); text-decoration:none; font-size:14px; }
-    .tool-nav a:hover,.tool-nav a[aria-current] { color:var(--text); background:#213b35; }
-    .tool-nav a[aria-current] { box-shadow:inset 3px 0 var(--accent); }
-    .nav-icon { font-size:16px; width:20px; text-align:center; color:var(--accent); }
-    .transport-dock { display:grid; grid-template-columns:minmax(200px,1fr) auto; gap:14px 24px; padding:22px 24px; margin-bottom:20px; border:1px solid #48665f; border-radius:22px; background:#172b2b; }
+    .tool-nav button { display:flex; align-items:center; gap:11px; width:100%; min-height:48px; padding:11px 13px; border:1px solid transparent; border-radius:12px; color:var(--muted); background:transparent; text-align:left; font-size:14px; font-weight:550; }
+    .tool-nav button:hover:not(:disabled) { color:var(--text); border-color:var(--edge); background:#1a2538; }
+    .tool-nav button[aria-selected="true"] { color:#e7efff; background:#243b61; border-color:#425f8d; font-weight:650; }
+    .nav-icon { width:19px; height:19px; flex:none; color:currentColor; }
+    .transport-dock { display:grid; grid-template-columns:minmax(200px,1fr) auto; gap:12px 24px; padding:20px 24px; margin-bottom:20px; border:1px solid #3c506f; border-radius:18px; background:#1a2537; }
     .transport-dock label { display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
     .transport-dock select { width:100%; }
     .transport-dock .buttons { margin:0; align-items:center; }
     .transport-dock .state,.transport-dock .hint { grid-column:1/-1; margin:0; }
     .transport-dock .state { font-size:14px; }
-    .notice { padding:14px 18px; margin-bottom:16px; border:1px solid #344b56; border-radius:14px; background:#172730; font-size:14px; }
+    .notice { padding:14px 18px; margin-bottom:16px; border:1px solid #35475f; border-radius:12px; background:#1a2639; font-size:14px; }
     .notice.warning { border-color:#77603b; background:#30291d; }
     .notice.error { border-color:#76504e; background:#332324; }
     details.notice { margin-top:0; }
     .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
-    .card { min-width:0; padding:26px; border:1px solid var(--edge); border-radius:22px; background:var(--panel); overflow-wrap:anywhere; }
+    .card { min-width:0; padding:26px; border:1px solid var(--edge); border-radius:18px; background:var(--panel); overflow-wrap:anywhere; }
     .wide { grid-column:1/-1; }
     .section-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
     .section-heading p { margin-top:0; }
-    .step { display:inline-grid; place-items:center; width:27px; height:27px; margin-right:9px; border-radius:9px; color:var(--accent); background:#244039; font-size:13px; vertical-align:2px; }
+    .step { display:inline-grid; place-items:center; width:27px; height:27px; margin-right:9px; border-radius:9px; color:var(--accent); background:#253754; font-size:13px; vertical-align:2px; }
     button,input,select { font:inherit; }
-    button { min-height:46px; padding:10px 17px; border:1px solid #4a5f62; border-radius:12px; background:#25383d; color:var(--text); font-weight:600; cursor:pointer; }
-    button:hover:not(:disabled) { border-color:var(--accent); background:#30484c; }
-    button.primary { border-color:var(--accent); background:var(--accent); color:#153024; }
-    button.primary:hover:not(:disabled) { background:#b7f0d3; }
+    button { min-height:46px; padding:10px 17px; border:1px solid #45556e; border-radius:11px; background:#28364c; color:var(--text); font-weight:600; cursor:pointer; }
+    button:hover:not(:disabled) { border-color:var(--accent); background:#334763; }
+    button.primary { border-color:var(--accent); background:var(--accent); color:#10213e; }
+    button.primary:hover:not(:disabled) { background:#b1ceff; }
     button.danger { color:var(--error); }
     button:disabled { opacity:.45; cursor:not-allowed; }
-    button[aria-pressed="true"] { background:#244439; border-color:var(--accent); color:var(--accent); }
+    button[aria-pressed="true"] { background:#243b61; border-color:var(--accent); color:#d5e5ff; }
     :focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
     .buttons { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
     label.field { display:block; margin:18px 0 7px; font-weight:600; font-size:14px; }
-    input[type="text"],input[type="password"],input[type="number"],select { max-width:100%; min-height:46px; border:1px solid #627779; border-radius:11px; background:var(--surface); color:var(--text); padding:10px 12px; }
+    input[type="text"],input[type="password"],input[type="number"],select { max-width:100%; min-height:46px; border:1px solid #546780; border-radius:10px; background:var(--surface); color:var(--text); padding:10px 12px; }
     input[type="text"],input[type="password"],input[type="number"] { width:100%; }
     select { font-size:15px; }
     input:disabled { opacity:.55; }
     input[type="file"] { width:100%; min-width:0; font-size:14px; }
-    input[type="file"]::file-selector-button { min-height:44px; padding:8px 12px; margin-right:10px; background:#25383d; color:var(--text); border:1px solid #627779; border-radius:10px; cursor:pointer; }
+    input[type="file"]::file-selector-button { min-height:44px; padding:8px 12px; margin-right:10px; background:#28364c; color:var(--text); border:1px solid #546780; border-radius:10px; cursor:pointer; }
     input[type="checkbox"] { width:19px; height:19px; margin:0; accent-color:var(--accent); }
     .check { display:flex; align-items:center; gap:10px; min-height:44px; margin:8px 0; font-size:14px; }
     .state { min-height:26px; color:var(--accent); margin-top:12px; font-weight:600; }
     dl { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin:20px 0 0; }
     dt { font-size:12px; color:var(--muted); }
     dd { margin:3px 0 0; font-weight:600; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
-    #feedback { margin-top:18px; padding:14px 16px; border-radius:12px; background:#1c3437; min-height:49px; }
+    #feedback { margin:0 0 20px; padding:14px 16px; border-radius:12px; background:#22324c; min-height:49px; }
     #feedback[data-kind="error"] { background:#402829; color:var(--error); }
     #feedback[data-kind="warning"] { background:#342c1f; color:var(--warn); }
-    #feedback[data-kind="success"] { background:#203c30; color:var(--accent); }
-    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; }
+    #feedback[data-kind="success"] { background:#213650; color:#bed6ff; }
+    .settings-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:22px; align-items:start; }
     .device-panel { min-width:0; padding:22px; background:var(--surface); border:1px solid var(--edge); border-radius:17px; }
     .device-panel-wide { grid-column:1/-1; }
     .measurement { display:flex; flex-wrap:wrap; gap:18px 28px; margin:20px 0; }
@@ -90,7 +90,7 @@
     .setting-controls { display:grid; grid-template-columns:minmax(90px,1fr) auto; gap:10px; align-items:center; }
     .setting-state { margin:8px 0 0; color:var(--muted); font-size:12px; }
     .setting-state[data-dirty="true"] { color:var(--warn); }
-    .preview-box { margin-top:16px; padding:16px; background:#1b352d; border:1px solid #476d5b; border-radius:13px; }
+    .preview-box { margin-top:16px; padding:16px; background:#1c2b43; border:1px solid #425e86; border-radius:13px; }
     .preview-box p { margin:0; }
     .safety-note { margin-top:16px; padding-left:12px; border-left:2px solid #b48d55; color:var(--warn); font-size:13px; }
     #settings-status { color:var(--accent); }
@@ -103,12 +103,12 @@
     #api-command-result { padding:16px; background:var(--surface); border-radius:12px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
     #api-feedback { margin-bottom:16px; }
     .radio-workspace { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(230px,1fr); gap:22px; margin-top:20px; }
-    .radio-card { background:linear-gradient(120deg,#192e2a,#142126 72%); border-color:#49685b; }
-    .preset-preview { min-height:118px; padding:16px; margin-top:16px; border:1px solid #48665b; border-radius:13px; background:#10231d; }
+    .radio-card { border-color:#3c506f; }
+    .preset-preview { min-height:118px; padding:16px; margin-top:16px; border:1px solid #3d5272; border-radius:13px; background:#142136; }
     .preset-preview strong { display:block; font-size:21px; font-weight:600; letter-spacing:-.4px; }
     .preset-preview p { margin:6px 0 0; color:var(--muted); font-size:13px; }
     .preset-preview .radio-chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:12px; }
-    .radio-chips span { padding:4px 8px; border:1px solid #436153; border-radius:7px; font-size:12px; color:var(--text); }
+    .radio-chips span { padding:4px 8px; border:1px solid #465c7d; border-radius:7px; font-size:12px; color:var(--text); }
     #preset-city { width:100%; }
     #preset-search { margin-top:0; }
     .radio-current { margin-top:18px; color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
@@ -120,6 +120,10 @@
     .adc-feedback[data-kind="success"] { color:var(--accent); border-left:3px solid var(--accent); }
     #adc-manual-fields,#api-adc-manual-fields { margin-top:22px; padding-top:4px; border-top:1px solid var(--edge); }
     .advert-panel { border-left:1px solid var(--edge); padding-left:22px; }
+    .radio-options { display:grid; align-content:start; gap:24px; }
+    #path-settings { margin:0; padding:20px; background:var(--surface); border:1px solid var(--edge); border-radius:14px; }
+    #path-settings h3 { margin-bottom:6px; }
+    #path-bytes { width:100%; }
     #advert-interval { width:100%; }
     .reply-row { padding:18px 0; border-top:1px solid var(--edge); }
     ol { padding-left:23px; } li { margin:7px 0; }
@@ -131,11 +135,11 @@
     #firmware-result { white-space:pre-wrap; overflow-wrap:anywhere; }
     footer { display:flex; flex-wrap:wrap; gap:8px 24px; padding:24px 0; font-size:12px; }
     code { font:13px ui-monospace,Consolas,monospace; color:var(--blue); }
-    dialog { width:calc(100% - 36px); max-width:520px; padding:28px; background:var(--panel); color:var(--text); border:1px solid #57736b; border-radius:23px; box-shadow:0 20px 80px #0008; }
+    dialog { width:calc(100% - 36px); max-width:520px; padding:28px; background:var(--panel); color:var(--text); border:1px solid #526a8d; border-radius:20px; box-shadow:0 20px 80px #0008; }
     dialog::backdrop { background:#000b; }
-    [hidden] { display:none!important; }
-    @media(max-width:1100px) { main { padding:28px 24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { flex-direction:row; flex-wrap:wrap; gap:6px; margin-bottom:24px; } .tool-nav a { background:#14262a; padding:10px 12px; } .nav-icon { display:none; } }
-    @media(max-width:760px) { main { padding:24px 16px; } header { flex-direction:column; gap:16px; margin-bottom:24px; } header .local-badge { display:inline-flex; margin:0 0 0 8px; } .grid,.settings-grid,.device-grid,.radio-workspace,#api-settings-fields { grid-template-columns:1fr; } .card { padding:22px 18px; border-radius:19px; } .transport-dock { grid-template-columns:1fr; padding:20px 18px; } .advert-panel { border-left:0; border-top:1px solid var(--edge); padding:22px 0 0; } .device-panel { padding:18px; } .tool-nav a { font-size:12px; } }
+    [hidden],.page-hidden { display:none!important; }
+    @media(max-width:1100px) { main { padding:28px 24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; margin-bottom:24px; } .tool-nav button { background:#181e29; border-color:var(--edge); padding:10px 12px; font-size:13px; } }
+    @media(max-width:760px) { main { padding:24px 16px; } header { flex-direction:column; gap:16px; margin-bottom:24px; } header .local-badge { display:inline-flex; margin:0 0 0 8px; } .grid,.settings-grid,.device-grid,.radio-workspace,#api-settings-fields { grid-template-columns:1fr; } .card { padding:22px 18px; border-radius:16px; } .transport-dock { grid-template-columns:1fr; padding:20px 18px; } .advert-panel { border-left:0; border-top:1px solid var(--edge); padding:22px 0 0; } .device-panel { padding:18px; } .tool-nav { grid-template-columns:repeat(2,minmax(0,1fr)); } .tool-nav button { font-size:13px; min-height:44px; } }
     @media(max-width:380px) { main { padding:20px 12px; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } h1 { font-size:28px; } header .local-badge { display:flex; margin:8px 0 0; } }
     @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
   </style>
@@ -143,23 +147,37 @@
 <body>
 <main>
   <header>
-    <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ближе к вашей сети.</h1><p class="subtitle">Выберите город. Настройте ноду под себя.<br>Без аккаунта, облака и лишних действий.</p></div>
-    <div><span class="tag">Помощник 2.1 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ваша нода. Ваши настройки.</h1><p class="subtitle">Подключите ноду и выберите нужный раздел.<br>Изменения сохраняются только по вашей команде.</p></div>
+    <div><span class="tag">Помощник 2.2 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
-  <aside class="app-rail"><p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#radio-section">Город и радио</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
+  <aside class="app-rail">
+    <p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p>
+    <p class="rail-sub">Локальный центр управления</p>
+    <nav class="tool-nav" role="tablist" aria-label="Разделы помощника">
+      <button type="button" role="tab" id="tab-connection" data-page-target="connection" aria-selected="true"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"/></svg>Подключение</button>
+      <button type="button" role="tab" id="tab-radio" data-page-target="radio" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="10" r="2"/><path d="m12 12-4 9m4-9 4 9M7.8 5.8a6 6 0 0 0 0 8.4m8.4-8.4a6 6 0 0 1 0 8.4M5 3a10 10 0 0 0 0 14M19 3a10 10 0 0 1 0 14"/></svg>Радио и хеш</button>
+      <button type="button" role="tab" id="tab-sound" data-page-target="sound" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 9h4l5-5v16l-5-5H4V9Zm12-2a7 7 0 0 1 0 10m3-13a11 11 0 0 1 0 16"/></svg>Звук и пины</button>
+      <button type="button" role="tab" id="tab-device" data-page-target="device" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M9 6h6M10 17h4"/></svg>Устройство</button>
+      <button type="button" role="tab" id="tab-wifi" data-page-target="wifi" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg>Wi-Fi</button>
+      <button type="button" role="tab" id="tab-phrases" data-page-target="phrases" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3v-3H3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>Быстрые фразы</button>
+      <button type="button" role="tab" id="tab-service" data-page-target="service" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>Консоль и файлы</button>
+    </nav>
+    <p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p>
+  </aside>
   <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
+  <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
-  <details id="connection-help" class="notice"><summary>Если подключение не получается</summary><p><strong>Выберите подходящий вход:</strong> для режима Bluetooth или Wi-Fi на ноде — «Настройки (консоль)»; для режима USB — «Настройки (USB-компаньон)». Оба работают через USB-кабель. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</p>
+  <details id="connection-help" class="notice" data-pages="connection"><summary>Если подключение не получается</summary><p><strong>Выберите подходящий вход:</strong> для режима Bluetooth или Wi-Fi на ноде — «Настройки (консоль)»; для режима USB — «Настройки (USB-компаньон)». Оба работают через USB-кабель. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</p>
   <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.16 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   </details>
   <div class="grid">
-    <section id="core-section" class="card wide" aria-labelledby="core-title">
+    <section id="core-section" class="card wide" data-pages="radio" aria-labelledby="core-title">
       <p class="panel-kicker">Нода</p><h2 id="core-title">Имя и мощность</h2><p class="hint">Читаем ограничения самой платы. После каждого изменения проверяем сохранённое значение. Нужна SmartUI 0.16.</p>
       <div class="device-grid"><section class="device-panel"><label class="field" for="node-name">Имя ноды · до 31 байта UTF-8</label><input id="node-name" type="text" disabled autocomplete="off" spellcheck="false"><div class="buttons"><button id="node-name-save" disabled>Сохранить имя</button></div><p id="node-name-status" class="setting-state" role="status">Не прочитано</p></section>
       <section class="device-panel"><label class="field" for="node-tx">Мощность передатчика, дБм</label><input id="node-tx" type="number" disabled step="1"><div class="buttons"><button id="node-tx-save" disabled>Сохранить мощность</button></div><p id="node-tx-status" class="setting-state" role="status">Не прочитано</p><p class="safety-note">Учитывайте допустимую мощность и антенну. Нода может отклонить изменение, пока радио занято.</p></section></div>
     </section>
-    <section id="radio-section" class="card wide radio-card" aria-labelledby="radio-title">
+    <section id="radio-section" class="card wide radio-card" data-pages="radio" aria-labelledby="radio-title">
       <div class="section-heading"><div><p class="panel-kicker">Ваш город · Ваша сеть</p><h2 id="radio-title">Подключитесь к местному эфиру</h2></div><span id="radio-capability" class="status-pill">Ожидает подключения</span></div>
       <p class="hint">Городской пресет настраивает частоту, полосу и кодирование. Выбор города ничего не меняет — применение отдельной кнопкой.</p>
       <div class="radio-workspace">
@@ -172,18 +190,20 @@
           <p id="preset-source" class="hint">Автономный снимок каталога MeshCoreTel. Интернет помощнику не требуется.</p>
           <details><summary>Что именно изменится?</summary><p class="hint">Частота, полоса (BW), SF и CR. Мощность, FEM, ретрансляция и длина хеша маршрута останутся прежними. Пресеты сообщества могут меняться; сверяйтесь с участниками своего города. После смены частоты нода перестанет слышать прежнюю сеть. Используйте разрешённые для вашего региона параметры.</p><p class="hint"><a id="preset-source-link" href="https://meshcoretel.ru/ru/OMS" target="_blank" rel="noopener noreferrer">Открыть каталог MeshCoreTel</a> — откроется отдельная вкладка, настройки ноды не отправляются.</p></details>
         </div>
-        <div class="advert-panel">
-          <p class="panel-kicker">Заметность в сети</p><h3>Автоанонс</h3><p class="hint">Нода периодически сообщает ближайшим участникам, что она рядом. Интервалы такие же, как в меню ноды.</p>
+        <div class="radio-options">
+        <section id="path-settings" aria-labelledby="path-title"><p class="panel-kicker">Формат маршрута</p><h3 id="path-title">Хеш маршрута</h3><p class="hint">Выберите 1, 2 или 3 байта. Согласуйте формат с участниками своей сети. Частота и мощность не изменятся.</p><label class="field" for="path-bytes">Байт на участника маршрута</label><select id="path-bytes" disabled><option value="1">1 байт</option><option value="2">2 байта</option><option value="3">3 байта</option></select><p id="path-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="path-save" disabled>Сохранить хеш</button></div></section>
+        <section class="advert-panel" aria-labelledby="advert-title">
+          <p class="panel-kicker">Заметность в сети</p><h3 id="advert-title">Автоанонс</h3><p class="hint">Нода периодически сообщает ближайшим участникам, что она рядом. Интервалы такие же, как в меню ноды.</p>
           <label class="field" for="advert-interval">Повторять анонс</label><select id="advert-interval" disabled><option value="0">Выключен</option><option value="15">Каждые 15 минут</option><option value="30">Каждые 30 минут</option><option value="60">Каждый час</option><option value="120">Каждые 2 часа</option><option value="180">Каждые 3 часа</option></select>
           <p id="advert-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="advert-save" disabled>Сохранить интервал</button></div>
           <p class="hint">Это интервал, не время суток. Сохранение не отправляет немедленный анонс; отсчёт следующего начинается заново.</p>
-          <details id="path-settings"><summary>Хеш маршрута</summary><p class="hint">Согласуйте длину хеша с участниками своей сети. Меняется только формат маршрута; частота, мощность и пресет сохраняются.</p><label class="field" for="path-bytes">Байт на участника маршрута</label><select id="path-bytes" disabled><option value="1">1 байт</option><option value="2">2 байта</option><option value="3">3 байта</option></select><p id="path-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="path-save" disabled>Сохранить хеш</button></div></details>
+        </section>
         </div>
       </div>
       <p id="radio-status" class="radio-status" role="status" aria-live="polite">Подключите SmartUI 0.13 или новее. Каталог можно посмотреть заранее.</p>
     </section>
-    <section id="connection-section" class="card" aria-labelledby="usb-title">
-      <h2 id="usb-title"><span class="step">1</span>Подключите ноду</h2>
+    <section id="connection-section" class="card wide" data-pages="connection" aria-labelledby="usb-title">
+      <h2 id="usb-title">Подключённая нода</h2>
       <p class="hint">Нужен USB-кабель с передачей данных. В окне браузера выберите порт именно вашей ноды.</p>
       <div class="buttons"><button id="connect" class="primary">Выбрать USB-порт</button><button id="disconnect" disabled>Отключиться</button></div>
       <p id="connection" class="state" role="status">Нода не подключена</p>
@@ -204,8 +224,8 @@
       <p id="info-hint" class="hint">Версия и плата появятся после проверки консоли SmartUI 0.06.</p>
       <div class="buttons"><button id="refresh" disabled>Обновить состояние</button></div>
     </section>
-    <section class="card" aria-labelledby="wifi-title">
-      <h2 id="wifi-title"><span class="step">2</span>Настройте Wi-Fi</h2>
+    <section class="card wide" data-pages="wifi" aria-labelledby="wifi-title">
+      <h2 id="wifi-title">Настройте Wi-Fi</h2>
       <p class="hint">Для Heltec V3, V4.3 и Wireless Paper. T096, T114 и ProMicro не имеют встроенного Wi-Fi.</p>
       <form id="wifi-form" autocomplete="off">
         <label class="field" for="ssid">Имя сети (SSID)</label>
@@ -219,14 +239,14 @@
       </form>
       <p id="wifi-hint" class="hint">Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.</p>
     </section>
-    <section id="device-section" class="card wide" aria-labelledby="device-title">
+    <section id="device-section" class="card wide" data-pages="sound device" aria-labelledby="device-title">
       <div class="section-heading"><div><p class="panel-kicker">Настройки устройства</p><h2 id="device-title">Настройте ноду — даже без экрана</h2></div><span id="settings-status" role="status">Ожидает подключения</span></div>
       <p id="settings-hint" class="hint">Доступные функции определяет прошивка. Изменения в полях не сохраняются автоматически.</p>
-      <div class="buttons"><button id="settings-load" disabled>Прочитать настройки</button></div>
+      <div class="buttons"><button id="settings-load" data-pages="device" disabled>Прочитать настройки</button><button id="sound-read" class="primary" data-pages="sound" disabled>Считать звук и пины с ноды</button></div>
       <p id="settings-capabilities" class="hint">Для новых настроек нужна SmartUI 0.08 с протоколом Settings 1. Старые прошивки сохраняют прежние инструменты.</p>
-      <div class="settings-filter"><input id="settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек"><label class="check"><input id="settings-advanced" type="checkbox">Расширенные настройки</label><label class="check"><input id="settings-unavailable" type="checkbox">Показать недоступные</label></div><p class="hint">Основное — сразу. GPIO, каналы уведомлений и тонкая настройка — в расширенных. Поиск ищет среди всех доступных настроек.</p>
+      <div class="settings-filter"><input id="settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек"><label class="check"><input id="settings-advanced" type="checkbox">Расширенные настройки</label><label class="check"><input id="settings-unavailable" type="checkbox">Показать недоступные</label></div><p class="hint">Пины — во вкладке «Звук и пины». Расширенные настройки открывают тонкую настройку. У каждого параметра отдельное сохранение.</p>
       <div id="device-fields" class="settings-grid" hidden>
-        <section id="battery-panel" class="device-panel" aria-labelledby="battery-title">
+        <section id="battery-panel" class="device-panel" data-pages="device" aria-labelledby="battery-title">
           <p class="panel-kicker">Питание</p><h3 id="battery-title">Аккумулятор и калибровка</h3>
           <div id="adc-fields">
             <dl class="measurement"><div><dt>Напряжение ноды</dt><dd id="battery-voltage">—</dd></div><div><dt>Сохранённый ADC-множитель</dt><dd id="adc-current" class="small-value">—</dd></div></dl>
@@ -258,14 +278,14 @@
           <div id="battery-settings"></div>
           <p id="battery-protection-warning" class="safety-note">Защита включена: порог 3,2 В. При выключении остаётся нижняя отсечка 2,7 В — это не безопасная цель разряда. Нужны исправный BMS и проверенный ADC. Внешнее питание может менять поведение отключения.</p>
         </section>
-        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">Каналы уведомлений, звук и мелодии. Отдельные мелодии ЛС и упоминаний доступны только при поддержке сборкой. Тест использует сохранённые настройки.</p><div id="sound-settings"></div><p id="settings-notify-state" class="notice" role="status">Сначала прочитайте настройки ноды.</p><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div></section>
-        <section id="lights-panel" class="device-panel" aria-labelledby="lights-title"><p class="panel-kicker">Индикация</p><h3 id="lights-title">Светодиоды и вибрация</h3><p class="hint">LED платы и LED уведомлений — разные настройки. Аппаратный индикатор зарядки может не управляться прошивкой.</p><div id="lights-settings"></div></section>
-        <section id="gps-panel" class="device-panel" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Источник координат</h3><p class="hint">Модуль ноды или координаты телефона — по возможностям прошивки. Телефон должен передавать координаты через приложение. Включение модуля не гарантирует спутниковый фикс.</p><div id="gps-settings"></div></section>
-        <section id="display-panel" class="device-panel" aria-labelledby="display-title" hidden><p class="panel-kicker">SmartUI</p><h3 id="display-title">Экран и оформление</h3><p class="hint">Набор вариантов зависит от дисплея. Значения и доступность сообщает сама нода.</p><div id="display-settings"></div></section>
-        <section id="system-panel" class="device-panel" aria-labelledby="system-title" hidden><p class="panel-kicker">Система</p><h3 id="system-title">Профиль и радиоусилитель</h3><p class="hint">FEM доступен только совместимым платам. Профиль изменяет несколько параметров уведомлений сразу.</p><div id="system-settings"></div></section>
+        <section id="sound-panel" class="device-panel" data-pages="sound" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">Мелодия, громкость и выход звука. Сначала считайте значения с ноды. Тест проигрывает сохранённые настройки, не несохранённый выбор.</p><div id="sound-settings"></div><p id="settings-notify-state" class="notice" role="status">Сначала прочитайте настройки ноды.</p><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div><p id="sound-action-status" class="setting-state" role="status">Состояние звука ещё не прочитано.</p></section>
+        <section id="lights-panel" class="device-panel" data-pages="sound" aria-labelledby="lights-title"><p class="panel-kicker">Индикация</p><h3 id="lights-title">Светодиоды и вибрация</h3><p class="hint">LED платы и LED уведомлений — разные настройки. Аппаратный индикатор зарядки может не управляться прошивкой.</p><div id="lights-settings"></div></section>
+        <section id="gps-panel" class="device-panel" data-pages="device" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Источник координат</h3><p class="hint">Модуль ноды или координаты телефона — по возможностям прошивки. Телефон должен передавать координаты через приложение. Включение модуля не гарантирует спутниковый фикс.</p><div id="gps-settings"></div></section>
+        <section id="display-panel" class="device-panel" data-pages="device" aria-labelledby="display-title" hidden><p class="panel-kicker">SmartUI</p><h3 id="display-title">Экран и оформление</h3><p class="hint">Набор вариантов зависит от дисплея. Значения и доступность сообщает сама нода.</p><div id="display-settings"></div></section>
+        <section id="system-panel" class="device-panel" data-pages="device" aria-labelledby="system-title" hidden><p class="panel-kicker">Система</p><h3 id="system-title">Профиль и радиоусилитель</h3><p class="hint">FEM доступен только совместимым платам. Профиль изменяет несколько параметров уведомлений сразу.</p><div id="system-settings"></div></section>
       </div>
     </section>
-    <section id="replies-section" class="card wide" aria-labelledby="replies-title">
+    <section id="replies-section" class="card wide" data-pages="phrases" aria-labelledby="replies-title">
       <h2 id="replies-title">Свои быстрые фразы</h2>
       <details id="replies-panel"><summary>Настроить 9 быстрых фраз</summary>
       <p class="hint">9 фраз на ноде, каждая до 64 байт UTF-8. Сначала прочитайте текущие значения. Пустое поле возвращает стандартную фразу. Сохранение — отдельно для каждого слота; адресат выбирается на ноде перед отправкой.</p>
@@ -274,7 +294,7 @@
       <div id="reply-fields"></div>
       </details>
     </section>
-    <section id="firmware-section" class="card wide" aria-labelledby="firmware-title">
+    <section id="firmware-section" class="card wide" data-pages="service" aria-labelledby="firmware-title">
       <h2 id="firmware-title">Проверить файл прошивки</h2>
       <p class="hint">Полностью локально: файл не передаётся в интернет, устройство не прошивается. Выберите BIN/UF2 и RELEASE-MANIFEST.json из одного релиза. Можно перетащить оба файла в этот блок.</p>
       <label class="field" for="firmware-file">Файл BIN / UF2 (до 32 МиБ)</label><input id="firmware-file" type="file" accept=".bin,.uf2">
@@ -283,12 +303,11 @@
       <div class="buttons"><button id="firmware-check">Проверить файлы</button></div>
       <p id="firmware-result" role="status" class="hint">SHA-256 проверяет целостность относительно манифеста, не подлинность. Манифест не подписан. MERGED — чистая установка со стиранием identity, контактов и настроек даже без Erase.</p>
     </section>
-    <section class="card wide" aria-labelledby="mode-title">
-      <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
+    <section class="card wide" data-pages="connection" aria-labelledby="mode-title">
+      <h2 id="mode-title">Как приложение подключается к ноде</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
       <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
       <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Настройки (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.16.</p>
-      <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
       <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Этот офлайн-помощник подключается только по USB, не по TCP, и не прошивает устройство.</p></details>
       <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>
       <details><summary>Служебные события и удаление сети</summary><p class="hint">Только понятные сообщения помощника. Пароли, имя сети и сырой вывод порта сюда не записываются.</p><ul id="events" aria-label="Журнал событий"></ul><div class="buttons"><button id="clear-events">Очистить журнал</button><button id="forget" class="danger" disabled>Удалить сеть с ноды</button></div></details>

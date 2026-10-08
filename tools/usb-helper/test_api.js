@@ -245,6 +245,15 @@ test('notification test uses exact ui test and read-only inference',async()=>{
   const r=await connected({readonly:true});try{await assert.rejects(r.client.execute('ui test'),{code:'DENIED'});await assert.rejects(r.client.execute('ui set volume 4'),{code:'DENIED'});}finally{await r.client.disconnect();}
 });
 
+test('sound preview is an explicit action, never a read-only command',async()=>{
+  assert.equal(api.developerCommand('ui sound preview').write,true);
+  assert.equal(api.developerCommand('ui caps sound_preview').write,false);
+  const r=await connected({readonly:true});try{const before=r.port.commands.length;
+    await assert.rejects(r.client.execute('ui sound preview'),{code:'DENIED'});
+    assert.equal(r.port.commands.length,before);
+  }finally{await r.client.disconnect();}
+});
+
 test('radio and advert writes infer mutation without a caller hint',async()=>{
   const r=await connected({readonly:true});try{
     const count=r.port.commands.length;

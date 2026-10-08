@@ -5,11 +5,13 @@ import shutil
 import subprocess
 import tempfile
 from test_smartui_api import setting_effects_source
+from test_sound_preview_runtime import main as test_sound_preview_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    test_sound_preview_runtime()
     with tempfile.TemporaryDirectory(prefix="smartui-settings-") as directory:
         output = Path(directory) / "device_settings_test"
         paths = [ROOT / "tools/device_settings_test.cpp",

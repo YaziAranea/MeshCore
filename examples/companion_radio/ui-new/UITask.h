@@ -433,6 +433,7 @@ public:
   bool hasToneAlert() const;
   void cycleNotifyMode();
   void previewNotifyMode();
+  smartui::SoundPreviewResult previewSavedMelody();
   bool areBoardLedsEnabled() const;
   void toggleBoardLeds();
   void applyBoardLedsState();

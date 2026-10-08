@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.1.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.2.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -38,7 +38,7 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc, schemas, extendedValues }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc, schemas, extendedValues, soundPreview }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
@@ -91,6 +91,8 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         if(command==='settings caps') this.emit(this.settingsRecord('caps',this.settingsCaps));
         else if(command==='settings get') this.emit(this.settingsRecord('get',Object.fromEntries(['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted'].map(key=>[key,this.settingsState[key]]))));
         else if(command==='settings caps schema')this.emit(schemas?'OK settings caps key=schema value=1':'ERR settings unsupported');
+        else if(command==='settings caps sound_preview')this.emit(soundPreview?'OK settings caps key=sound_preview value=1':'ERR settings unsupported');
+        else if(command==='settings sound preview')this.emit(''+(!soundPreview?'ERR settings unsupported':this.settingsState.muted?'ERR settings muted':'OK settings sound_preview'));
         else if(command.startsWith('settings schema ')){const key=command.slice(16),s=schemas?.[key]||{supported:Number(Object.hasOwn(this.settingsState,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};this.emit('OK settings schema key='+key+' '+Object.entries(s).map(([k,v])=>k+'='+v).join(' '));}
         else if(command.startsWith('settings get ')){const key=command.slice(13);this.emit('OK settings get key='+key+' value='+(this.settingsState[key]??extendedValues?.[key]));}
         else if(command==='settings identity')this.emit('OK settings identity name_hex='+Array.from(new TextEncoder().encode(this.identity),b=>b.toString(16).padStart(2,'0')).join('')+' max_name_bytes=31');
@@ -194,7 +196,7 @@ async function fixture(options = {}) {
   if(options.clock)await page.clock.install({time:new Date('2026-01-01T12:00:00Z')});
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues,soundPreview:Boolean(options.soundPreview) });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -214,11 +216,16 @@ async function connect(page) {
   await page.locator('#connect').click();
   await page.waitForFunction(() => document.getElementById('connection').textContent === 'Консоль SmartUI подключена');
   assert.equal(await page.locator('#disconnect').isEnabled(), true);
+  await tab(page, 'device');
+}
+async function tab(page, name) {
+  await page.locator('[data-page-target="' + name + '"]').click();
+  assert.equal(await page.locator('[data-page-target="' + name + '"]').getAttribute('aria-selected'), 'true');
 }
 async function ready(page) { await page.waitForFunction(() => !document.getElementById('test').disabled); }
 test('console city presets and auto advert use same controls with confirmation/readback',async()=>{
   const f=await fixture({radioFeature:true,settings:true,info:'SmartUI=0.13 core=1.17.1 build=1234abcd upstream=a27e78e4 capabilities=BLE,USB board=Heltec T114'});
-  try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('radio-refresh').disabled);
+  try{const p=f.page;await connect(p);await tab(p,'radio');await p.waitForFunction(()=>!document.getElementById('radio-refresh').disabled);
     await p.locator('#preset-search').fill('Омск');await p.locator('#preset-city').selectOption({index:1});
     await confirm(p,'#preset-apply',false);assert.equal(await p.evaluate(()=>window.__serialMock.commands.some(c=>c.startsWith('settings radio set'))),false);
     await confirm(p,'#preset-apply',true);await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('прочитан обратно'));
@@ -265,6 +272,62 @@ async function noOverlap(page) {
   assert.deepEqual(problems, []);
 }
 
+test('console tabs expose sound pins, hash and collapsed phrases without sending commands',async()=>{
+  const full=fullSettingsFixture(),f=await fixture({settings:true,replies:true,radioFeature:true,soundPreview:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
+  try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('sound-read').disabled);
+    const before=await p.evaluate(()=>__serialMock.commands.length);
+    assert.equal(await p.locator('[data-page-target]').count(),7);
+    for(const name of ['connection','radio','sound','device','wifi','phrases','service']){
+      await tab(p,name);
+      assert.deepEqual(await p.evaluate(selected=>[...document.querySelectorAll('[data-pages]')].filter(el=>!el.dataset.pages.split(/\s+/).includes(selected)&&el.getClientRects().length).map(el=>el.id||el.tagName),name),[],'Only active tab panels are visible');
+      await noOverlap(p);
+    }
+    await tab(p,'sound');
+    assert.equal(await p.locator('#settings-advanced').isChecked(),false);
+    for(const key of ['tone_pin','led_pin','vibe_pin'])assert.equal(await p.locator('#setting-'+key).isVisible(),true,key+' is a basic sound control');
+    assert.equal(await p.evaluate(()=>Math.abs(document.getElementById('sound-panel').getBoundingClientRect().top-document.getElementById('lights-panel').getBoundingClientRect().top)<2),true,'Desktop sound and LED panels share one row even without GPS');
+    await tab(p,'radio');assert.equal(await p.locator('#path-bytes').isVisible(),true);
+    await tab(p,'phrases');assert.equal(await p.locator('#replies-panel').getAttribute('open'),null);assert.equal(await p.locator('#reply-0').isVisible(),false);
+    assert.equal(await p.evaluate(()=>__serialMock.commands.length),before,'Tab changes cannot transmit settings or test commands');
+    await p.evaluate(()=>{const badge=document.createElement('div');badge.textContent='СИМУЛЯЦИЯ USB · не физическая плата';badge.style.cssText='position:fixed;right:12px;bottom:12px;z-index:1000;background:#1d2d4a;color:#eff4ff;border:1px solid #7192d9;border-radius:7px;padding:7px 10px;font:12px system-ui;';document.body.append(badge);});
+    for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){
+      await p.setViewportSize({width,height});
+      for(const name of ['connection','radio','sound','device','wifi','phrases','service']){await tab(p,name);await noOverlap(p);await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(output,'helper-2.2-console-'+name+'-'+size+'.png'),fullPage:true});}
+    }
+  }finally{await f.close();}
+});
+
+test('console sound refresh reads live pins, confirms discarded sound edits and keeps other drafts',async()=>{
+  const full=fullSettingsFixture(),f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1}});
+  try{const p=f.page;await connect(p);await p.locator('#setting-ui_theme').selectOption('2');await tab(p,'sound');
+    await p.locator('#setting-volume').selectOption('3');
+    await p.evaluate(()=>Object.assign(__serialMock.settingsState,{volume:8,melody:18,tone_pin:33,sound_quiet:1}));
+    const before=await p.evaluate(()=>__serialMock.commands.length);
+    await p.locator('#sound-read').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.locator('#setting-volume').inputValue(),'3');assert.equal(await p.evaluate(()=>__serialMock.commands.length),before);
+    await p.locator('#sound-read').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&document.getElementById('setting-volume').value==='8');
+    assert.equal(await p.locator('#setting-tone_pin').inputValue(),'33');assert.equal(await p.locator('#setting-melody').inputValue(),'18');assert.equal(await p.locator('#setting-sound_quiet').inputValue(),'1');
+    assert.equal(await p.locator('#setting-ui_theme').inputValue(),'2');
+    assert.equal(await p.evaluate(n=>__serialMock.commands.slice(n).some(c=>/settings (set|sound preview|test|adc (set|apply|reset))/.test(c)),before),false,'Refresh must not change or play anything');
+  }finally{await f.close();}
+});
+
+test('console melody preview is distinct from notification test and never changes quiet settings',async()=>{
+  const full=fullSettingsFixture(),f=await fixture({settings:true,soundPreview:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
+  try{const p=f.page;await connect(p);await tab(p,'sound');
+    await p.evaluate(()=>Object.assign(__serialMock.settingsState,{sound_quiet:1,muted:0,melody:18}));
+    await p.locator('#sound-read').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&document.getElementById('setting-sound_quiet').value==='1');
+    const before=await p.evaluate(()=>__serialMock.commands.length);
+    await p.locator('#sound-preview').click();await p.waitForFunction(()=>__serialMock.commands.includes('settings sound preview')&&!document.getElementById('sound-preview').disabled);
+    assert.equal(await p.evaluate(()=>__serialMock.settingsState.sound_quiet),1);assert.equal(await p.evaluate(()=>__serialMock.settingsState.muted),0);
+    assert.equal(await p.evaluate(n=>__serialMock.commands.slice(n).some(c=>c.startsWith('settings set ')),before),false);
+    await p.evaluate(()=>__serialMock.settingsState.muted=1);await p.locator('#sound-preview').click();
+    await p.waitForFunction(()=>document.getElementById('sound-action-status').textContent.includes('тишина'));
+    assert.equal(await p.evaluate(()=>__serialMock.commands.filter(c=>c==='settings sound preview').length),1,'Fresh muted state blocks preview before transmission');
+  }finally{await f.close();}
+  const old=await fixture({settings:true,info:RELEASE_DEVICE_INFO});try{await connect(old.page);await tab(old.page,'sound');assert.equal(await old.page.locator('#sound-preview').isDisabled(),true);assert.equal(await old.page.evaluate(()=>__serialMock.commands.includes('settings sound preview')),false);}finally{await old.close();}
+});
+
 test('offline package loads in Chrome: unsupported Web Serial and responsive layout', async () => {
   const f = await fixture({ supported: false });
   try {
@@ -289,6 +352,7 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     assert.equal(await page.locator('#info-firmware').textContent(), '—');
     assert.equal(await page.evaluate(() => window.__serialMock.commands.includes('info')), false, 'legacy 0.05 must not receive info');
     assert.equal(await page.locator('#mode').textContent(), 'Bluetooth');
+    await tab(page,'wifi');
     await page.locator('#ssid').fill('  Сеть Home  ');
     await page.locator('#password').fill('  private<PW>  ');
     await page.locator('#show-password').check();
@@ -314,7 +378,7 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     assert.equal(visibleText.includes('private<PW>'), false);
     assert.equal(visibleText.includes('Сеть Home'), false);
 
-    await confirm(page, '#mode-wifi', false);
+    await tab(page,'connection');await confirm(page, '#mode-wifi', false);
     assert.equal(await page.evaluate(() => window.__serialMock.commands.includes('mode wifi')), false);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.locator('#mode-wifi').click();
@@ -337,7 +401,7 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     await page.locator('#clear-events').click();
     assert.equal(await page.locator('#events li').count(), 0);
 
-    await page.locator('#ssid').fill('cancel');
+    await tab(page,'wifi');await page.locator('#ssid').fill('cancel');
     await page.locator('#password').fill('password');
     await page.locator('#test').click();
     await page.waitForFunction(() => document.getElementById('feedback').textContent.includes('зарезервирован'));
@@ -355,7 +419,7 @@ test('real browser mock-serial flow: test, save, confirmation, switch, forget, U
     await ready(page);
     assert.equal(await page.locator('#configured').textContent(), 'Не задана');
 
-    await confirm(page, '#mode-usb', true);
+    await tab(page,'connection');await confirm(page, '#mode-usb', true);
     await page.waitForFunction(() => document.getElementById('connection').textContent === 'Нода не подключена');
     assert.equal(await page.locator('#connect').isEnabled(), true);
     assert.equal(await page.evaluate(() => window.__serialMock.closed), true);
@@ -411,6 +475,7 @@ test('unplug clears secrets/status and ignores hostile serial text', async () =>
   try {
     await connect(page);
     await ready(page);
+    await tab(page,'wifi');
     await page.locator('#password').fill('must-clear-on-disconnect');
     await page.evaluate(() => {
       window.__serialMock.emit('<img src="https://example.invalid/steal" onerror="alert(1)">password-from-rx');
@@ -447,6 +512,7 @@ test('custom phrases require explicit capability, save UTF8 with readback, and c
   const f=await fixture({replies:true,info:'SmartUI=0.07 core=1.17.1 build=12345678 upstream=abcdef01 capabilities=BLE,USB board=Heltec T114'});
   try {
     await connect(f.page);
+    await tab(f.page,'phrases');
     assert.equal(await f.page.locator('#reply-0').isDisabled(),true);
     assert.equal(await f.page.locator('#reply-0').isVisible(),false);await f.page.locator('#replies-panel summary').click();
     await f.page.locator('#replies-load').click();
@@ -478,7 +544,7 @@ test('local USB recovery leaves status and safe cleanup action accessible',async
     assert.equal(await f.page.locator('#feedback').getAttribute('data-kind'),'warning');
     assert.match(await f.page.locator('#feedback').textContent(),/Ошибка хранилища подключения.*storage=recovery-required/);
     assert.equal(await f.page.evaluate(()=>window.__serialMock.commands.includes('wifi forget')),false);
-    await f.page.locator('summary').filter({hasText:'Служебные события'}).click();
+    await tab(f.page,'connection');await f.page.locator('summary').filter({hasText:'Служебные события'}).click();
     assert.equal(await f.page.locator('#forget').isEnabled(),true);
     await confirm(f.page,'#forget',true);
     await f.page.waitForFunction(()=>document.getElementById('mode').textContent==='Bluetooth');
@@ -489,6 +555,7 @@ test('local USB recovery leaves status and safe cleanup action accessible',async
 test('firmware preflight stays offline without serial access and displays merged loss warning',async()=>{
   const f=await fixture({supported:false});
   try {
+    await tab(f.page,'service');
     const commit='12345678'+'a'.repeat(32),version='0.07';
     const payload=Buffer.from('V3 SmartUI '+version+'\0SmartUI-source:12345678\0');
     const end=Math.floor((32+payload.length+16)/16)*16;
@@ -533,6 +600,7 @@ test('0.08 through 0.16 retain verified melody names; unknown firmware or change
     const f=await fixture({settings:true,info,settingsCaps:{melody_max:maximum}});
     try {
       await connect(f.page);
+      await tab(f.page,'sound');
       assert.equal(await f.page.locator('#info-firmware').textContent(),version);
       assert.equal(await f.page.locator('#setting-melody option').count(),maximum+1);
       assert.equal(await f.page.locator('#setting-melody option[value="0"]').textContent(),named?'0 · Пульс':'Мелодия 0');
@@ -550,8 +618,9 @@ test('0.16 service mode exposes board pin schemas, filters and preserves other d
   const full=fullSettingsFixture();
   const f=await fixture({settings:true,radioFeature:true,manualAdc:true,info:RELEASE_DEVICE_INFO.replace('0.15','0.16').replace('ProMicro RA62','Heltec T096'),schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1,gps:1,adc_service:1}});
   try{const p=f.page;await connect(p);
+    await tab(p,'sound');
     await p.waitForFunction(()=>!document.getElementById('setting-tone_pin').disabled);
-    assert.equal(await p.locator('#setting-tone_pin').isVisible(),false);
+    assert.equal(await p.locator('#setting-tone_pin').isVisible(),true);
     await p.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='basic-simulation-caption';caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
     await noOverlap(p);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-basic-desktop.png')});
     await p.setViewportSize({width:390,height:844});await noOverlap(p);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-basic-mobile.png')});
@@ -572,7 +641,8 @@ test('0.16 service mode exposes board pin schemas, filters and preserves other d
     await p.locator('#settings-filter').fill('vibration');assert.equal(await p.locator('#lights-panel').isVisible(),false);
     await p.locator('#settings-unavailable').check();assert.equal(await p.locator('#lights-panel').isVisible(),true);assert.equal(await p.locator('#setting-vibration').isDisabled(),true);
     await p.locator('#settings-unavailable').uncheck();await p.locator('#settings-filter').fill('');
-    await p.locator('#node-tx').fill('16');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.tx===16&&!document.getElementById('node-tx').disabled);
+    await tab(p,'radio');await p.locator('#node-tx').fill('16');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.tx===16&&!document.getElementById('node-tx').disabled);
+    await tab(p,'sound');
     await p.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
     await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-service-desktop.png')});
     await p.setViewportSize({width:390,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-service-mobile.png')});
@@ -582,6 +652,7 @@ test('0.16 service mode exposes board pin schemas, filters and preserves other d
 test('console sound labels preserve quiet inversion and test warns about unsaved values',async()=>{
   const full=fullSettingsFixture(),f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
   try{const p=f.page;await connect(p);
+    await tab(p,'sound');
     assert.equal(await p.locator('#setting-sound_quiet option:checked').textContent(),'Включён');
     await p.locator('#setting-sound_quiet').selectOption({label:'Выключен'});await p.locator('#save-sound_quiet').click();await p.waitForFunction(()=>!document.getElementById('setting-sound_quiet').disabled);
     assert.equal(await p.evaluate(()=>__serialMock.settingsState.sound_quiet),1);assert.match(await p.locator('#settings-notify-state').textContent(),/Звук выключен на ноде/);
@@ -594,7 +665,7 @@ test('console sound labels preserve quiet inversion and test warns about unsaved
 
 test('console path selector preserves fresh radio parameters and requires explicit save',async()=>{
   const f=await fixture({settings:true,radioFeature:true,info:RELEASE_DEVICE_INFO});
-  try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('path-bytes').disabled);await p.locator('#path-settings summary').click();
+  try{const p=f.page;await connect(p);await tab(p,'radio');await p.waitForFunction(()=>!document.getElementById('path-bytes').disabled);
     await p.locator('#path-bytes').selectOption('1');await p.locator('#path-save').click();await p.locator('#confirm-no').click();
     assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings radio set'))),false);
     await p.evaluate(()=>Object.assign(__serialMock.radio,{freq_khz:868731,bw_hz:62500,sf:7,cr:7,tx_dbm:18,repeat:1}));
@@ -615,11 +686,13 @@ test('headless settings save explicit fields with readback; ADC calculation and 
     assert.equal(await f.page.locator('#setting-melody option[value="0"]').textContent(),'0 · Пульс');
     assert.equal(await f.page.locator('#setting-melody option[value="30"]').textContent(),'30 · Alert');
     assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set'))),false);
+    await tab(f.page,'sound');
     await f.page.locator('#setting-volume').selectOption('4');
     assert.match(await f.page.locator('#saved-volume').textContent(),/ещё не сохранено/);
     await f.page.locator('#save-volume').click();
     await f.page.waitForFunction(()=>document.getElementById('saved-volume').textContent.includes('4 / 10 · Прочитано'));
     assert.deepEqual(await f.page.evaluate(()=>__serialMock.commands.slice(-2)),['settings set volume 4','settings get']);
+    await tab(f.page,'device');
     await f.page.locator('#adc-measured').fill('3,82');await f.page.locator('#adc-preview').click();
     await f.page.locator('#adc-preview-box').waitFor({state:'visible'});
     assert.match(await f.page.locator('#adc-preview-result').textContent(),/ещё не сохранён/);
@@ -637,7 +710,7 @@ test('headless settings save explicit fields with readback; ADC calculation and 
     await confirm(f.page,'#adc-reset',true);
     await f.page.waitForFunction(()=>document.getElementById('adc-current').textContent==='4.900000');
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.volume),4);
-    await f.page.locator('#settings-test').click();
+    await tab(f.page,'sound');await f.page.locator('#settings-test').click();
     await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('Команда теста принята'));
   } finally {await f.close();}
 });
@@ -646,11 +719,13 @@ test('mobile settings have accessible controls, separate LEDs and battery warnin
   const f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,settingsCaps:{vibration:1,gps:1,display:1}});
   try {
     await f.page.setViewportSize({width:390,height:844});await connect(f.page);
+    await tab(f.page,'sound');
     assert.equal(await f.page.getByLabel('LED платы',{exact:true}).isEnabled(),true);
     assert.equal(await f.page.getByLabel('LED уведомлений',{exact:true}).isEnabled(),true);
     await f.page.locator('#setting-board_led').selectOption('0');await f.page.locator('#save-board_led').click();
     await f.page.waitForFunction(()=>document.getElementById('saved-board_led').textContent.includes('Выключен · Прочитано'));
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.unread_led),1);
+    await tab(f.page,'device');
     await f.page.locator('#setting-battery_protection').selectOption('0');
     await f.page.locator('#save-battery_protection').click();
     assert.match(await f.page.locator('#confirm-text').textContent(),/2,7 В/);
@@ -660,7 +735,7 @@ test('mobile settings have accessible controls, separate LEDs and battery warnin
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.battery_protection),1);
     await confirm(f.page,'#save-battery_protection',true);
     await f.page.waitForFunction(()=>document.getElementById('saved-battery_protection').textContent.includes('2,7 В · Прочитано'));
-    await f.page.locator('#setting-volume').focus();await f.page.keyboard.press('Tab');
+    await tab(f.page,'sound');await f.page.locator('#setting-volume').focus();await f.page.keyboard.press('Tab');
     assert.equal(await f.page.evaluate(()=>document.activeElement.id),'setting-melody'); // unchanged save buttons are disabled
     await noOverlap(f.page);
     await f.page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · тестовые данные. Физическая плата не подключена.';section.prepend(caption);});
@@ -705,10 +780,12 @@ test('unsupported hardware is hidden and storage failure remains unsaved in the 
     for(const id of ['row-volume','row-melody','row-sound_quiet','row-unread_led','row-vibration','gps-panel']) assert.equal(await f.page.locator('#'+id).isVisible(),false,id);
     assert.equal(await f.page.locator('#settings-test').isEnabled(),false);
     await f.page.evaluate(()=>{__serialMock.settingsFailure='storage';});
+    await tab(f.page,'sound');
     await f.page.locator('#setting-board_led').selectOption('0');await f.page.locator('#save-board_led').click();
     await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('ошибка хранилища'));
     assert.match(await f.page.locator('#saved-board_led').textContent(),/ещё не сохранено/);
     assert.equal(await f.page.evaluate(()=>__serialMock.settingsState.board_led),1);
+    await tab(f.page,'device');
     await f.page.locator('#adc-measured').fill('99');await f.page.locator('#adc-preview').click();
     await f.page.waitForFunction(()=>document.getElementById('feedback').textContent.includes('2,500'));
     assert.equal(await f.page.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings adc preview'))),false);

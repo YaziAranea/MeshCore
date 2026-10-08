@@ -26,6 +26,36 @@ test('sound_quiet uses positive labels and notification status describes saved b
   assert.match(notificationStatus(SETTINGS,SETTINGS_CAPS),/Звук включён на ноде/);
 });
 
+test('sound tabs include all output pins as basic controls',()=>{
+  const {SOUND_SETTING_KEYS,ADVANCED_SETTING_KEYS}=require('./core');
+  for(const key of ['tone_pin','led_pin','vibe_pin']){
+    assert.equal(SOUND_SETTING_KEYS.includes(key),true,key+' belongs to sound refresh');
+    assert.equal(ADVANCED_SETTING_KEYS.includes(key),false,key+' must remain discoverable without advanced mode');
+  }
+  assert.equal(SOUND_SETTING_KEYS.includes('ui_theme'),false,'A sound-only refresh must preserve unrelated drafts');
+});
+
+test('sound preview has explicit capability, preserves quiet settings and reports firmware errors',async()=>{
+  for(const soundPreview of [false,true]){
+    const f=await connected({settings:true,soundPreview,settingsState:{sound_quiet:1,muted:0,melody:18}});
+    try{
+      assert.equal(f.instance.state.soundPreviewSupported,soundPreview);
+      const before=f.port.commands.length;
+      if(soundPreview){
+        await f.instance.previewSound();
+        assert.deepEqual(f.port.commands.slice(before),['settings sound preview']);
+        assert.equal(f.port.settingsState.sound_quiet,1);assert.equal(f.port.settingsState.muted,0);
+        f.port.settingsState.muted=1;
+        await assert.rejects(f.instance.previewSound(),code('SOUND_MUTED'));
+      }else{
+        await assert.rejects(f.instance.previewSound(),code('SETTINGS_UNSUPPORTED'));
+        assert.equal(f.port.commands.length,before);
+      }
+      assert.equal(f.port.commands.some(command=>command.startsWith('settings set ')),false);
+    }finally{await f.instance.disconnect();}
+  }
+});
+
 test('explicit path-only write preserves fresh radio fields and validates 1..3',async()=>{
   const state={freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:3,tx_dbm:20,repeat:1};
   const f=await connected({onCommand(command,port){
@@ -161,6 +191,8 @@ class FakePort {
       if (command==='settings caps') this.reply(wireRecord('caps',this.settingsCaps));
       else if (command==='settings get') this.reply(wireRecord('get',Object.fromEntries(Object.keys(SETTINGS).map(key=>[key,this.settingsState[key]]))));
       else if(command==='settings caps schema')this.reply(this.options.schemas?'OK settings caps key=schema value=1':'ERR settings unsupported');
+      else if(command==='settings caps sound_preview')this.reply(this.options.soundPreview?'OK settings caps key=sound_preview value=1':'ERR settings unsupported');
+      else if(command==='settings sound preview')this.reply(!this.options.soundPreview?'ERR settings unsupported':this.settingsState.muted?'ERR settings muted':'OK settings sound_preview');
       else if(command.startsWith('settings schema ')){
         const key=command.slice(16),schema=this.options.schemas?.[key]||{supported:Number(Object.hasOwn(SETTINGS,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};
         this.reply('OK settings schema key='+key+' '+Object.entries(schema).map(([k,v])=>k+'='+v).join(' '));
@@ -851,7 +883,7 @@ test('settings are explicitly advertised, automatically read and never probed on
   await assert.rejects(legacy.instance.loadDeviceSettings(),code('SETTINGS_UNAVAILABLE'));
   await legacy.instance.disconnect();
   const f=await connected({settings:true,fragment:1});
-  assert.deepEqual(f.port.commands.slice(-4),['settings caps','settings get','settings caps schema','settings adc manual']);
+  assert.deepEqual(f.port.commands.slice(-5),['settings caps','settings get','settings caps schema','settings caps sound_preview','settings adc manual']);
   assert.deepEqual(f.instance.state.deviceSettings,SETTINGS);
   const copy=f.instance.state;copy.settingsCaps.adc=0;copy.deviceSettings.volume=1;
   assert.equal(f.instance.state.settingsCaps.adc,1);assert.equal(f.instance.state.deviceSettings.volume,10);

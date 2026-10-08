@@ -5,6 +5,10 @@
 
 namespace smartui {
 
+enum class SoundPreviewResult : uint8_t {
+  STARTED, MUTED, BUSY, PIN_CONFLICT, UNSUPPORTED
+};
+
 // Small, display-independent transaction image. Never copy NodePrefs (including
 // quick replies and serializers) onto the nRF52's 4 KiB loop stack.
 struct DeviceSettingsState {
@@ -95,6 +99,8 @@ struct DeviceSettingsHooks {
   float (*adcMultiplier)() = nullptr;
   uint32_t (*millis)() = nullptr;
   void (*testNotification)() = nullptr;
+  // Explicit local audition: one saved melody, without changing preferences.
+  SoundPreviewResult (*previewSound)() = nullptr;
   // UTF-8 label for a build-local melody ID. At most MELODY_NAME_MAX bytes.
   const char* (*melodyName)(uint8_t id) = nullptr;
   // Dedicated checked transaction: fixed bridge pins and peripheral ownership

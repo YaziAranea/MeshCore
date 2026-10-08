@@ -11,7 +11,7 @@ const char* const CAP_KEYS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration",
     "gps", "battery_protection", "display", "melody_max", "adc_min",
     "adc_max", "agc_reset", "fem_lna", "fem_pa", "bridge",
-    "melody_names", "adc_service", "schema",
+    "melody_names", "adc_service", "schema", "sound_preview",
 };
 
 const char* const GET_KEYS[] = {
@@ -217,6 +217,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
       strncmp(command, "ui set", 6) == 0 ||
       strncmp(command, "ui adc", 6) == 0 ||
       strncmp(command, "ui melody", 9) == 0 ||
+      strncmp(command, "ui sound", 8) == 0 ||
       strncmp(command, "ui test", 7) == 0;
   if (!settings_command) return false;
   if (reply == nullptr || capacity == 0) return true;
@@ -230,10 +231,11 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
 
   char key[24];
   if (strncmp(command, "ui schema", 9) == 0 || strncmp(command, "ui get", 6) == 0 ||
-      strcmp(command, "ui caps schema") == 0) {
+      strcmp(command, "ui caps schema") == 0 || strcmp(command, "ui caps sound_preview") == 0) {
     const bool schema = strncmp(command, "ui schema", 9) == 0;
-    const bool caps_schema = strcmp(command, "ui caps schema") == 0;
-    if (!caps_schema && (!oneWordAfter(command, schema ? "ui schema " : "ui get ", key, sizeof(key)) ||
+    const bool direct_cap = strcmp(command, "ui caps schema") == 0 ||
+        strcmp(command, "ui caps sound_preview") == 0;
+    if (!direct_cap && (!oneWordAfter(command, schema ? "ui schema " : "ui get ", key, sizeof(key)) ||
         !allowedKey(key, GET_KEYS))) {
       response(reply, capacity, "ERR ui invalid"); return true;
     }
@@ -353,6 +355,18 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
     }
     char backend[SMARTUI_CLI_TEXT_MAX + 1];
     if (!callBackend(settings, backend_command, backend, false))
+      response(reply, capacity, "ERR ui internal");
+    else renameBackendReply(backend, reply, capacity);
+    return true;
+  }
+
+  if (strncmp(command, "ui sound", 8) == 0) {
+    if (strcmp(command, "ui sound preview") != 0) {
+      response(reply, capacity, "ERR ui invalid");
+      return true;
+    }
+    char backend[SMARTUI_CLI_TEXT_MAX + 1];
+    if (!callBackend(settings, "api sound preview", backend, allow_mutation))
       response(reply, capacity, "ERR ui internal");
     else renameBackendReply(backend, reply, capacity);
     return true;

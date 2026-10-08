@@ -2,6 +2,13 @@
 (() => {
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
   let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null,adcManualSupported=false;
+  let activePage='connection';
+  function renderPages(){
+    for(const panel of document.querySelectorAll('[data-pages]'))panel.classList.toggle('page-hidden',!panel.dataset.pages.split(' ').includes(activePage));
+    for(const tab of document.querySelectorAll('[data-page-target]')){const selected=tab.dataset.pageTarget===activePage;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}
+    if($('device-title'))$('device-title').textContent=activePage==='sound'?'Звук, свет и пины':'Настройки устройства';
+    const apiTitle=$('api-settings')?.querySelector('h2');if(apiTitle)apiTitle.textContent=activePage==='sound'?'Звук, свет и пины':'Настройки устройства';
+  }
   const settingEdits=new Map(),melodyNames=new Map();
   let schemas=Object.create(null);
   let radioState=null,advertState=null,radioSupport=null,advertSupport=null,networkRunning=false;
@@ -12,7 +19,7 @@
   let binaryState={connected:false,busy:false,phase:'disconnected',hello:null,uncertain:false};
   let adcOperation=null;
   const grid=document.querySelector('.grid');
-  const consolePanels=[$('device-section'),$('replies-section'),$('wifi-title').closest('section'),$('mode-title').closest('section')];
+  const consolePanels=[$('device-section'),$('replies-section'),$('wifi-title').closest('section'),$('mode-title').closest('section'),$('feedback')];
   const consoleNotices=[...document.querySelectorAll('main > .notice')];
   $('connection-actions').append($('connect').parentElement);
   const dock=document.querySelector('.transport-dock');dock.id='connection-dock';
@@ -31,12 +38,20 @@
       <section class="card wide"><h2>Журнал действий</h2><p class="hint">Статусы операций помощника, не события ноды. Без команд, значений и секретов.</p><ul id="api-log" class="hint" aria-label="Журнал действий"></ul><button id="api-log-clear">Очистить</button></section>
     </div>`;
   $('firmware-section').before(workspace);
+  $('api-settings').dataset.pages='sound device';$('api-settings-load').dataset.pages='device';$('api-notify-test').dataset.pages='sound';$('api-adc').dataset.pages='device';
+  $('api-wifi').dataset.pages='wifi';$('api-developer').dataset.pages='service';$('api-log').closest('section').dataset.pages='service';$('cli-scope').dataset.pages='service';
+  const soundRead=document.createElement('button');soundRead.id='api-sound-read';soundRead.textContent='Считать звук и пины с ноды';soundRead.dataset.pages='sound';soundRead.disabled=true;$('api-notify-test').before(soundRead);
+  const soundPreview=document.createElement('button');soundPreview.id='api-sound-preview';soundPreview.textContent='Прослушать мелодию';soundPreview.dataset.pages='sound';soundPreview.disabled=true;$('api-notify-test').before(soundPreview);
+  const previewHint=document.createElement('p');previewHint.id='api-sound-preview-hint';previewHint.className='hint';previewHint.dataset.pages='sound';$('api-settings-fields').before(previewHint);
+  const soundAction=document.createElement('p');soundAction.id='api-sound-action-status';soundAction.className='notice';soundAction.dataset.pages='sound';soundAction.setAttribute('role','status');soundAction.textContent='Считайте настройки ноды перед проверкой звука.';$('api-settings-fields').before(soundAction);
   const phrases=document.createElement('section');phrases.className='card wide';phrases.id='api-phrases';
   const transport=document.createElement('section');transport.className='card wide';transport.id='api-transport';
   transport.innerHTML='<p class="panel-kicker">Подключение</p><h2>Как приложение подключается к ноде</h2><p class="hint">Радио LoRa продолжит работать. При выборе Bluetooth или Wi-Fi текущий USB-компаньон отключится. Wi-Fi сначала настройте и сохраните ниже.</p><div class="buttons"><button id="api-mode-ble" disabled>Bluetooth</button><button id="api-mode-wifi" disabled>Wi-Fi</button><button id="api-mode-usb" disabled>USB-компаньон</button></div><p id="api-mode-result" class="setting-state" role="status">Текущий режим не прочитан.</p>';$('api-wifi').before(transport);
+  transport.dataset.pages='connection';phrases.dataset.pages='phrases';
   for(const target of ['ble','wifi','usb'])$('api-mode-'+target).onclick=async()=>{
     if(!writable()||!await legacy.confirmAction('Переключить подключение на '+({ble:'Bluetooth',wifi:'Wi-Fi',usb:'USB-компаньон'}[target])+'? Текущее подключение может закрыться. Отправленный запрос не является подтверждением сохранения.'))return;
     if(!writable())return;
+    $('api-mode-result').dataset.action='1';
     await run(async()=>{try{const reply=await rec('ui mode '+target,'OK ui mode',true);if(reply.target!==target||reply.state!=='pending')throw new api.CliError('PROTOCOL');
       $('api-mode-result').textContent='Запрос принят. Проверяем состояние переключения…';
       await new Promise(resolve=>setTimeout(resolve,400));
@@ -50,6 +65,7 @@
   $('api-developer').before(phrases);
   const filter=document.createElement('div');filter.className='settings-filter';filter.innerHTML='<input id="api-settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек CLI"><label class="check"><input id="api-settings-advanced" type="checkbox">Расширенные настройки</label><label class="check"><input id="api-settings-unavailable" type="checkbox">Показать недоступные</label>';$('api-settings-fields').before(filter);
   const notifyState=document.createElement('p');notifyState.id='api-notify-state';notifyState.className='notice';notifyState.setAttribute('role','status');filter.before(notifyState);
+  notifyState.dataset.pages='sound';
   function filterSettings(){
     const text=$('api-settings-filter').value.trim().toLowerCase();
     for(const row of $('api-settings-fields').querySelectorAll('.setting-row'))row.hidden=!(row.dataset.search||'').includes(text)||row.dataset.supported==='false'&&!$('api-settings-unavailable').checked||(!text&&!$('api-settings-advanced').checked&&row.dataset.advanced==='true');
@@ -83,9 +99,9 @@
   manualBox.querySelector('input').setAttribute('aria-describedby','api-adc-manual-hint api-adc-manual-result');
   $('api-adc-reset-actions').before(manualBox);
   $('api-adc-source-warning').textContent=$('adc-source-warning').textContent;
-  const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema'];
+  const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema','sound_preview'];
   const GET_KEYS=['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted','agc_reset','fem_lna','fem_pa','bridge'];
-  const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
+  const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema','sound_preview']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
   function note(text,kind='info'){$('api-feedback').textContent=text;$('api-feedback').className='notice'+(kind==='error'?' error':kind==='warning'?' warning':'');}
   function log(text){const li=document.createElement('li');li.textContent=new Date().toLocaleTimeString('ru-RU')+' · '+text;$('api-log').prepend(li);while($('api-log').children.length>40)$('api-log').lastChild.remove();}
   const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing&&!networkRunning;
@@ -100,11 +116,17 @@
     $('transport-state').textContent=mode==='api'?phases[s.phase]||'Нода не подключена':s.busy?'Выполняется операция…':s.verified?'Консоль SmartUI подключена':s.connected?'Порт открыт; консоль не подтверждена':'Нода не подключена';
     $('transport-help').textContent=mode==='api'?'На ноде выберите USB-компаньон. Локальные команды CMD66, без чтения сообщений.':'На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.';
     connectionMeta.textContent=binaryState.hello?'SmartUI '+(binaryState.hello.firmware||'—')+' · '+(binaryState.hello.write==='1'?'Изменения разрешены':'Только чтение')+(connectionState?' · Режим: '+connectionState.mode:''):'';
-    for(const id of ['api-settings-load','api-command-send'])$(id).disabled=!available();
+    for(const id of ['api-settings-load','api-sound-read','api-command-send'])$(id).disabled=!available();
     $('api-notify-test').disabled=!writable()||!settings||!['sound','vibration','board_led','unread_led'].some(key=>caps?.[key]==='1');
+    soundPreview.disabled=!writable()||!settings||caps?.sound_preview!=='1'||caps?.sound!=='1';
+    previewHint.textContent=!settings?'Сначала считайте настройки звука.':caps?.sound_preview!=='1'?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
     notifyState.textContent=SmartUiConsole.notificationStatus(settings,caps);
+    if(!binaryState.connected){soundAction.textContent='Подключите ноду и считайте звук и пины.';delete soundAction.dataset.action;}
+    else if(settings&&!soundAction.dataset.action)soundAction.textContent='Показаны настройки, прочитанные с ноды. «Считать звук и пины» обновит их.';
     const wifi=wifiState?.supported==='1';$('api-wifi').hidden=wifiState?.supported==='0';
     for(const target of ['ble','wifi','usb']){$('api-mode-'+target).disabled=!writable()||!(Number(connectionState?.caps)&({ble:1,usb:2,wifi:4}[target]))||connectionState?.mode===target||target==='wifi'&&wifiState?.configured!=='1';$('api-mode-'+target).setAttribute('aria-pressed',String(connectionState?.mode===target));}
+    if(!binaryState.connected){$('api-mode-result').textContent='Текущий режим не прочитан.';delete $('api-mode-result').dataset.action;}
+    else if(connectionState&&!$('api-mode-result').dataset.action)$('api-mode-result').textContent='Текущий режим: '+({ble:'Bluetooth',wifi:'Wi-Fi',usb:'USB-компаньон'}[connectionState.mode]||connectionState.mode)+'.';
     for(const id of ['api-ssid','api-password','api-open-network','api-wifi-test','api-wifi-cancel'])$(id).disabled=!writable()||!wifi;
     $('api-wifi-status').disabled=!available()||!wifi;
     $('api-wifi-save').disabled=!writable()||!wifi||wifiState?.state!=='test_ok';
@@ -129,6 +151,7 @@
       ?'Окно активно · осталось по данным ноды: '+Math.ceil(adcService.remaining_ms/1000)+' с. Проверяем каждые 5 секунд.'
       :adcService.external?'Окно выключено. Обычная защита питания действует.':'Окно выключено. Нода не подтвердила питание USB.';
     renderNetworkControls();
+    renderPages();
   }
   async function run(operation){
     if(running)return;running=true;renderShell();
@@ -139,7 +162,7 @@
   }
   const client=new api.CliClient({
     onState(next){const lost=binaryState.connected&&!next.connected;binaryState=next;if(!next.connected){$('api-password').value='';$('api-adc-measured').value='';$('api-adc-manual-value').value='';adcManualSupported=false;preview=null;adcService=null;caps=null;settings=null;settingEdits.clear();melodyNames.clear();if(next.uncertain)acknowledgedLoss=true;}if(next.uncertain){adcService=null;preview=null;}renderShell();if(lost){for(const id of ['api-adc-result','api-adc-manual-result'])adcNote(adcOperation?.id===id?'USB отключён. Сохранение не подтверждено; переподключитесь и прочитайте ADC.':'USB отключён. Подключите ноду для проверки ADC.',adcOperation?.id===id?'error':'info',id);}},
-    onEvent({action,result}){log(result==='ok'?(action==='write'?'Ответ на изменение получен; проверяем результат.':action==='connect'?'Локальный CLI подключён.':'Ответ на чтение получен.'):'Операция не подтверждена.');}
+    onEvent({action,result}){log(result==='ok'?(action==='write'?'Ответ на изменение получен; проверяем результат.':action==='connect'?'Локальный CLI подключён.':'Ответ на чтение получен.'):result==='not_supported'?'Дополнительная возможность не поддерживается этой сборкой.':result==='FAILED'?'Нода ответила отказом. Подробности — в текущем разделе.':'Операция не подтверждена.');}
   });
   const rec=async(command,prefix,mutate=false)=>api.record(await client.execute(command,{mutate}),prefix);
   const exact=async(command,expected)=>{if(await client.execute(command,{mutate:true})!==expected)throw new api.CliError('PROTOCOL');};
@@ -301,12 +324,13 @@
       try{const reply=await rec('ui '+kind+' '+key,'OK ui '+kind);
         if(reply.key!==key||typeof reply.value!=='string'||!/^[-+]?\d+(?:\.\d+)?$/.test(reply.value)||!Number.isFinite(Number(reply.value)))throw new api.CliError('PROTOCOL');
         result[key]=reply.value;
-      }catch(error){if(optional.has(key)&&(error.reason==='unsupported'||['adc_service','schema'].includes(key)&&error.reason==='invalid'))result[key]='0';else throw error;}
+      }catch(error){if(optional.has(key)&&(error.reason==='unsupported'||['adc_service','schema','sound_preview'].includes(key)&&error.reason==='invalid'))result[key]='0';else throw error;}
     }
     return result;
   }
   const fields=[['muted',null,'Общая тишина',0,1],['sound_quiet','sound','Звук уведомлений ЛС',0,1],['volume','sound','Громкость',1,10],['melody','sound','Общая мелодия',0,30],['board_led','board_led','LED платы',0,1],['unread_led','unread_led','LED уведомлений',0,1],['vibration','vibration','Вибрация',0,1],['gps','gps','Аппаратный GPS',0,1],['battery_protection','battery_protection','Защита АКБ 3,2 В',0,1],['agc_reset','agc_reset','AGC-сброс · каждые 60 с',0,1],['fem_lna','fem_lna','FEM · усилитель приёма',0,1],['fem_pa','fem_pa','FEM · усилитель передачи',0,1],['bridge','bridge','Мостовой звук · два вывода',0,1]];
   async function loadSettings({discardEdits=false}={}){
+    try {
     caps=await readFields('caps',CAP_KEYS,OPTIONAL_CAPS);settings=await readFields('get',GET_KEYS,OPTIONAL_GET);preview=null;if(discardEdits)settingEdits.clear();
     schemas=Object.create(null);
     if(caps.schema==='1')for(const key of SmartUiConsole.SETTING_KEYS){
@@ -335,7 +359,7 @@
     }
     const container=$('api-settings-fields');container.replaceChildren();
     const groups={sound:'Звук и уведомления',lights:'Свет и вибрация',display:'Экран и оформление',gps:'Координаты',battery:'Аккумулятор',system:'Система и FEM'},panels={};
-    for(const [group,title]of Object.entries(groups)){const panel=document.createElement('section');panel.className='device-panel';const heading=document.createElement('h3');heading.textContent=title;panel.append(heading);panels[group]=panel;container.append(panel);}
+    for(const [group,title]of Object.entries(groups)){const panel=document.createElement('section');panel.className='device-panel';panel.dataset.pages=['sound','lights'].includes(group)?'sound':'device';const heading=document.createElement('h3');heading.textContent=title;panel.append(heading);panels[group]=panel;container.append(panel);}
     const extra=SmartUiConsole.EXTENDED_FIELDS.filter(f=>!fields.some(row=>row[0]===f.key));
     for(const[key,cap,label,min,maxDefault]of fields.concat(extra.map(f=>[f.key,null,f.label,0,1]))){
       const meta=SmartUiConsole.EXTENDED_FIELDS.find(f=>f.key===key),schema=schemas[key];
@@ -368,13 +392,17 @@
     $('api-adc').hidden=caps.adc!=='1';$('api-adc-value').textContent='Напряжение: '+(Number(settings.battery_mv)?(Number(settings.battery_mv)/1000).toFixed(3)+' В':'нет данных')+' · Сохранённый ADC-множитель: '+settings.adc_multiplier;
     $('api-adc-range').textContent='Заводской: '+settings.adc_default+'. Допустимо: '+caps.adc_min+'–'+caps.adc_max+'.';
     $('api-settings-status').textContent=settingEdits.size?'Есть несохранённые поля: '+settingEdits.size:'Прочитано с ноды';renderShell();
+    } catch(error) {
+      settings=null;caps=null;schemas=Object.create(null);preview=null;adcManualSupported=false;
+      $('api-settings-fields').replaceChildren();$('api-settings-status').textContent='Чтение не подтверждено';
+      throw error;
+    }
   }
   async function wifiStatus(){wifiState=await rec('ui wifi status','OK ui wifi');if(!['supported','configured','associated'].every(key=>['0','1'].includes(wifiState[key]))||!(wifiState.ip==='none'||/^(?:\d{1,3}\.){3}\d{1,3}$/.test(wifiState.ip)&&wifiState.ip.split('.').every(n=>Number(n)<=255)))throw new api.CliError('PROTOCOL');const names={idle:'Нет незавершённой настройки',ssid:'Ожидает имя сети',password:'Ожидает пароль',ready:'Можно начать проверку',testing:'Проверка идёт — запросите результат через несколько секунд',test_ok:'Проверка успешна. Сеть ещё не сохранена',saved:'Сеть сохранена',cancelled:'Проверка отменена',failed:'Проверка не прошла; старые настройки сохранены',timeout:'Время проверки истекло'};$('api-wifi-state').textContent=names[wifiState.state]||'Состояние не распознано';renderShell();}
   $('helper-mode').onchange=()=>{
     if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing){$('helper-mode').value=mode;return;}
     mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
-    document.querySelector('.tool-nav a').href=mode==='api'?'#connection-dock':'#connection-section';
-    document.querySelectorAll('[data-api-nav]').forEach(el=>el.hidden=mode!=='api');document.querySelectorAll('[data-console-nav]').forEach(el=>el.hidden=mode==='api');$('refresh').hidden=mode==='api';renderShell();
+    $('refresh').hidden=mode==='api';renderPages();renderShell();
   };
   const originalConnect=$('connect').onclick,originalDisconnect=$('disconnect').onclick;
   $('connect').onclick=async()=>{
@@ -395,8 +423,31 @@
 
 
   $('api-settings-load').onclick=async()=>{if(settingEdits.size&&!await legacy.confirmAction('Отменить несохранённые поля и прочитать значения с ноды заново?'))return;await run(()=>loadSettings({discardEdits:true}));};
-
-  $('api-notify-test').onclick=async()=>{const session=client.session;if(settingEdits.size&&!await legacy.confirmAction('Есть несохранённые поля. Проверить уведомление с прежними настройками, уже сохранёнными на ноде?'))return;if(session!==client.session)return;await run(async()=>{if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');note('Команда теста принята. '+SmartUiConsole.notificationStatus(settings,caps));});};
+  const soundNote=(text,kind='info')=>{soundAction.textContent=text;soundAction.dataset.kind=kind;soundAction.dataset.action='1';};
+  $('api-sound-read').onclick=async()=>{
+    if(SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingEdits.has(key))&&!await legacy.confirmAction('Считать звук и пины с ноды? Несохранённые поля звука и индикации будут заменены фактическими значениями. Остальные поля сохранятся.'))return;
+    await run(async()=>{soundNote('Считываем фактические настройки звука и пинов…');try{
+      await loadSettings();for(const key of SmartUiConsole.SOUND_SETTING_KEYS){settingEdits.delete(key);const field=$('api-setting-'+key);if(field&&settings[key]!==undefined){field.value=String(settings[key]);field.onchange();}}
+      soundNote('Прочитано с ноды в '+new Date().toLocaleTimeString('ru-RU')+'. '+SmartUiConsole.notificationStatus(settings,caps));
+    }catch(error){soundNote(error.safe?error.message:'Не удалось прочитать звук и пины. Старые значения не подтверждены.','error');throw error;}});
+  };
+  soundPreview.onclick=async()=>{
+    const session=client.session;
+    if(SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingEdits.has(key))&&!await legacy.confirmAction('Есть несохранённые поля звука. Прослушать мелодию с прежними настройками, сохранёнными на ноде?'))return;
+    if(session!==client.session)return;
+    await run(async()=>{try{
+      soundNote('Читаем настройки перед прослушиванием…');await loadSettings();
+      if(Number(settings?.muted)===1){soundNote('Общая тишина включена. Выключите её и сохраните: прослушивание не меняет этот переключатель.','warning');return;}
+      if(caps?.sound_preview!=='1'){soundNote('Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16.','warning');return;}
+      if(await client.execute('ui sound preview',{mutate:true})!=='OK ui sound_preview')throw new api.CliError('PROTOCOL');
+      soundNote('Нода приняла запуск сохранённой мелодии '+settings.melody+' на выводе '+settings.tone_pin+'. Настройки уведомлений не изменены. Проверьте звук на устройстве.');
+    }catch(error){soundNote(error.safe?error.message:'Запуск мелодии не подтверждён.','error');throw error;}});
+  };
+  $('api-notify-test').onclick=async()=>{const session=client.session;if(settingEdits.size&&!await legacy.confirmAction('Есть несохранённые поля. Проверить уведомление с прежними настройками, уже сохранёнными на ноде?'))return;if(session!==client.session)return;await run(async()=>{try{
+    soundNote('Читаем настройки перед проверкой уведомления…');await loadSettings();
+    if(Number(settings?.muted)===1){soundNote('Общая тишина включена: уведомление подавлено. Выключите её и сохраните, если хотите проверить уведомление.','warning');return;}
+    if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');soundNote('Запрос уведомления принят. '+SmartUiConsole.notificationStatus(settings,caps));
+  }catch(error){soundNote(error.safe?error.message:'Тест не подтверждён.','error');throw error;}});};
 
   const adcNote=(text,kind='info',id='api-adc-result')=>{$(id).textContent=text;$(id).classList.add('adc-feedback');$(id).dataset.kind=kind;};
   async function runAdc(operation,{progress='Выполняем запрос к ноде…',success,id='api-adc-result'}={}){
@@ -475,6 +526,8 @@
     });
   };
   window.addEventListener('beforeunload',()=>{$('api-password').value='';});
-  for(const anchor of document.querySelectorAll('.tool-nav a'))anchor.addEventListener('click',()=>{document.querySelectorAll('.tool-nav a').forEach(a=>a.removeAttribute('aria-current'));anchor.setAttribute('aria-current','location');});
+  const tabs=[...document.querySelectorAll('[data-page-target]')];
+  for(const tab of tabs){tab.onclick=()=>{activePage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
+  renderPages();
   renderShell();
 })();

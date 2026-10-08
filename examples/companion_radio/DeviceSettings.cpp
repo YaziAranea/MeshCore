@@ -367,6 +367,26 @@ bool DeviceSettings::handleSettings(const char* command, char* reply, size_t cap
     }
     return true;
   }
+  if (strcmp(command, "settings sound preview") == 0) {
+    if (!caps.sound || !_hooks.previewSound) {
+      response(reply, capacity, "ERR settings unsupported");
+    } else {
+      const SoundPreviewResult result = _hooks.previewSound();
+      switch (result) {
+        case SoundPreviewResult::STARTED:
+          response(reply, capacity, "OK settings sound_preview"); break;
+        case SoundPreviewResult::MUTED:
+          response(reply, capacity, "ERR settings muted"); break;
+        case SoundPreviewResult::BUSY:
+          response(reply, capacity, "ERR settings busy"); break;
+        case SoundPreviewResult::PIN_CONFLICT:
+          response(reply, capacity, "ERR settings pin_conflict"); break;
+        default:
+          response(reply, capacity, "ERR settings unsupported"); break;
+      }
+    }
+    return true;
+  }
   if (strncmp(command, "settings set ", 13) != 0) {
     response(reply, capacity, "ERR settings invalid");
     return true;
@@ -462,6 +482,11 @@ bool DeviceSettings::handleSettings(const char* command, char* reply, size_t cap
 
 bool DeviceSettings::handleExtended(const char* command, char* reply, size_t capacity,
                                     bool allow_mutation) {
+  if (strcmp(command, "settings caps sound_preview") == 0) {
+    snprintf(reply, capacity, "OK settings caps key=sound_preview value=%u",
+        _hooks.caps().sound && _hooks.previewSound ? 1U : 0U);
+    return true;
+  }
   if (strcmp(command, "settings caps schema") == 0) {
     response(reply, capacity, "OK settings caps key=schema value=1");
     return true;

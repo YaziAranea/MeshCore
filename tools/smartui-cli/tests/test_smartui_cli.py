@@ -302,7 +302,7 @@ class CliTests(unittest.TestCase):
 
     def test_readonly_infers_writes(self):
         client, board = self.connected(readonly=True)
-        for command in ("ui set volume 2", "ui test", "ui adc apply 7", "ui adc reset",
+        for command in ("ui set volume 2", "ui test", "ui sound preview", "ui adc apply 7", "ui adc reset",
                         "ui wifi begin", "ui wifi password 74657374", "ui mode ble",
                         "ui radio set 868731 62500 7 7 2", "ui advert set 120", "ui adc service start",
                         "ui adc set 1.815000"):

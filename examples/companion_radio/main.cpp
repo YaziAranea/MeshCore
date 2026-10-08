@@ -452,6 +452,13 @@ static void testDeviceNotification() {
   ui_task.previewNotifyMode();
 #endif
 }
+static smartui::SoundPreviewResult previewDeviceSound() {
+#ifdef DISPLAY_CLASS
+  return ui_task.previewSavedMelody();
+#else
+  return smartui::SoundPreviewResult::UNSUPPORTED;
+#endif
+}
 static bool handleCompanionDeviceSettings(const char* command, char* reply,
                                           size_t capacity, bool allow_mutation) {
   if (smartui::handleCoreSettingsCommand(command, reply, capacity, allow_mutation,
@@ -1018,6 +1025,7 @@ void setup() {
   settings_hooks.pinOptions = deviceSettingsPinOptions;
   settings_hooks.pinValue = deviceSettingsPinValue;
   settings_hooks.testNotification = testDeviceNotification;
+  settings_hooks.previewSound = previewDeviceSound;
   settings_hooks.adcService = consoleAdcService;
   settings_hooks.adcCommitted = stopSmartUiAdcCalibrationService;
   device_settings.begin(settings_hooks);

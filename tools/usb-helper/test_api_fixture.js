@@ -4,7 +4,7 @@ function installApiMock(options={}) {
   const enc=new TextEncoder(),hex=text=>Array.from(enc.encode(text),b=>b.toString(16).padStart(2,'0')).join('');
   const mock={
     commands:[],packets:[],requests:0,openCount:0,maxOpen:0,closed:true,readerCount:0,readCalls:0,drop:false,wrong:false,errorNext:null,phrases:Array(9).fill(''),mode:'usb',
-    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...options.caps},
+    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...options.caps},
     settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...options.settings},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',adcService:{supported:1,active:0,remaining_ms:0,external:1},adcServiceDeadline:0,
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
@@ -67,6 +67,7 @@ function installApiMock(options={}) {
       else if(/^ui mode (ble|wifi|usb)$/.test(cmd)){this.mode=cmd.slice(8);text='OK ui mode target='+this.mode+' state=pending';}
       else if(cmd==='ui mode status')text='OK ui mode pending=none error=none';
       else if(cmd==='ui test')text=options.readonly?'ERR ui readonly':'OK ui test';
+      else if(cmd==='ui sound preview')text=options.readonly?'ERR ui readonly':!options.soundPreview?'ERR ui unsupported':this.settings.muted?'ERR ui muted':'OK ui sound_preview';
       else if(cmd==='ui adc manual')text=options.manualAdc===undefined?'ERR ui invalid':'OK ui adc_manual supported='+Number(options.manualAdc);
       else if(cmd.startsWith('ui adc set ')){
         if(options.readonly||!options.manualAdc)text='ERR ui '+(options.readonly?'readonly':'unsupported');

@@ -25,6 +25,8 @@ static const char* melody_name;
 static unsigned bridge_calls;
 static bool bridge_ok;
 static unsigned adc_commits, adc_service_calls;
+static unsigned sound_previews;
+static SoundPreviewResult sound_preview_result;
 static bool adc_service_active;
 static DeviceSettings service;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
@@ -59,6 +61,7 @@ static bool readCalibrationBattery(uint16_t& millivolts, float& sample_multiplie
 static float readAdc() { return multiplier; }
 static uint32_t readMillis() { return now; }
 static void testNotification() { ++tests; }
+static SoundPreviewResult previewSound() { ++sound_previews; return sound_preview_result; }
 static const char* melodyName(uint8_t id) { ++melody_reads; CHECK(id <= caps.melody_max); return melody_name; }
 static bool setToneBridge(bool enabled) {
   ++bridge_calls;
@@ -102,6 +105,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   melody_name = "Test tone";
   bridge_calls = 0; bridge_ok = true;
   adc_commits = adc_service_calls = 0; adc_service_active = false;
+  sound_previews = 0; sound_preview_result = SoundPreviewResult::STARTED;
   persisted = state;
   DeviceSettingsHooks hooks;
   hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
@@ -109,6 +113,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   hooks.batteryCalibrationSample = calibration_source_enabled ? readCalibrationBattery : nullptr;
   hooks.adcMultiplier = readAdc; hooks.millis = readMillis;
   hooks.testNotification = testNotification;
+  hooks.previewSound = previewSound;
   hooks.melodyName = names ? melodyName : nullptr;
   hooks.setToneBridge = bridge_hook ? setToneBridge : nullptr;
   hooks.adcCommitted = adcCommitted;
@@ -567,6 +572,38 @@ int main() {
   CHECK(cliCommand("ui test") == "OK ui test");
   CHECK(tests == 1);
   CHECK(cliCommand("ui test now") == "ERR ui invalid");
+
+  fresh();
+  state.sound_quiet = 1; state.notify_mode = state.important_notify_mode = 1;
+  const auto preview_before = state;
+  CHECK(command("settings caps sound_preview", false) == "OK settings caps key=sound_preview value=1");
+  CHECK(cliCommand("ui caps sound_preview", false) == "OK ui caps key=sound_preview value=1");
+  CHECK(command("settings sound preview", false) == "ERR settings readonly");
+  CHECK(cliCommand("ui sound preview", false) == "ERR ui readonly");
+  CHECK(sound_previews == 0);
+  CHECK(command("settings sound preview") == "OK settings sound_preview");
+  CHECK(cliCommand("ui sound preview") == "OK ui sound_preview");
+  CHECK(sound_previews == 2 && writes == 0 && saves == 0 && applies == 0);
+  CHECK(memcmp(&state, &preview_before, sizeof(state)) == 0);
+  for (const auto result : {SoundPreviewResult::MUTED, SoundPreviewResult::BUSY,
+                           SoundPreviewResult::PIN_CONFLICT, SoundPreviewResult::UNSUPPORTED}) {
+    sound_preview_result = result;
+    const char* error = result == SoundPreviewResult::MUTED ? "muted" :
+        result == SoundPreviewResult::BUSY ? "busy" :
+        result == SoundPreviewResult::PIN_CONFLICT ? "pin_conflict" : "unsupported";
+    CHECK(command("settings sound preview") == std::string("ERR settings ") + error);
+    CHECK(cliCommand("ui sound preview") == std::string("ERR ui ") + error);
+  }
+  const auto previews_before = sound_previews;
+  for (const char* invalid : {"ui sound", "ui sound preview 1", "ui sound stop"})
+    CHECK(cliCommand(invalid) == "ERR ui invalid");
+  CHECK(sound_previews == previews_before);
+  caps.sound = false;
+  CHECK(command("settings caps sound_preview", false) == "OK settings caps key=sound_preview value=0");
+  CHECK(cliCommand("ui caps sound_preview", false) == "OK ui caps key=sound_preview value=0");
+  CHECK(command("settings sound preview") == "ERR settings unsupported");
+  CHECK(cliCommand("ui sound preview") == "ERR ui unsupported");
+  CHECK(sound_previews == previews_before && writes == 0 && saves == 0 && applies == 0);
 
   fresh(1.815f); calibration_source_enabled = calibration_source_valid = true;
   multiplier = state.adc_override = 1.97f;
