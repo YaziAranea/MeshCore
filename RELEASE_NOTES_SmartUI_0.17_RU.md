@@ -5,6 +5,11 @@
 Инструкция и контракт команд входят в Developer Kit; встроенные страницы
 `help` локального companion CLI удалены.
 
+**Дополнение к документации 9 октября:** [доступность команд по каждой плате](https://github.com/YaziAranea/MeshCore/blob/smartui-0.17/docs/CLI_BOARD_MATRIX_RU.md).
+Матрица входит также в ZIP помощника и Developer Kit. Уточнено, что `fem.pa`
+означает переключаемое усиление, а не питание PA; успешный `get` не доказывает
+поддержку изменения. Команды и логика прошивки этим дополнением не изменены.
+
 ## Что изменилось
 
 1. **Понятные переключатели.** `set sound on/off` разрешает звук уведомлений,
@@ -61,6 +66,7 @@ ADC через `preview/apply` и настройка Wi-Fi через `test/save
 
 ## Документация
 
+- [Матрица команд по семи платам](https://github.com/YaziAranea/MeshCore/blob/smartui-0.17/docs/CLI_BOARD_MATRIX_RU.md).
 - [Все команды и примеры](https://github.com/YaziAranea/MeshCore/blob/smartui-0.17/docs/CONSOLE_COMMANDS_RU.md).
 - [Контракт CLI для приложения](https://github.com/YaziAranea/MeshCore/blob/smartui-0.17/docs/SMARTUI_CLI_RU.md).
 - [Подключение и работа USB Helper](https://github.com/YaziAranea/MeshCore/blob/smartui-0.17/tools/usb-helper/README_RU.md).

@@ -42,6 +42,7 @@ def package(output):
         "README_RU.md": (SOURCE / "README_RU.md").read_bytes(),
         "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "docs/CONSOLE_COMMANDS_RU.md": (ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes(),
+        "docs/CLI_BOARD_MATRIX_RU.md": (ROOT / "docs/CLI_BOARD_MATRIX_RU.md").read_bytes(),
         "docs/SMARTUI_CLI_RU.md": (ROOT / "docs/SMARTUI_CLI_RU.md").read_bytes(),
         "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
         "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),

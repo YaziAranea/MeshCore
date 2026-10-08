@@ -61,6 +61,8 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertIn("SmartUI 0.17", readme)
             self.assertIn("USB Helper 2.4", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
+            self.assertIn("[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md)", readme)
+            self.assertIn("docs/CLI_BOARD_MATRIX_RU.md", kit.SOURCES)
             self.assertNotIn("LOCAL DEVELOPMENT", readme)
             self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md"})
             for entry in manifest["files"]:

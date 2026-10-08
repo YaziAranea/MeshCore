@@ -63,6 +63,7 @@ class HelperPackageTests(unittest.TestCase):
                 self.assertEqual(set(archive.namelist()), {
                     helper.HTML_NAME, "README_RU.md", "PRESETS_SOURCE_RU.md", "LICENSE", "SHA256SUMS.txt",
                     "docs/CONSOLE_COMMANDS_RU.md",
+                    "docs/CLI_BOARD_MATRIX_RU.md",
                     "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
                     "tools/usb-helper/PRESETS_SOURCE_RU.md",
                     "screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
@@ -73,7 +74,7 @@ class HelperPackageTests(unittest.TestCase):
                 self.assertEqual(archive.read(helper.HTML_NAME), first[0].read_bytes())
                 self.assertEqual(archive.read("docs/CONSOLE_COMMANDS_RU.md"),
                                  (helper.ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes())
-                for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md",
+                for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
                              "tools/smartui-cli/README.md"):
                     self.assertEqual(archive.read(name), (helper.ROOT / name).read_bytes())
                     for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):

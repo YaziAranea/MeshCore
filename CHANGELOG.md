@@ -2,6 +2,10 @@
 
 ## [Smart UI 0.17](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.17) — 2026-10-09
 
+Дополнение документации в этом же выпуске: [матрица команд по платам](docs/CLI_BOARD_MATRIX_RU.md),
+проверка `caps`/`schema`, условия GPIO/вибрации/GPS/дисплея и точное назначение FEM.
+Матрица включена в Helper ZIP и Developer Kit; логика прошивки не менялась.
+
 1. Добавлены понятные `sound`, `mute`, `night_quiet`, `sound preview`, `test`,
    `get/set connection` и текстовые `reply get/set/reset`. Фразы не требуют HEX;
    старые машинные команды сохранены. Возможности объявляются через `control=1`.

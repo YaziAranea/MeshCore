@@ -15,6 +15,7 @@ SOURCES = (
     "LICENSE",
     "docs/SMARTUI_CLI_RU.md",
     "docs/CONSOLE_COMMANDS_RU.md",
+    "docs/CLI_BOARD_MATRIX_RU.md",
     "tools/smartui-cli/README.md",
     "tools/smartui-cli/inspect_device.py",
     "tools/smartui-cli/smartui_cli.py",
@@ -75,6 +76,7 @@ def package(output, commit, *, root=ROOT, development=False):
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "
         "[Справочник команд](docs/CONSOLE_COMMANDS_RU.md) · "
+        "[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md) · "
         "[Python и JavaScript SDK](tools/smartui-cli/README.md)\n\n"
         "Это исходники SDK, документация и тесты, не прошивка устройства. "
         f"Для обычной настройки используйте {helper}. "
