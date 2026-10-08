@@ -6,6 +6,7 @@ function installApiMock(options={}) {
     commands:[],packets:[],requests:0,openCount:0,maxOpen:0,closed:true,readerCount:0,readCalls:0,drop:false,wrong:false,errorNext:null,phrases:Array(9).fill(''),mode:'usb',
     caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...options.caps},
     settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...options.settings},
+    settingsReadErrors:{...options.settingsReadErrors},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',adcService:{supported:1,active:0,remaining_ms:0,external:1},adcServiceDeadline:0,
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
     meshcore:{name:'Тестовая нода',tx:'20',af:'1',dutycycle:'50.0%',rxdelay:'0','multi.acks':'0','path.hash.mode':'1','radio.rxgain':'off','tz.offset':'0',freq:'869.525','wifi.status':'connected','wifi.ip':'192.168.1.2'},
@@ -60,7 +61,7 @@ function installApiMock(options={}) {
       else if(/^ui reply get [1-9]$/.test(cmd)){const slot=Number(cmd.slice(-1));text='OK ui reply slot='+slot+' hex='+(hex(this.phrases[slot-1])||'-');}
       else if(/^ui reply set [1-9] /.test(cmd)){const [, , ,n,h]=cmd.split(' ');this.phrases[Number(n)-1]=h==='-'?'':new TextDecoder().decode(Uint8Array.from(h.match(/../g),b=>parseInt(b,16)));text='OK ui reply_saved slot='+n;}
       else if(cmd.startsWith('ui caps ')){const key=cmd.slice(8);text=Object.hasOwn(this.caps,key)?'OK ui caps key='+key+' value='+this.caps[key]:'ERR ui '+(key==='adc_service'?'invalid':'unsupported');}
-      else if(cmd.startsWith('ui get ')){const key=cmd.slice(7);text=Object.hasOwn(this.settings,key)?'OK ui get key='+key+' value='+this.settings[key]:'ERR ui unsupported';}
+      else if(cmd.startsWith('ui get ')){const key=cmd.slice(7);text=this.settingsReadErrors[key]?'ERR ui '+this.settingsReadErrors[key]:Object.hasOwn(this.settings,key)?'OK ui get key='+key+' value='+this.settings[key]:'ERR ui unsupported';}
       else if(cmd.startsWith('ui set ')){const [, ,key,v]=cmd.split(' ');if(options.readonly)text='ERR ui readonly';else{this.settings[key]=Number(v);if(key==='battery_protection')this.settings.shutdown_mv=Number(v)?3200:2700;text='OK ui set key='+key+' value='+v;}}
       else if(cmd.startsWith('ui melody ')){const id=Number(cmd.split(' ').at(-1));text='OK ui melody id='+id+' name_hex='+hex(['Пульс','Трель','Колокол'][id]||'Мелодия '+id);}
       else if(cmd==='ui connection')text='OK ui connection mode='+this.mode+' client=usb caps='+(options.wifi===false?'3':'7')+' write='+(options.readonly?'0':'1');

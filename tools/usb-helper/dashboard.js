@@ -44,6 +44,7 @@
   const soundPreview=document.createElement('button');soundPreview.id='api-sound-preview';soundPreview.textContent='Прослушать мелодию';soundPreview.dataset.pages='sound';soundPreview.disabled=true;$('api-notify-test').before(soundPreview);
   const previewHint=document.createElement('p');previewHint.id='api-sound-preview-hint';previewHint.className='hint';previewHint.dataset.pages='sound';$('api-settings-fields').before(previewHint);
   const soundAction=document.createElement('p');soundAction.id='api-sound-action-status';soundAction.className='notice';soundAction.dataset.pages='sound';soundAction.setAttribute('role','status');soundAction.textContent='Считайте настройки ноды перед проверкой звука.';$('api-settings-fields').before(soundAction);
+  const soundOutput=document.createElement('p');soundOutput.id='api-sound-output-state';soundOutput.className='notice';soundOutput.dataset.pages='sound';soundOutput.setAttribute('role','status');$('api-settings-fields').before(soundOutput);
   const phrases=document.createElement('section');phrases.className='card wide';phrases.id='api-phrases';
   const transport=document.createElement('section');transport.className='card wide';transport.id='api-transport';
   transport.innerHTML='<p class="panel-kicker">Подключение</p><h2>Как приложение подключается к ноде</h2><p class="hint">Радио LoRa продолжит работать. При выборе Bluetooth или Wi-Fi текущий USB-компаньон отключится. Wi-Fi сначала настройте и сохраните ниже.</p><div class="buttons"><button id="api-mode-ble" disabled>Bluetooth</button><button id="api-mode-wifi" disabled>Wi-Fi</button><button id="api-mode-usb" disabled>USB-компаньон</button></div><p id="api-mode-result" class="setting-state" role="status">Текущий режим не прочитан.</p>';$('api-wifi').before(transport);
@@ -68,7 +69,7 @@
   notifyState.dataset.pages='sound';
   function filterSettings(){
     const text=$('api-settings-filter').value.trim().toLowerCase();
-    for(const row of $('api-settings-fields').querySelectorAll('.setting-row'))row.hidden=!(row.dataset.search||'').includes(text)||row.dataset.supported==='false'&&!$('api-settings-unavailable').checked||(!text&&!$('api-settings-advanced').checked&&row.dataset.advanced==='true');
+    for(const row of $('api-settings-fields').querySelectorAll('.setting-row'))row.hidden=!(row.dataset.search||'').includes(text)||row.dataset.key!=='bridge'&&row.dataset.supported==='false'&&!$('api-settings-unavailable').checked||(!text&&!$('api-settings-advanced').checked&&row.dataset.advanced==='true');
     for(const panel of $('api-settings-fields').children)panel.hidden=![...panel.querySelectorAll('.setting-row')].some(row=>!row.hidden);
   }
   $('api-settings-filter').oninput=filterSettings;$('api-settings-unavailable').onchange=filterSettings;$('api-settings-advanced').onchange=filterSettings;
@@ -121,6 +122,7 @@
     soundPreview.disabled=!writable()||!settings||caps?.sound_preview!=='1'||caps?.sound!=='1';
     previewHint.textContent=!settings?'Сначала считайте настройки звука.':caps?.sound_preview!=='1'?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
     notifyState.textContent=SmartUiConsole.notificationStatus(settings,caps);
+    soundOutput.textContent=SmartUiConsole.soundOutputStatus(settings,schemas,caps);
     if(!binaryState.connected){soundAction.textContent='Подключите ноду и считайте звук и пины.';delete soundAction.dataset.action;}
     else if(settings&&!soundAction.dataset.action)soundAction.textContent='Показаны настройки, прочитанные с ноды. «Считать звук и пины» обновит их.';
     const wifi=wifiState?.supported==='1';$('api-wifi').hidden=wifiState?.supported==='0';
@@ -324,7 +326,7 @@
       try{const reply=await rec('ui '+kind+' '+key,'OK ui '+kind);
         if(reply.key!==key||typeof reply.value!=='string'||!/^[-+]?\d+(?:\.\d+)?$/.test(reply.value)||!Number.isFinite(Number(reply.value)))throw new api.CliError('PROTOCOL');
         result[key]=reply.value;
-      }catch(error){if(optional.has(key)&&(error.reason==='unsupported'||['adc_service','schema','sound_preview'].includes(key)&&error.reason==='invalid'))result[key]='0';else throw error;}
+      }catch(error){if(optional.has(key)&&(error.reason==='unsupported'||['adc_service','schema','sound_preview'].includes(key)&&error.reason==='invalid')){if(kind==='caps')result[key]='0';}else throw error;}
     }
     return result;
   }
@@ -363,20 +365,20 @@
     const extra=SmartUiConsole.EXTENDED_FIELDS.filter(f=>!fields.some(row=>row[0]===f.key));
     for(const[key,cap,label,min,maxDefault]of fields.concat(extra.map(f=>[f.key,null,f.label,0,1]))){
       const meta=SmartUiConsole.EXTENDED_FIELDS.find(f=>f.key===key),schema=schemas[key];
-      if(!schema&&(meta&&!fields.some(row=>row[0]===key)||cap&&caps[cap]!=='1'))continue;
+      if(key!=='bridge'&&!schema&&(meta&&!fields.some(row=>row[0]===key)||cap&&caps[cap]!=='1'))continue;
       const max=key==='melody'?numeric(caps.melody_max,255):maxDefault;
-      const supported=schema?schema.supported:true,current=supported?Number(settings[key]):null;
+      const supported=schema?schema.supported:!cap||caps[cap]==='1',current=supported?Number(settings[key]):null;
       if(supported&&!(schema?SmartUiConsole.settingValueValid(schema,current):Number.isInteger(current)&&current>=min&&current<=max))throw new api.CliError('PROTOCOL');
-      const row=document.createElement('div');row.className='setting-row';row.dataset.advanced=String(SmartUiConsole.ADVANCED_SETTING_KEYS.includes(key));row.dataset.search=(label+' '+key).toLowerCase();row.dataset.supported=String(supported);const caption=document.createElement('label');caption.htmlFor='api-setting-'+key;caption.textContent=label;
+      const row=document.createElement('div');row.className='setting-row';row.dataset.key=key;row.dataset.advanced=String(SmartUiConsole.ADVANCED_SETTING_KEYS.includes(key));row.dataset.search=(label+' '+key).toLowerCase();row.dataset.supported=String(supported);const caption=document.createElement('label');caption.htmlFor='api-setting-'+key;caption.textContent=label;
       const options=schema?SmartUiConsole.settingOptions({key},schema,Object.fromEntries(melodyNames)):Array.from({length:max-min+1},(_,i)=>[i+min,key==='sound_quiet'?(i?'Выключен':'Включён'):key==='melody'?(melodyNames.has(i+min)?(i+min)+' · '+melodyNames.get(i+min):'Мелодия '+(i+min)):max===1?(i?'Включено':'Выключено'):String(i+min)]);
       const controls=document.createElement('div');controls.className='setting-controls';const select=document.createElement(options?'select':'input');select.id='api-setting-'+key;select.dataset.supported=String(supported);
       if(options)for(const [value,text]of options){const option=document.createElement('option');option.value=String(value);option.textContent=text;select.append(option);}
       else{select.type='number';select.min=schema.min;select.max=schema.max;select.step=schema.step;}
       select.value=supported?String(current):'';const storedLabel=select.selectedOptions?.[0]?.textContent||String(current);
-      if(settingEdits.has(key)&&Number(settingEdits.get(key))!==current)select.value=settingEdits.get(key);else settingEdits.delete(key);
+      if(supported&&settingEdits.has(key)&&Number(settingEdits.get(key))!==current)select.value=settingEdits.get(key);else settingEdits.delete(key);
       const save=document.createElement('button');save.textContent='Сохранить';save.setAttribute('aria-label','Сохранить CLI: '+label);save.dataset.supported=String(supported);save.dataset.settingKey=key;
       const status=document.createElement('p');status.className='setting-state';status.id='api-saved-'+key;status.textContent=!supported?'Недоступно на этой плате или в этой сборке':'На ноде: '+storedLabel+(settingEdits.has(key)?' · Изменение не сохранено':' · Прочитано')+(key.endsWith('_pin')?' · Только разрешённые прошивкой выводы.':'');status.dataset.dirty=String(settingEdits.has(key));
-      select.onchange=()=>{const dirty=Number(select.value)!==Number(settings[key]);if(dirty)settingEdits.set(key,select.value);else settingEdits.delete(key);status.textContent=dirty?'Изменение не сохранено':'На ноде: '+storedLabel+' · Прочитано';status.dataset.dirty=String(dirty);$('api-settings-status').textContent=settingEdits.size?'Есть несохранённые поля: '+settingEdits.size:'Прочитано с ноды';renderShell();};
+      select.onchange=()=>{if(!supported)return;const dirty=Number(select.value)!==Number(settings[key]);if(dirty)settingEdits.set(key,select.value);else settingEdits.delete(key);status.textContent=dirty?'Изменение не сохранено':'На ноде: '+storedLabel+' · Прочитано';status.dataset.dirty=String(dirty);$('api-settings-status').textContent=settingEdits.size?'Есть несохранённые поля: '+settingEdits.size:'Прочитано с ноды';renderShell();};
       if(select.tagName==='INPUT')select.oninput=select.onchange;
       save.onclick=async()=>{
         const value=Number(select.value);if(value===Number(settings[key]))return;
@@ -427,7 +429,7 @@
   $('api-sound-read').onclick=async()=>{
     if(SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingEdits.has(key))&&!await legacy.confirmAction('Считать звук и пины с ноды? Несохранённые поля звука и индикации будут заменены фактическими значениями. Остальные поля сохранятся.'))return;
     await run(async()=>{soundNote('Считываем фактические настройки звука и пинов…');try{
-      await loadSettings();for(const key of SmartUiConsole.SOUND_SETTING_KEYS){settingEdits.delete(key);const field=$('api-setting-'+key);if(field&&settings[key]!==undefined){field.value=String(settings[key]);field.onchange();}}
+      await loadSettings();for(const key of SmartUiConsole.SOUND_SETTING_KEYS){settingEdits.delete(key);const field=$('api-setting-'+key);if(field&&field.dataset.supported==='true'&&settings[key]!==undefined){field.value=String(settings[key]);field.onchange();}}
       soundNote('Прочитано с ноды в '+new Date().toLocaleTimeString('ru-RU')+'. '+SmartUiConsole.notificationStatus(settings,caps));
     }catch(error){soundNote(error.safe?error.message:'Не удалось прочитать звук и пины. Старые значения не подтверждены.','error');throw error;}});
   };

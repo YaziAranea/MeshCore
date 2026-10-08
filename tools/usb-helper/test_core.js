@@ -26,13 +26,43 @@ test('sound_quiet uses positive labels and notification status describes saved b
   assert.match(notificationStatus(SETTINGS,SETTINGS_CAPS),/Звук включён на ноде/);
 });
 
-test('sound tabs include all output pins as basic controls',()=>{
+test('sound tabs include bridge and all output pins as basic controls',()=>{
   const {SOUND_SETTING_KEYS,ADVANCED_SETTING_KEYS}=require('./core');
-  for(const key of ['tone_pin','led_pin','vibe_pin']){
+  for(const key of ['bridge','tone_pin','led_pin','vibe_pin']){
     assert.equal(SOUND_SETTING_KEYS.includes(key),true,key+' belongs to sound refresh');
     assert.equal(ADVANCED_SETTING_KEYS.includes(key),false,key+' must remain discoverable without advanced mode');
   }
   assert.equal(SOUND_SETTING_KEYS.includes('ui_theme'),false,'A sound-only refresh must preserve unrelated drafts');
+});
+
+test('sound output summary distinguishes confirmed bridge values, unsupported and unread states',()=>{
+  const {soundOutputStatus}=require('./core');
+  const schemas={bridge:{supported:true}},settings={bridge:0,tone_pin:31,volume:7};
+  assert.match(soundOutputStatus(settings,schemas),/Мост: выключен · Вывод звука: 31 · Громкость: 7 \/ 10/);
+  assert.match(soundOutputStatus({...settings,bridge:1},schemas),/Мост: включён/);
+  assert.match(soundOutputStatus(settings,{bridge:{supported:false}}),/Мост: недоступен/,'Unsupported schema must override a stale raw zero');
+  assert.match(soundOutputStatus(settings,{}, {bridge:0}),/Мост: недоступен/);
+  assert.match(soundOutputStatus(settings,{}, {bridge:1}),/Мост: выключен/);
+  for(const value of [undefined,null,'',2,NaN]){
+    assert.match(soundOutputStatus({...settings,bridge:value},schemas),/Мост: не прочитан/,'Invalid or missing bridge must not become off: '+String(value));
+  }
+  assert.match(soundOutputStatus(null),/Мост: не прочитан · Вывод звука: не прочитан · Громкость: не прочитана/);
+  assert.match(soundOutputStatus(settings),/Мост: не прочитан/,'Raw values alone cannot establish support');
+});
+
+test('console bridge schema skips unsupported reads and accepts fresh zero and one without writes',async()=>{
+  for(const supported of [0,1]){
+    const schemas={bridge:{supported,min:0,max:1,step:1,options:'-'}};
+    const f=await connected({settings:true,schemas,settingsState:{bridge:0}});
+    try{
+      for(const bridge of [0,1,0]){
+        f.port.settingsState.bridge=bridge;await f.instance.loadDeviceSettings();
+        assert.equal(f.instance.state.deviceSettings.bridge,supported?bridge:undefined);
+      }
+      assert.equal(f.port.commands.includes('settings get bridge'),Boolean(supported));
+      assert.equal(f.port.commands.some(command=>command.startsWith('settings set ')),false);
+    }finally{await f.instance.disconnect();}
+  }
 });
 
 test('sound preview has explicit capability, preserves quiet settings and reports firmware errors',async()=>{

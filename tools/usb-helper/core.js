@@ -165,7 +165,7 @@
   ].map(([key,group,label])=>Object.freeze({key,group,label})));
   const SETTING_KEYS=Object.freeze([...new Set([...Object.keys(SETTING_CAPS),...EXTENDED_FIELDS.map(f=>f.key)])]);
   const SOUND_SETTING_KEYS=Object.freeze(['muted','sound_quiet','volume','melody','board_led','unread_led','vibration',...EXTENDED_FIELDS.filter(f=>['sound','lights'].includes(f.group)).map(f=>f.key)]);
-  const ADVANCED_SETTING_KEYS=Object.freeze(['notify_mode','important_notify_mode','melody_dm','melody_mention','melody_system','tone_8bit','high_drive','resonance_hz','bridge','offline_dm_led','ble_dm_led','msg_popup','ui_top_color','ui_bottom_color','gps_source','gps_interval','advert_location']);
+  const ADVANCED_SETTING_KEYS=Object.freeze(['notify_mode','important_notify_mode','melody_dm','melody_mention','melody_system','tone_8bit','high_drive','resonance_hz','offline_dm_led','ble_dm_led','msg_popup','ui_top_color','ui_bottom_color','gps_source','gps_interval','advert_location']);
   function parseSettingSchema(line,key,transport='settings') {
     if(!['settings','ui'].includes(transport)||!SETTING_KEYS.includes(key)||typeof line!=='string'||line.length>156)return null;
     const prefix='OK '+transport+' schema key='+key+' ';
@@ -191,6 +191,12 @@
     if(!Number(caps.sound))return 'Звук недоступен в этой сборке. Тест проверяет только доступные каналы уведомлений.';
     if(Number(settings.sound_quiet)===1)return 'Звук выключен на ноде. Для мелодии включите «Звук уведомлений ЛС» и сохраните. Тест не включает отключённые каналы.';
     return 'Звук включён на ноде · громкость '+settings.volume+' / 10'+(settings.tone_pin===undefined?'':' · вывод '+settings.tone_pin)+'. Тест использует сохранённые настройки; ответ команды не подтверждает работу излучателя.';
+  }
+  function soundOutputStatus(settings,schemas={},caps={}){
+    const hasValue=key=>settings?.[key]!==undefined&&settings[key]!==null;
+    const bridgeSupported=schemas?.bridge?schemas.bridge.supported:caps?.bridge===undefined?null:Number(caps.bridge)===1;
+    const bridge=!settings?'не прочитан':bridgeSupported===false?'недоступен в этой сборке':bridgeSupported===true&&hasValue('bridge')&&[0,1,'0','1'].includes(settings.bridge)?(Number(settings.bridge)?'включён':'выключен'):'не прочитан';
+    return 'Мост: '+bridge+' · Вывод звука: '+(hasValue('tone_pin')?settings.tone_pin:'не прочитан')+' · Громкость: '+(hasValue('volume')?settings.volume+' / 10':'не прочитана');
   }
   function parseSettingValue(line,key,transport='settings'){
     const prefix='OK '+transport+' get key='+key+' value=';
@@ -1095,5 +1101,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, SOUND_SETTING_KEYS, ADVANCED_SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, notificationStatus, parseCoreSetting });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, SOUND_SETTING_KEYS, ADVANCED_SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, notificationStatus, soundOutputStatus, parseCoreSetting });
 }));

@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.2.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.3.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -45,7 +45,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
   }
   const mock = window.__serialMock = {
     requests: 0, commands: [], raw: [], mode: localRecovery ? 'USB' : 'BLE', configured: false,
-    replies, localRecovery, quickReplies: Array(9).fill(''), settings,
+    replies, localRecovery, quickReplies: Array(9).fill(''), settings, settingsReadErrors:{},
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0},advert:{interval_min:60},
     settingsCaps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125,...settingsCaps},
     settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0},
@@ -94,7 +94,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         else if(command==='settings caps sound_preview')this.emit(soundPreview?'OK settings caps key=sound_preview value=1':'ERR settings unsupported');
         else if(command==='settings sound preview')this.emit(''+(!soundPreview?'ERR settings unsupported':this.settingsState.muted?'ERR settings muted':'OK settings sound_preview'));
         else if(command.startsWith('settings schema ')){const key=command.slice(16),s=schemas?.[key]||{supported:Number(Object.hasOwn(this.settingsState,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};this.emit('OK settings schema key='+key+' '+Object.entries(s).map(([k,v])=>k+'='+v).join(' '));}
-        else if(command.startsWith('settings get ')){const key=command.slice(13);this.emit('OK settings get key='+key+' value='+(this.settingsState[key]??extendedValues?.[key]));}
+        else if(command.startsWith('settings get ')){const key=command.slice(13);this.emit(this.settingsReadErrors[key]?'ERR settings '+this.settingsReadErrors[key]:'OK settings get key='+key+' value='+(this.settingsState[key]??extendedValues?.[key]));}
         else if(command==='settings identity')this.emit('OK settings identity name_hex='+Array.from(new TextEncoder().encode(this.identity),b=>b.toString(16).padStart(2,'0')).join('')+' max_name_bytes=31');
         else if(command.startsWith('settings name ')){const hex=command.slice(14);this.identity=new TextDecoder().decode(Uint8Array.from(hex.match(/../g),b=>parseInt(b,16)));this.emit('OK settings name name_hex='+hex);}
         else if(command==='settings tx'||command.startsWith('settings tx set ')){if(command.startsWith('settings tx set '))this.tx=Number(command.slice(16));this.emit('OK settings tx value='+this.tx+' min=-9 max=22');}
@@ -272,6 +272,15 @@ async function noOverlap(page) {
   assert.deepEqual(problems, []);
 }
 
+async function bridgeScreenshots(page,state){
+  const viewport=page.viewportSize();
+  await page.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='bridge-simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · не физическая плата. Мостовой звук: проверка отображения.';section.prepend(caption);});
+  for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){
+    await page.setViewportSize({width,height});await noOverlap(page);await page.screenshot({path:path.join(output,'helper-2.3-console-bridge-'+state+'-'+size+'.png'),fullPage:true});
+  }
+  await page.locator('#bridge-simulation-caption').evaluate(caption=>caption.remove());await page.setViewportSize(viewport);
+}
+
 test('console tabs expose sound pins, hash and collapsed phrases without sending commands',async()=>{
   const full=fullSettingsFixture(),f=await fixture({settings:true,replies:true,radioFeature:true,soundPreview:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
   try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('sound-read').disabled);
@@ -284,7 +293,7 @@ test('console tabs expose sound pins, hash and collapsed phrases without sending
     }
     await tab(p,'sound');
     assert.equal(await p.locator('#settings-advanced').isChecked(),false);
-    for(const key of ['tone_pin','led_pin','vibe_pin'])assert.equal(await p.locator('#setting-'+key).isVisible(),true,key+' is a basic sound control');
+    for(const key of ['bridge','tone_pin','led_pin','vibe_pin'])assert.equal(await p.locator('#setting-'+key).isVisible(),true,key+' is a basic sound control');
     assert.equal(await p.evaluate(()=>Math.abs(document.getElementById('sound-panel').getBoundingClientRect().top-document.getElementById('lights-panel').getBoundingClientRect().top)<2),true,'Desktop sound and LED panels share one row even without GPS');
     await tab(p,'radio');assert.equal(await p.locator('#path-bytes').isVisible(),true);
     await tab(p,'phrases');assert.equal(await p.locator('#replies-panel').getAttribute('open'),null);assert.equal(await p.locator('#reply-0').isVisible(),false);
@@ -292,24 +301,71 @@ test('console tabs expose sound pins, hash and collapsed phrases without sending
     await p.evaluate(()=>{const badge=document.createElement('div');badge.textContent='СИМУЛЯЦИЯ USB · не физическая плата';badge.style.cssText='position:fixed;right:12px;bottom:12px;z-index:1000;background:#1d2d4a;color:#eff4ff;border:1px solid #7192d9;border-radius:7px;padding:7px 10px;font:12px system-ui;';document.body.append(badge);});
     for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){
       await p.setViewportSize({width,height});
-      for(const name of ['connection','radio','sound','device','wifi','phrases','service']){await tab(p,name);await noOverlap(p);await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(output,'helper-2.2-console-'+name+'-'+size+'.png'),fullPage:true});}
+      for(const name of ['connection','radio','sound','device','wifi','phrases','service']){await tab(p,name);await noOverlap(p);await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(output,'helper-2.3-console-'+name+'-'+size+'.png'),fullPage:true});}
     }
   }finally{await f.close();}
 });
 
-test('console sound refresh reads live pins, confirms discarded sound edits and keeps other drafts',async()=>{
-  const full=fullSettingsFixture(),f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1}});
+test('console sound refresh reads bridge 0 to 1 to 0, discards sound drafts and keeps other drafts without writes',async()=>{
+  const full=fullSettingsFixture(),f=await fixture({settings:true,radioFeature:true,soundPreview:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1}});
   try{const p=f.page;await connect(p);await p.locator('#setting-ui_theme').selectOption('2');await tab(p,'sound');
-    await p.locator('#setting-volume').selectOption('3');
-    await p.evaluate(()=>Object.assign(__serialMock.settingsState,{volume:8,melody:18,tone_pin:33,sound_quiet:1}));
+    assert.equal(await p.locator('#settings-advanced').isChecked(),false);
+    assert.equal(await p.locator('#setting-bridge').isVisible(),true);
+    assert.equal(await p.locator('#setting-bridge').inputValue(),'0');
+    const initial=await p.locator('#sound-output-state').textContent();
+    assert.match(initial,/мост[^·.]*выключен/i);assert.match(initial,/31/);assert.match(initial,/10/);
+    await p.locator('#setting-volume').selectOption('3');await p.locator('#setting-bridge').selectOption('1');
+    assert.equal(await p.locator('#sound-output-state').textContent(),initial,'Drafts must not change the saved output summary');
+    await p.evaluate(()=>Object.assign(__serialMock.settingsState,{bridge:1,volume:8,melody:18,tone_pin:33,sound_quiet:1}));
     const before=await p.evaluate(()=>__serialMock.commands.length);
     await p.locator('#sound-read').click();await p.locator('#confirm-no').click();
-    assert.equal(await p.locator('#setting-volume').inputValue(),'3');assert.equal(await p.evaluate(()=>__serialMock.commands.length),before);
+    assert.equal(await p.locator('#setting-volume').inputValue(),'3');assert.equal(await p.locator('#setting-bridge').inputValue(),'1');assert.equal(await p.evaluate(()=>__serialMock.commands.length),before);
     await p.locator('#sound-read').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&document.getElementById('setting-volume').value==='8');
     assert.equal(await p.locator('#setting-tone_pin').inputValue(),'33');assert.equal(await p.locator('#setting-melody').inputValue(),'18');assert.equal(await p.locator('#setting-sound_quiet').inputValue(),'1');
+    assert.equal(await p.locator('#setting-bridge').inputValue(),'1');assert.match(await p.locator('#saved-bridge').textContent(),/Прочитано/);
+    const enabled=await p.locator('#sound-output-state').textContent();assert.match(enabled,/мост[^·.]*включен|мост[^·.]*включён/i);assert.match(enabled,/33/);assert.match(enabled,/8/);
+    await bridgeScreenshots(p,'enabled');
+    await p.locator('#setting-bridge').selectOption('0');assert.equal(await p.locator('#sound-output-state').textContent(),enabled);
+    await p.locator('#sound-read').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&document.getElementById('setting-bridge').value==='1');
+    assert.equal(await p.locator('#saved-bridge').getAttribute('data-dirty'),'false','Explicit read discards a bridge draft that differs from the node');
+    await p.evaluate(()=>__serialMock.settingsState.bridge=0);await p.locator('#sound-read').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&document.getElementById('setting-bridge').value==='0');
+    assert.match(await p.locator('#sound-output-state').textContent(),/мост[^·.]*выключен/i);
     assert.equal(await p.locator('#setting-ui_theme').inputValue(),'2');
     assert.equal(await p.evaluate(n=>__serialMock.commands.slice(n).some(c=>/settings (set|sound preview|test|adc (set|apply|reset))/.test(c)),before),false,'Refresh must not change or play anything');
   }finally{await f.close();}
+});
+
+test('console bridge stays visible and unavailable without schema or with unsupported schema',async()=>{
+  for(const schema of [false,true]){
+    const full=fullSettingsFixture();full.schemas.bridge.supported=0;
+    const f=await fixture({settings:true,radioFeature:true,info:RELEASE_DEVICE_INFO,...(schema?{soundPreview:true,schemas:full.schemas,extendedValues:full.settings}:{})});
+    try{const p=f.page;await connect(p);await tab(p,'sound');
+      for(let read=0;read<2;read++){
+        assert.equal(await p.locator('#setting-bridge').isVisible(),true);assert.equal(await p.locator('#setting-bridge').isDisabled(),true);
+        assert.match(await p.locator('#saved-bridge').textContent(),schema?/Недоступно|не поддержива/i:/не прочитан|не подтвержд/i);
+        assert.match(await p.locator('#sound-output-state').textContent(),schema?/Мост: недоступен/:/Мост: не прочитан/);
+        assert.doesNotMatch(await p.locator('#saved-bridge').textContent(),/На ноде:|Прочитано|null|Выключен/);
+        await p.locator('#sound-read').click();await p.waitForFunction(()=>!document.getElementById('sound-read').disabled);
+      }
+      assert.equal(await p.evaluate(()=>__serialMock.commands.includes('settings get bridge')),false,'Unsupported schema must skip bridge read');
+      assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set '))),false);
+      if(schema)await bridgeScreenshots(p,'unsupported');
+    }finally{await f.close();}
+  }
+});
+
+test('console bridge read errors clear confirmed output instead of reporting bridge off',async()=>{
+  for(const error of ['unsupported','storage']){
+    const full=fullSettingsFixture(),f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
+    try{const p=f.page;await p.evaluate(()=>__serialMock.settingsState.bridge=1);await connect(p);await tab(p,'sound');
+      await p.evaluate(error=>__serialMock.settingsReadErrors.bridge=error,error);await p.locator('#sound-read').click();
+      await p.waitForFunction(()=>!document.getElementById('sound-read').disabled&&SmartUiLegacy.getState().deviceSettings===null);
+      assert.match(await p.locator('#sound-output-state').textContent(),/не подтвержд|не прочитан|нет подтвержд/i);
+      assert.doesNotMatch(await p.locator('#sound-output-state').textContent(),/мост[^·.]*выключен/i);
+      assert.equal(await p.locator('#setting-bridge').isVisible(),true);assert.equal(await p.locator('#setting-bridge').isDisabled(),true);
+      assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings set '))),false);
+    }finally{await f.close();}
+  }
 });
 
 test('console melody preview is distinct from notification test and never changes quiet settings',async()=>{

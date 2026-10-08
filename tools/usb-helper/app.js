@@ -13,6 +13,7 @@
   const supported = Boolean(window.isSecureContext && navigator.serial);
   const previewButton=document.createElement('button');previewButton.id='sound-preview';previewButton.textContent='Прослушать мелодию';previewButton.disabled=true;$('settings-test').before(previewButton);
   const previewHint=document.createElement('p');previewHint.id='sound-preview-hint';previewHint.className='hint';$('settings-test').parentElement.before(previewHint);
+  const soundOutput=document.createElement('p');soundOutput.id='sound-output-state';soundOutput.className='notice';soundOutput.setAttribute('role','status');$('sound-settings').before(soundOutput);
   // Keep the existing connect -> Wi-Fi -> mode workflow ahead of optional tools.
   $("device-section").before($("mode-title").closest("section"));
   const replyDefaults = ["Да","Нет","Потом","Сейчас","Завтра","Сегодня","Привет","Пока","Тест?"];
@@ -83,6 +84,7 @@
     $("settings-status").textContent=!state.connected ? "Ожидает подключения" : !state.settingsSupported ? "Совместимый режим" : !saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
     $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
     $('settings-notify-state').textContent=SmartUiConsole.notificationStatus(saved,caps);
+    soundOutput.textContent=SmartUiConsole.soundOutputStatus(saved,state.settingSchemas,caps);
     const soundStatus=$('sound-action-status');
     if(!state.connected){soundStatus.textContent='Подключите ноду и считайте звук и пины.';delete soundStatus.dataset.action;}
     else if(saved&&!soundStatus.dataset.action)soundStatus.textContent='Показаны настройки, прочитанные с ноды. «Считать звук и пины» обновит их.';
@@ -101,7 +103,7 @@
       const schema=state.settingSchemas?.[field.key];
       const supported=schema?schema.supported:!field.extended&&(!field.cap || Boolean(caps[field.cap]));
       const search=$('settings-filter').value.trim().toLowerCase();
-      $("row-"+field.key).hidden=(field.extended&&!schema)||!supported&&!$('settings-unavailable').checked||!(field.label+' '+field.key).toLowerCase().includes(search)||(!search&&!$('settings-advanced').checked&&SmartUiConsole.ADVANCED_SETTING_KEYS.includes(field.key));
+      $("row-"+field.key).hidden=(field.key!=='bridge'&&(field.extended&&!schema||!supported&&!$('settings-unavailable').checked))||!(field.label+' '+field.key).toLowerCase().includes(search)||(!search&&!$('settings-advanced').checked&&SmartUiConsole.ADVANCED_SETTING_KEYS.includes(field.key));
       const input=$("setting-"+field.key), stored=saved?.[field.key];
       if(schema){
         const signature=JSON.stringify(schema);if(input.dataset.schema!==signature){const draft=input.value;
@@ -111,11 +113,12 @@
         }
       }
       if (stored!==undefined && (!settingsDirty.has(field.key) || Number(input.value)===stored)) { input.value=String(stored); settingsDirty.delete(field.key); }
+      if(!supported){input.value='';settingsDirty.delete(field.key);}
       const dirty=stored!==undefined && Number(input.value)!==stored;
       input.disabled=!ready || !supported;
       $("save-"+field.key).disabled=!ready || !supported || !dirty;
       const label=stored===undefined ? "—" : [...(input.options||[])].find(o=>Number(o.value)===stored)?.textContent || String(stored);
-      $("saved-"+field.key).textContent=!supported?"Недоступно на этой плате или в этой сборке":stored===undefined ? "Значение не подтверждено" : "На ноде: "+label+(dirty ? " · Изменение ещё не сохранено" : " · Прочитано")+(field.key.endsWith('_pin')?' · Только разрешённые прошивкой выводы.':'');
+      $("saved-"+field.key).textContent=field.extended&&!schema?"Не прочитано: эта прошивка не сообщает описание настройки":!supported?"Недоступно на этой плате или в этой сборке":stored===undefined ? "Значение не подтверждено" : "На ноде: "+label+(dirty ? " · Изменение ещё не сохранено" : " · Прочитано")+(field.key.endsWith('_pin')?' · Только разрешённые прошивкой выводы.':'');
       $("saved-"+field.key).dataset.dirty=String(dirty);
     }
     $("settings-status").textContent=!saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";

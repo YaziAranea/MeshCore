@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.2.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.3.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -32,6 +32,14 @@ async function geometry(page){
     return result;
   });assert.deepEqual(problems,[]);
 }
+async function bridgeScreenshots(page,state){
+  const viewport=page.viewportSize();
+  await page.locator('#api-settings').evaluate(section=>{const caption=document.createElement('p');caption.id='bridge-simulation-caption';caption.className='hint';caption.textContent='Симуляция USB · не физическая плата. Мостовой звук: проверка отображения.';section.prepend(caption);});
+  for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){
+    await page.setViewportSize({width,height});await geometry(page);await page.screenshot({path:path.join(output,'helper-2.3-cli-bridge-'+state+'-'+size+'.png'),fullPage:true});
+  }
+  await page.locator('#bridge-simulation-caption').evaluate(caption=>caption.remove());await page.setViewportSize(viewport);
+}
 
 test('CLI tabs have visible pins and hash, collapsed phrases, and no navigation side effects',async()=>{
   const f=await fixture({console:1,meshcore:1,firmware:'0.16',soundPreview:true,...fullSettingsFixture()});
@@ -44,27 +52,81 @@ test('CLI tabs have visible pins and hash, collapsed phrases, and no navigation 
       await geometry(p);
     }
     await tab(p,'sound');assert.equal(await p.locator('#api-settings-advanced').isChecked(),false);
-    for(const key of ['tone_pin','led_pin','vibe_pin'])assert.equal(await p.locator('#api-setting-'+key).isVisible(),true,key+' is not hidden in advanced settings');
+    for(const key of ['bridge','tone_pin','led_pin','vibe_pin'])assert.equal(await p.locator('#api-setting-'+key).isVisible(),true,key+' is not hidden in advanced settings');
     await tab(p,'radio');assert.equal(await p.locator('#path-bytes').isVisible(),true);
     await tab(p,'phrases');assert.equal(await p.locator('#api-phrases-panel').getAttribute('open'),null);assert.equal(await p.locator('#api-phrase-1').isVisible(),false);
     assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
     await p.evaluate(()=>{const badge=document.createElement('div');badge.textContent='СИМУЛЯЦИЯ USB · не физическая плата';badge.style.cssText='position:fixed;right:12px;bottom:12px;z-index:1000;background:#1d2d4a;color:#eff4ff;border:1px solid #7192d9;border-radius:7px;padding:7px 10px;font:12px system-ui;';document.body.append(badge);});
     for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){
       await p.setViewportSize({width,height});
-      for(const name of ['connection','radio','sound','device','wifi','phrases','service']){await tab(p,name);await geometry(p);await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(output,'helper-2.2-cli-'+name+'-'+size+'.png'),fullPage:true});}
+      for(const name of ['connection','radio','sound','device','wifi','phrases','service']){await tab(p,name);await geometry(p);await p.evaluate(()=>scrollTo(0,0));await p.screenshot({path:path.join(output,'helper-2.3-cli-'+name+'-'+size+'.png'),fullPage:true});}
     }
   }finally{await f.close();}
 });
 
-test('CLI sound refresh replaces sound drafts only and reads actual pins without writes',async()=>{
-  const f=await fixture({console:1,meshcore:1,firmware:'0.16',...fullSettingsFixture()});
-  try{const p=f.page;await connect(p);await p.locator('#api-setting-ui_theme').selectOption('2');await tab(p,'sound');await p.locator('#api-setting-volume').selectOption('3');
-    await p.evaluate(()=>Object.assign(__apiMock.settings,{volume:8,melody:18,tone_pin:33,sound_quiet:1}));const before=await p.evaluate(()=>__apiMock.commands.length);
-    await p.locator('#api-sound-read').click();await p.locator('#confirm-no').click();assert.equal(await p.locator('#api-setting-volume').inputValue(),'3');assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+test('CLI sound refresh reads bridge 0 to 1 to 0, discards sound drafts and keeps other drafts without writes',async()=>{
+  const f=await fixture({console:1,meshcore:1,firmware:'0.16',soundPreview:true,...fullSettingsFixture()});
+  try{const p=f.page;await connect(p);await p.locator('#api-setting-ui_theme').selectOption('2');await tab(p,'sound');
+    assert.equal(await p.locator('#api-settings-advanced').isChecked(),false);assert.equal(await p.locator('#api-setting-bridge').isVisible(),true);assert.equal(await p.locator('#api-setting-bridge').inputValue(),'0');
+    const initial=await p.locator('#api-sound-output-state').textContent();assert.match(initial,/мост[^·.]*выключен/i);assert.match(initial,/31/);assert.match(initial,/7/);
+    await p.locator('#api-setting-volume').selectOption('3');await p.locator('#api-setting-bridge').selectOption('1');
+    assert.equal(await p.locator('#api-sound-output-state').textContent(),initial,'Drafts must not change the saved output summary');
+    await p.evaluate(()=>Object.assign(__apiMock.settings,{bridge:1,volume:8,melody:18,tone_pin:33,sound_quiet:1}));const before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-sound-read').click();await p.locator('#confirm-no').click();assert.equal(await p.locator('#api-setting-volume').inputValue(),'3');assert.equal(await p.locator('#api-setting-bridge').inputValue(),'1');assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
     await p.locator('#api-sound-read').click();await p.locator('#confirm-yes').click();await ready(p);
     assert.equal(await p.locator('#api-setting-volume').inputValue(),'8');assert.equal(await p.locator('#api-setting-tone_pin').inputValue(),'33');assert.equal(await p.locator('#api-setting-melody').inputValue(),'18');assert.equal(await p.locator('#api-setting-sound_quiet').inputValue(),'1');
+    assert.equal(await p.locator('#api-setting-bridge').inputValue(),'1');assert.match(await p.locator('#api-saved-bridge').textContent(),/Прочитано/);
+    const enabled=await p.locator('#api-sound-output-state').textContent();assert.match(enabled,/мост[^·.]*включен|мост[^·.]*включён/i);assert.match(enabled,/33/);assert.match(enabled,/8/);
+    await bridgeScreenshots(p,'enabled');
+    await p.locator('#api-setting-bridge').selectOption('0');assert.equal(await p.locator('#api-sound-output-state').textContent(),enabled);
+    await p.locator('#api-sound-read').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.equal(await p.locator('#api-setting-bridge').inputValue(),'1');assert.equal(await p.locator('#api-saved-bridge').getAttribute('data-dirty'),'false','Explicit read discards a bridge draft that differs from the node');
+    await p.evaluate(()=>__apiMock.settings.bridge=0);await p.locator('#api-sound-read').click();await ready(p);
+    assert.equal(await p.locator('#api-setting-bridge').inputValue(),'0');assert.match(await p.locator('#api-sound-output-state').textContent(),/мост[^·.]*выключен/i);
     assert.equal(await p.locator('#api-setting-ui_theme').inputValue(),'2');assert.equal(await p.evaluate(n=>__apiMock.commands.slice(n).some(c=>/^ui (set|sound preview|test)\b/.test(c)),before),false);
   }finally{await f.close();}
+});
+
+test('CLI bridge stays visible and unavailable for unsupported capability or schema after sound refresh',async()=>{
+  for(const schema of [false,true]){
+    const full=fullSettingsFixture();full.schemas.bridge.supported=0;
+    const f=await fixture(schema?{firmware:'0.16',soundPreview:true,...full}:{caps:{bridge:0},settingsReadErrors:{bridge:'unsupported'}});
+    try{const p=f.page;await connect(p);await tab(p,'sound');
+      for(let read=0;read<2;read++){
+        assert.equal(await p.locator('#api-setting-bridge').isVisible(),true);assert.equal(await p.locator('#api-setting-bridge').isDisabled(),true);
+        assert.match(await p.locator('#api-saved-bridge').textContent(),/Недоступно|не поддержива/i);
+        assert.match(await p.locator('#api-sound-output-state').textContent(),/мост[^·.]*недоступ|мост[^·.]*не поддержива/i);
+        assert.doesNotMatch(await p.locator('#api-saved-bridge').textContent(),/На ноде:|Прочитано|null|Выключен/,'Unsupported rows must not run a synthetic change handler after refresh');
+        await p.locator('#api-sound-read').click();await ready(p);
+      }
+      assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>/^ui (set|sound preview|test)\b/.test(c))),false);
+      if(schema)await bridgeScreenshots(p,'unsupported');
+    }finally{await f.close();}
+  }
+});
+
+test('CLI optional bridge read unsupported is unknown, never synthetic saved zero',async()=>{
+  const f=await fixture({caps:{bridge:1},settingsReadErrors:{bridge:'unsupported'}});
+  try{const p=f.page;await p.locator('#connect').click();await p.waitForFunction(()=>document.getElementById('api-settings-status').textContent==='Чтение не подтверждено');await tab(p,'sound');
+    assert.equal(await p.locator('#api-setting-bridge').count(),0,'Failed snapshots must not retain an invented bridge value');
+    assert.match(await p.locator('#api-sound-output-state').textContent(),/Мост: не прочитан/);
+    assert.doesNotMatch(await p.locator('#api-sound-output-state').textContent(),/мост[^·.]*выключен/i);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>/^ui set\b/.test(c))),false);
+  }finally{await f.close();}
+});
+
+test('CLI supported bridge read errors clear confirmed output instead of reporting bridge off',async()=>{
+  for(const error of ['unsupported','storage']){
+    const full=fullSettingsFixture(),f=await fixture({...full,settings:{...full.settings,bridge:1}});
+    try{const p=f.page;await connect(p);await tab(p,'sound');
+      await p.evaluate(error=>__apiMock.settingsReadErrors.bridge=error,error);await p.locator('#api-sound-read').click();await ready(p);
+      assert.match(await p.locator('#api-settings-status').textContent(),/не подтвержд/i);
+      assert.match(await p.locator('#api-sound-output-state').textContent(),/не подтвержд|не прочитан|нет подтвержд/i);
+      assert.doesNotMatch(await p.locator('#api-sound-output-state').textContent(),/мост[^·.]*выключен/i);
+      assert.equal(await p.locator('#api-setting-bridge').count(),0,'Failed snapshots must clear stale controls');
+      assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>/^ui set\b/.test(c))),false);
+    }finally{await f.close();}
+  }
 });
 
 test('CLI melody preview ignores notification quiet but respects fresh global mute without changing either',async()=>{
