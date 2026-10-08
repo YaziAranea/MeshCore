@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.0.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.1.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -448,6 +448,7 @@ test('custom phrases require explicit capability, save UTF8 with readback, and c
   try {
     await connect(f.page);
     assert.equal(await f.page.locator('#reply-0').isDisabled(),true);
+    assert.equal(await f.page.locator('#reply-0').isVisible(),false);await f.page.locator('#replies-panel summary').click();
     await f.page.locator('#replies-load').click();
     await f.page.waitForFunction(()=>!document.getElementById('reply-0').disabled);
     const phrase='Я на месте';
@@ -550,6 +551,12 @@ test('0.16 service mode exposes board pin schemas, filters and preserves other d
   const f=await fixture({settings:true,radioFeature:true,manualAdc:true,info:RELEASE_DEVICE_INFO.replace('0.15','0.16').replace('ProMicro RA62','Heltec T096'),schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1,gps:1,adc_service:1}});
   try{const p=f.page;await connect(p);
     await p.waitForFunction(()=>!document.getElementById('setting-tone_pin').disabled);
+    assert.equal(await p.locator('#setting-tone_pin').isVisible(),false);
+    await p.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.id='basic-simulation-caption';caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
+    await noOverlap(p);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-basic-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await noOverlap(p);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-basic-mobile.png')});
+    await p.setViewportSize({width:1440,height:1080});await p.locator('#basic-simulation-caption').evaluate(el=>el.remove());
+    await p.locator('#settings-advanced').check();
     assert.deepEqual(await p.locator('#setting-tone_pin option').evaluateAll(o=>o.map(i=>i.value)),['29','31','33','34','35','36','37','39','43']);
     for(const key of ['ui_theme','led_pin'])assert.equal(await p.locator('#setting-'+key).isEnabled(),true);
     for(const key of ['profile','melody_dm','melody_mention'])assert.equal(await p.locator('#setting-'+key).isDisabled(),true);
@@ -567,8 +574,33 @@ test('0.16 service mode exposes board pin schemas, filters and preserves other d
     await p.locator('#settings-unavailable').uncheck();await p.locator('#settings-filter').fill('');
     await p.locator('#node-tx').fill('16');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.tx===16&&!document.getElementById('node-tx').disabled);
     await p.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
-    await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.0-service-desktop.png')});
-    await p.setViewportSize({width:390,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.0-service-mobile.png')});
+    await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-service-desktop.png')});
+    await p.setViewportSize({width:390,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.1-service-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('console sound labels preserve quiet inversion and test warns about unsaved values',async()=>{
+  const full=fullSettingsFixture(),f=await fixture({settings:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
+  try{const p=f.page;await connect(p);
+    assert.equal(await p.locator('#setting-sound_quiet option:checked').textContent(),'Включён');
+    await p.locator('#setting-sound_quiet').selectOption({label:'Выключен'});await p.locator('#save-sound_quiet').click();await p.waitForFunction(()=>!document.getElementById('setting-sound_quiet').disabled);
+    assert.equal(await p.evaluate(()=>__serialMock.settingsState.sound_quiet),1);assert.match(await p.locator('#settings-notify-state').textContent(),/Звук выключен на ноде/);
+    await p.locator('#setting-sound_quiet').selectOption({label:'Включён'});await p.locator('#settings-test').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>__serialMock.commands.includes('settings test')),false);
+    await p.locator('#settings-test').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.commands.includes('settings test'));
+    assert.equal(await p.evaluate(()=>__serialMock.settingsState.sound_quiet),1);
+  }finally{await f.close();}
+});
+
+test('console path selector preserves fresh radio parameters and requires explicit save',async()=>{
+  const f=await fixture({settings:true,radioFeature:true,info:RELEASE_DEVICE_INFO});
+  try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('path-bytes').disabled);await p.locator('#path-settings summary').click();
+    await p.locator('#path-bytes').selectOption('1');await p.locator('#path-save').click();await p.locator('#confirm-no').click();
+    assert.equal(await p.evaluate(()=>__serialMock.commands.some(c=>c.startsWith('settings radio set'))),false);
+    await p.evaluate(()=>Object.assign(__serialMock.radio,{freq_khz:868731,bw_hz:62500,sf:7,cr:7,tx_dbm:18,repeat:1}));
+    await p.locator('#path-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('Хеш маршрута сохранён'));
+    assert.deepEqual(await p.evaluate(()=>__serialMock.radio),{freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:1,tx_dbm:18,repeat:1});
+    assert.equal(await p.evaluate(()=>__serialMock.commands.filter(c=>c.startsWith('settings radio set')).length),1);
   }finally{await f.close();}
 });
 

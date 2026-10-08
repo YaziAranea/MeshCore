@@ -144,7 +144,7 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ближе к вашей сети.</h1><p class="subtitle">Выберите город. Настройте ноду под себя.<br>Без аккаунта, облака и лишних действий.</p></div>
-    <div><span class="tag">Помощник 2.0 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><span class="tag">Помощник 2.1 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
   <aside class="app-rail"><p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#radio-section">Город и радио</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
   <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
@@ -177,6 +177,7 @@
           <label class="field" for="advert-interval">Повторять анонс</label><select id="advert-interval" disabled><option value="0">Выключен</option><option value="15">Каждые 15 минут</option><option value="30">Каждые 30 минут</option><option value="60">Каждый час</option><option value="120">Каждые 2 часа</option><option value="180">Каждые 3 часа</option></select>
           <p id="advert-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="advert-save" disabled>Сохранить интервал</button></div>
           <p class="hint">Это интервал, не время суток. Сохранение не отправляет немедленный анонс; отсчёт следующего начинается заново.</p>
+          <details id="path-settings"><summary>Хеш маршрута</summary><p class="hint">Согласуйте длину хеша с участниками своей сети. Меняется только формат маршрута; частота, мощность и пресет сохраняются.</p><label class="field" for="path-bytes">Байт на участника маршрута</label><select id="path-bytes" disabled><option value="1">1 байт</option><option value="2">2 байта</option><option value="3">3 байта</option></select><p id="path-current" class="hint">Сначала подключите ноду.</p><div class="buttons"><button id="path-save" disabled>Сохранить хеш</button></div></details>
         </div>
       </div>
       <p id="radio-status" class="radio-status" role="status" aria-live="polite">Подключите SmartUI 0.13 или новее. Каталог можно посмотреть заранее.</p>
@@ -223,7 +224,7 @@
       <p id="settings-hint" class="hint">Доступные функции определяет прошивка. Изменения в полях не сохраняются автоматически.</p>
       <div class="buttons"><button id="settings-load" disabled>Прочитать настройки</button></div>
       <p id="settings-capabilities" class="hint">Для новых настроек нужна SmartUI 0.08 с протоколом Settings 1. Старые прошивки сохраняют прежние инструменты.</p>
-      <div class="settings-filter"><input id="settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек"><label class="check"><input id="settings-unavailable" type="checkbox">Показать недоступные</label></div>
+      <div class="settings-filter"><input id="settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек"><label class="check"><input id="settings-advanced" type="checkbox">Расширенные настройки</label><label class="check"><input id="settings-unavailable" type="checkbox">Показать недоступные</label></div><p class="hint">Основное — сразу. GPIO, каналы уведомлений и тонкая настройка — в расширенных. Поиск ищет среди всех доступных настроек.</p>
       <div id="device-fields" class="settings-grid" hidden>
         <section id="battery-panel" class="device-panel" aria-labelledby="battery-title">
           <p class="panel-kicker">Питание</p><h3 id="battery-title">Аккумулятор и калибровка</h3>
@@ -257,7 +258,7 @@
           <div id="battery-settings"></div>
           <p id="battery-protection-warning" class="safety-note">Защита включена: порог 3,2 В. При выключении остаётся нижняя отсечка 2,7 В — это не безопасная цель разряда. Нужны исправный BMS и проверенный ADC. Внешнее питание может менять поведение отключения.</p>
         </section>
-        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">Каналы уведомлений, звук и мелодии. Отдельные мелодии ЛС и упоминаний доступны только при поддержке сборкой. Тест использует сохранённые настройки.</p><div id="sound-settings"></div><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div><p class="hint">Общая тишина отключает звук и вибрацию; обычные статусные LED могут оставаться включёнными. Принятая команда теста не подтверждает работу физического излучателя.</p></section>
+        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">Каналы уведомлений, звук и мелодии. Отдельные мелодии ЛС и упоминаний доступны только при поддержке сборкой. Тест использует сохранённые настройки.</p><div id="sound-settings"></div><p id="settings-notify-state" class="notice" role="status">Сначала прочитайте настройки ноды.</p><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div></section>
         <section id="lights-panel" class="device-panel" aria-labelledby="lights-title"><p class="panel-kicker">Индикация</p><h3 id="lights-title">Светодиоды и вибрация</h3><p class="hint">LED платы и LED уведомлений — разные настройки. Аппаратный индикатор зарядки может не управляться прошивкой.</p><div id="lights-settings"></div></section>
         <section id="gps-panel" class="device-panel" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Источник координат</h3><p class="hint">Модуль ноды или координаты телефона — по возможностям прошивки. Телефон должен передавать координаты через приложение. Включение модуля не гарантирует спутниковый фикс.</p><div id="gps-settings"></div></section>
         <section id="display-panel" class="device-panel" aria-labelledby="display-title" hidden><p class="panel-kicker">SmartUI</p><h3 id="display-title">Экран и оформление</h3><p class="hint">Набор вариантов зависит от дисплея. Значения и доступность сообщает сама нода.</p><div id="display-settings"></div></section>
@@ -266,10 +267,12 @@
     </section>
     <section id="replies-section" class="card wide" aria-labelledby="replies-title">
       <h2 id="replies-title">Свои быстрые фразы</h2>
+      <details id="replies-panel"><summary>Настроить 9 быстрых фраз</summary>
       <p class="hint">9 фраз на ноде, каждая до 64 байт UTF-8. Сначала прочитайте текущие значения. Пустое поле возвращает стандартную фразу. Сохранение — отдельно для каждого слота; адресат выбирается на ноде перед отправкой.</p>
       <p id="replies-hint" class="hint">Нужна прошивка с поддержкой своих фраз.</p>
       <div class="buttons"><button id="replies-load" disabled>Прочитать фразы с ноды</button></div>
       <div id="reply-fields"></div>
+      </details>
     </section>
     <section id="firmware-section" class="card wide" aria-labelledby="firmware-title">
       <h2 id="firmware-title">Проверить файл прошивки</h2>

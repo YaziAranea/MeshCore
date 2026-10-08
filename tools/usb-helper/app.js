@@ -77,6 +77,7 @@
     $("device-fields").hidden=!caps;
     $("settings-status").textContent=!state.connected ? "Ожидает подключения" : !state.settingsSupported ? "Совместимый режим" : !saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
     $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
+    $('settings-notify-state').textContent=SmartUiConsole.notificationStatus(saved,caps);
     const names={adc:"ADC",sound:"звук",board_led:"LED платы",unread_led:"LED уведомлений",vibration:"вибрация",gps:"GPS",battery_protection:"защита АКБ"};
     $("settings-capabilities").textContent=caps ? "Поддержка сборки: "+Object.entries(names).filter(([key])=>caps[key]).map(([,name])=>name).join(", ")+". "+(caps.display ? "Драйвер экрана активен." : "Настройка без дисплея.") : "Новые настройки доступны в SmartUI 0.08 с протоколом Settings 1. Возможности определяются ответом ноды, не её названием.";
     renderAdcService(readReady,ready);
@@ -91,7 +92,8 @@
     for (const field of settingFields) {
       const schema=state.settingSchemas?.[field.key];
       const supported=schema?schema.supported:!field.extended&&(!field.cap || Boolean(caps[field.cap]));
-      $("row-"+field.key).hidden=(field.extended&&!schema)||!supported&&!$('settings-unavailable').checked||!(field.label+' '+field.key).toLowerCase().includes($('settings-filter').value.trim().toLowerCase());
+      const search=$('settings-filter').value.trim().toLowerCase();
+      $("row-"+field.key).hidden=(field.extended&&!schema)||!supported&&!$('settings-unavailable').checked||!(field.label+' '+field.key).toLowerCase().includes(search)||(!search&&!$('settings-advanced').checked&&SmartUiConsole.ADVANCED_SETTING_KEYS.includes(field.key));
       const input=$("setting-"+field.key), stored=saved?.[field.key];
       if(schema){
         const signature=JSON.stringify(schema);if(input.dataset.schema!==signature){const draft=input.value;
@@ -134,6 +136,7 @@
   }
   $('settings-filter').oninput=renderDeviceSettings;
   $('settings-unavailable').onchange=renderDeviceSettings;
+  $('settings-advanced').onchange=renderDeviceSettings;
   function renderAdcService(readReady,ready) {
     const enabled=Boolean(state.settingsCaps?.adc_service), service=state.adcService;
     $("adc-service-box").hidden=!enabled;
@@ -287,7 +290,12 @@
   $("adc-reset").onclick=async()=>{
     if (await confirmAction("Вернуть только калибровку ADC к заводскому множителю этой платы? Контакты, ключ ноды и остальные настройки не удаляются.")) await runAdc(()=>client.resetAdc({confirmed:true}),{progress:'Восстанавливаем заводской коэффициент…',success:s=>'Заводской коэффициент сохранён и проверен: '+s.adc_multiplier.toFixed(6)+'.'});
   };
-  $("settings-test").onclick=()=>run(()=>client.testDeviceNotification());
+  $("settings-test").onclick=async()=>{
+    const session=client._session;
+    if(settingsDirty.size&&!await confirmAction('Есть несохранённые поля. Проверить уведомление с прежними настройками, уже сохранёнными на ноде?'))return;
+    if(session!==client._session)return;
+    await run(()=>client.testDeviceNotification());
+  };
   $("replies-load").onclick = () => run(async () => {
     const replies = await client.loadQuickReplies();
     replies.forEach((text,slot) => { $("reply-" + slot).value = text; $("reply-" + slot).oninput(); });

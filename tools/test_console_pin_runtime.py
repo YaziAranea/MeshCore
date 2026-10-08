@@ -2,11 +2,44 @@
 """Run production notification-pin/bridge ownership methods with GPIO stubs."""
 from pathlib import Path
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_variant_maps():
+    """Validate the real production nRF allowlists against their Arduino maps."""
+    source = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
+    checked = 0
+    for macro, variant in (("HELTEC_T114", "heltec_t114"),
+                           ("HELTEC_T096", "heltec_t096"),
+                           ("PROMICRO", "promicro")):
+        board = ROOT / "variants" / variant
+        variant_source = (board / "variant.cpp").read_text(encoding="utf-8")
+        initializer = scope(variant_source, "const uint32_t g_ADigitalPinMap[]")
+        initializer = re.sub(r"//[^\n]*|/\*.*?\*/", "", initializer, flags=re.S)
+        mapping = [int(value.strip(), 0) for value in initializer.split("{", 1)[1][:-1].split(",")
+                   if value.strip()]
+        branch = source.split(f"defined({macro})\n", 1)[1].split("\n#elif", 1)[0]
+        branch = branch.split("\n#else\nstatic const int8_t notify_gpio_pins[] = {\n", 1)[0]
+        lists = re.findall(r"static const int8_t notify_gpio_pins\[\] = \{([^}]+)\}", branch)
+        assert lists, f"{macro}: production allowlist missing"
+        for choices in lists:
+            for value in choices.split(","):
+                value = value.strip()
+                if value == "PIN_LED":
+                    header = (board / "variant.h").read_text(encoding="utf-8")
+                    value = re.search(r"#define\s+PIN_LED\s+\(?\s*(\d+)", header)[1]
+                pin = int(value, 0)
+                assert 0 <= pin < len(mapping), f"{macro}: Arduino pin {pin} outside map"
+                assert 0 <= mapping[pin] < 48, f"{macro}: pin {pin} maps to invalid {mapping[pin]:#x}"
+                checked += 1
+        if macro == "HELTEC_T114":
+            assert mapping[0] == mapping[1] == 0xff
+    print(f"PASS {checked} production nRF notification choices match real Arduino variant GPIO maps", flush=True)
 
 
 def scope(source, signature):
@@ -86,6 +119,14 @@ int main() {
   assert(!ui.isDeviceSettingsPinAllowed("tone_pin", -1));
   assert(!ui.isDeviceSettingsPinAllowed("led_pin", 21));
   assert(!ui.isDeviceSettingsPinAllowed("not_a_pin", 16));
+  // T114's Arduino 0/1 entries are 0xff sentinels, not usable physical pins.
+  for (const char* role : {"led_pin", "tone_pin", "vibe_pin"}) {
+    assert(!ui.isDeviceSettingsPinAllowed(role, 0));
+    assert(!ui.isDeviceSettingsPinAllowed(role, 1));
+  }
+  ui.tone = 0; // A stale saved choice must not bypass the hardware allowlist.
+  assert(!ui.isDeviceSettingsPinAllowed("tone_pin", 0));
+  ui.tone = 13;
   ui.bridge = true;
   assert(!ui.isDeviceSettingsPinAllowed("led_pin", 16));
   assert(!ui.isDeviceSettingsPinAllowed("vibe_pin", 16));
@@ -109,6 +150,12 @@ int main() {
     }
   }
   char options[88];
+  for (const char* role : {"led_pin", "tone_pin", "vibe_pin"}) {
+    ui.bridge = false; ui.deviceSettingsPinOptions(role, options, sizeof(options));
+    const std::string choices = std::string(",") + options + ",";
+    assert(choices.find(",0,") == std::string::npos);
+    assert(choices.find(",1,") == std::string::npos);
+  }
   ui.bridge = false; ui.deviceSettingsPinOptions("vibe_pin", options, sizeof(options));
   assert(std::string(options).find("-1,") == 0);
   ui.bridge = true; ui.deviceSettingsPinOptions("tone_pin", options, sizeof(options));
@@ -119,6 +166,7 @@ int main() {
 
 
 def main():
+    verify_variant_maps()
     compiler = shutil.which("g++") or shutil.which("clang++")
     flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror"]
     if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":

@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.0.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.1.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -35,6 +35,12 @@ async function geometry(page){
 test('0.16 full controls use firmware schemas; safe pin consent, drafts, name/TX and phrases work',async()=>{
   const f=await fixture({console:1,meshcore:1,firmware:'0.16',manualAdc:true,...fullSettingsFixture()});
   try{const p=f.page;await connect(p);
+    assert.equal(await p.locator('#api-setting-tone_pin').isVisible(),false);
+    await p.locator('#api-settings').evaluate(section=>{const caption=document.createElement('p');caption.id='basic-simulation-caption';caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
+    await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.1-basic-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.1-basic-mobile.png')});
+    await p.setViewportSize({width:1440,height:1080});await p.locator('#basic-simulation-caption').evaluate(el=>el.remove());
+    await p.locator('#api-settings-advanced').check();
     assert.deepEqual(await p.locator('#api-setting-tone_pin option').evaluateAll(nodes=>nodes.map(n=>n.value)),['29','31','33','34','35','36','37','39','43']);
     for(const key of ['ui_theme','led_pin'])assert.equal(await p.locator('#api-setting-'+key).isEnabled(),true);
     for(const key of ['profile','melody_dm','melody_mention'])assert.equal(await p.locator('#api-setting-'+key).isDisabled(),true);
@@ -50,11 +56,48 @@ test('0.16 full controls use firmware schemas; safe pin consent, drafts, name/TX
     assert.equal(await p.evaluate(()=>__apiMock.settings.tone_pin),33);assert.equal(await p.locator('#api-setting-volume').inputValue(),'5');
     await p.locator('#node-name').fill('Моя нода');await p.locator('#node-name-save').click();await p.locator('#confirm-yes').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.meshcore.name),'Моя нода');
     await p.locator('#node-tx').fill('17');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.meshcore.tx),'17');
+    assert.equal(await p.locator('#api-phrase-1').isVisible(),false);await p.locator('#api-phrases-panel summary').click();
     await p.locator('#api-phrases-load').click();await ready(p);await p.locator('#api-phrase-1').fill('Уже еду');await p.locator('#api-phrase-save-1').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.phrases[0]),'Уже еду');
     await p.locator('#api-settings').evaluate(section=>{const caption=document.createElement('p');caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
-    await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.0-settings-desktop.png')});
-    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.0-settings-mobile.png')});
+    await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.1-settings-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.1-settings-mobile.png')});
   }finally{await f.close();}
+});
+
+test('sound labels match firmware and tests explain mute, disabled sound and unsaved edits',async()=>{
+  for(const schema of [false,true]){
+    const full=schema?fullSettingsFixture():{};
+    const f=await fixture({...full,settings:{...full.settings,muted:0,sound_quiet:1}});
+    try{const p=f.page;await connect(p);
+      assert.equal(await p.locator('#api-setting-sound_quiet option:checked').textContent(),'Выключен');
+      assert.match(await p.locator('#api-notify-state').textContent(),/Звук выключен на ноде/);
+      const save=p.getByRole('button',{name:'Сохранить CLI: Звук уведомлений ЛС',exact:true});assert.equal(await save.isDisabled(),true);
+      await p.locator('#api-setting-sound_quiet').selectOption({label:'Включён'});await save.click();await ready(p);
+      assert.equal(await p.evaluate(()=>__apiMock.settings.sound_quiet),0);assert.match(await p.locator('#api-notify-state').textContent(),/Звук включён на ноде/);
+      await p.locator('#api-setting-muted').selectOption('1');await p.getByRole('button',{name:'Сохранить CLI: Общая тишина',exact:true}).click();await ready(p);
+      await p.locator('#api-notify-test').click();await ready(p);assert.match(await p.locator('#api-feedback').textContent(),/Общая тишина включена/);
+      await p.locator('#api-setting-muted').selectOption('0');
+      const before=await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui test').length);
+      await p.locator('#api-notify-test').click();assert.match(await p.locator('#confirm-text').textContent(),/несохранённые/);await p.locator('#confirm-no').click();
+      assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui test').length),before);
+      await p.locator('#api-notify-test').click();await p.locator('#confirm-yes').click();await ready(p);
+      assert.equal(await p.evaluate(()=>__apiMock.settings.muted),1);assert.match(await p.locator('#api-feedback').textContent(),/Общая тишина включена/);
+    }finally{await f.close();}
+  }
+});
+
+test('path selector changes only hash bytes using fresh radio state, consent and readback',async()=>{
+  const f=await fixture();try{const p=f.page;await connect(p);await p.locator('#path-settings summary').click();
+    assert.equal(await p.locator('#path-bytes').inputValue(),'2');await p.locator('#path-bytes').selectOption('1');
+    await p.locator('#path-save').click();await p.locator('#confirm-no').click();assert.equal(await p.evaluate(()=>__apiMock.commands.some(c=>c.startsWith('ui radio set'))),false);
+    await p.evaluate(()=>Object.assign(__apiMock.radio,{freq_khz:868731,bw_hz:62500,sf:7,cr:7,tx_dbm:17,repeat:1}));
+    await p.locator('#path-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>document.getElementById('radio-status').textContent.includes('Хеш маршрута сохранён'));
+    assert.deepEqual(await p.evaluate(()=>__apiMock.radio),{freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:1,tx_dbm:17,repeat:1});
+    assert.equal(await p.locator('#path-save').isDisabled(),true);assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c.startsWith('ui radio set')).length),1);
+    await geometry(p);await p.locator('#radio-section').screenshot({path:path.join(output,'helper-2.1-path-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#radio-section').screenshot({path:path.join(output,'helper-2.1-path-mobile.png')});
+  }finally{await f.close();}
+  const read=await fixture({readonly:true});try{await connect(read.page);assert.equal(await read.page.locator('#path-bytes').isDisabled(),true);}finally{await read.close();}
 });
 
 test('companion mode change needs consent and is confirmed only through mode status and readback',async()=>{
@@ -266,6 +309,7 @@ test('per-field save/readback keeps another unsaved field',async()=>{
 });
 test('bridge/protection confirmations can decline; no accidental writes',async()=>{
   const f=await fixture();try{const p=f.page;await connect(p);
+    await p.locator('#api-settings-advanced').check();
     for(const [key,value,label]of [['bridge','1','Мостовой звук · два вывода'],['battery_protection','0','Защита АКБ 3,2 В']]){
       await p.locator('#api-setting-'+key).selectOption(value);await p.getByRole('button',{name:'Сохранить CLI: '+label,exact:true}).click();assert.equal(await p.locator('#confirm-dialog').isVisible(),true);await p.locator('#confirm-no').click();
     }
@@ -300,8 +344,8 @@ test('0.15 console help presets never send themselves and TX setter confirms wit
     await p.locator('#api-command').fill('melody 1');await p.locator('#api-command-send').click();await ready(p);
     assert.match(await p.locator('#api-command-result').textContent(),/1: Трель/);
     assert.doesNotMatch(await p.locator('#api-log').textContent(),/set tx|Трель|help sound/);
-    await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.0-console-desktop.png')});
-    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.0-console-mobile.png')});
+    await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.1-console-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.1-console-mobile.png')});
   }finally{await f.close();}
 });
 

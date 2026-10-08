@@ -163,6 +163,7 @@
     ['profile','system','Профиль устройства'],['agc_reset','system','AGC-сброс · каждые 60 с'],['fem_lna','system','FEM · усилитель приёма'],['fem_pa','system','FEM · усилитель передачи']
   ].map(([key,group,label])=>Object.freeze({key,group,label})));
   const SETTING_KEYS=Object.freeze([...new Set([...Object.keys(SETTING_CAPS),...EXTENDED_FIELDS.map(f=>f.key)])]);
+  const ADVANCED_SETTING_KEYS=Object.freeze(['notify_mode','important_notify_mode','led_pin','tone_pin','vibe_pin','melody_dm','melody_mention','melody_system','tone_8bit','high_drive','resonance_hz','bridge','offline_dm_led','ble_dm_led','msg_popup','ui_top_color','ui_bottom_color','gps_source','gps_interval','advert_location']);
   function parseSettingSchema(line,key,transport='settings') {
     if(!['settings','ui'].includes(transport)||!SETTING_KEYS.includes(key)||typeof line!=='string'||line.length>156)return null;
     const prefix='OK '+transport+' schema key='+key+' ';
@@ -178,9 +179,16 @@
     const values=schema.options||((schema.max-schema.min)/schema.step<=255?Array.from({length:Math.floor((schema.max-schema.min)/schema.step)+1},(_,i)=>schema.min+i*schema.step):null);
     if(!values)return null;
     const choices={backlight_timeout:['15 секунд','30 секунд','60 секунд'],gps_source:['GPS-модуль ноды','Координаты телефона'],profile:['Свой','Тихий','На улице','Ночной'],ui_top_color:['Белый','Зелёный','Жёлтый','Синий','Оранжевый','Красный'],ui_bottom_color:['Белый','Зелёный','Жёлтый','Синий','Оранжевый','Красный']};
-    return values.map(value=>[value,field.key.endsWith('_pin')?(value===-1?'Отключён':'Вывод '+value):field.key.startsWith('melody')?(value+' · '+(melodies[value]||'Мелодия '+value)):
+    return values.map(value=>[value,field.key==='sound_quiet'?(value?'Выключен':'Включён'):field.key.endsWith('_pin')?(value===-1?'Отключён':'Вывод '+value):field.key.startsWith('melody')?(value+' · '+(melodies[value]||'Мелодия '+value)):
       field.key.endsWith('notify_mode')?(value===0?'Без уведомлений':[value&1?'LED':null,value&2?'Звук':null,value&4?'Вибро':null].filter(Boolean).join(' + ')):
       choices[field.key]?.[value]||(schema.min===0&&schema.max===1?(value?'Включено':'Выключено'):String(value))]);
+  }
+  function notificationStatus(settings,caps){
+    if(!settings||!caps)return 'Сначала прочитайте настройки ноды.';
+    if(Number(settings.muted)===1)return 'Общая тишина включена. Тест уведомления не подаст звук, свет или вибрацию. Индикаторы состояния и зарядки — отдельные.';
+    if(!Number(caps.sound))return 'Звук недоступен в этой сборке. Тест проверяет только доступные каналы уведомлений.';
+    if(Number(settings.sound_quiet)===1)return 'Звук выключен на ноде. Для мелодии включите «Звук уведомлений ЛС» и сохраните. Тест не включает отключённые каналы.';
+    return 'Звук включён на ноде · громкость '+settings.volume+' / 10'+(settings.tone_pin===undefined?'':' · вывод '+settings.tone_pin)+'. Тест использует сохранённые настройки; ответ команды не подтверждает работу излучателя.';
   }
   function parseSettingValue(line,key,transport='settings'){
     const prefix='OK '+transport+' get key='+key+' value=';
@@ -1011,14 +1019,14 @@
         catch(error){if(['TIMEOUT','PROTOCOL','SERIAL_ERROR','DISCONNECTED'].includes(error.code)&&this._current(session))this._stateChanged({verified:false});throw error;}
       });
     }
-    async saveNetworkSetting(kind,values) {
-      if(!networkValuesValid(kind,values))throw failure('SETTINGS_INVALID');
+    async saveNetworkSetting(kind,values,{pathOnly=false}={}) {
+      if(pathOnly?kind!=='radio'||!integer(values?.path_bytes,1,3):!networkValuesValid(kind,values))throw failure('SETTINGS_INVALID');
       return this._operate(async session=>{
         const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];
         let acknowledged=false;
         try{
           const before=await this._readNetworkSetting(session,kind);
-          if(kind==='radio')values={...values,path_bytes:before.path_bytes};
+          if(kind==='radio')values=pathOnly?{...before,path_bytes:values.path_bytes}:{...values,path_bytes:before.path_bytes};
           const command='settings '+kind+' set '+keys.map(k=>values[k]).join(' ');
           const ack=await this._readNetworkSetting(session,kind,command);acknowledged=true;
           if(keys.some(k=>ack[k]!==values[k]))throw failure('PROTOCOL');
@@ -1070,5 +1078,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, parseCoreSetting });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, ADVANCED_SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, notificationStatus, parseCoreSetting });
 }));

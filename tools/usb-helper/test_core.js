@@ -18,6 +18,28 @@ const SETTINGS = {battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet
 const wireRecord=(kind,values)=>'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('sound_quiet uses positive labels and notification status describes saved blockers',()=>{
+  const {settingOptions,notificationStatus}=require('./core');
+  assert.deepEqual(settingOptions({key:'sound_quiet'},{min:0,max:1,step:1}),[[0,'Включён'],[1,'Выключен']]);
+  assert.match(notificationStatus({...SETTINGS,muted:1},SETTINGS_CAPS),/Общая тишина включена/);
+  assert.match(notificationStatus({...SETTINGS,sound_quiet:1},SETTINGS_CAPS),/Звук выключен на ноде/);
+  assert.match(notificationStatus(SETTINGS,SETTINGS_CAPS),/Звук включён на ноде/);
+});
+
+test('explicit path-only write preserves fresh radio fields and validates 1..3',async()=>{
+  const state={freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:3,tx_dbm:20,repeat:1};
+  const f=await connected({onCommand(command,port){
+    if(command==='settings radio'){port.reply(wireRecord('radio',state));return false;}
+    if(command.startsWith('settings radio set ')){['freq_khz','bw_hz','sf','cr','path_bytes'].forEach((k,i)=>state[k]=Number(command.split(' ')[i+3]));port.reply(wireRecord('radio',state));return false;}
+  }});
+  for(const path_bytes of [0,4,1.5,NaN])await assert.rejects(f.instance.saveNetworkSetting('radio',{path_bytes},{pathOnly:true}),code('SETTINGS_INVALID'));
+  for(const path_bytes of [1,2,3]){
+    const saved=await f.instance.saveNetworkSetting('radio',{path_bytes},{pathOnly:true});
+    assert.deepEqual(saved,{freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes,tx_dbm:20,repeat:1});
+  }
+  assert.equal(f.port.commands.filter(c=>c.startsWith('settings radio set ')).length,3);await f.instance.disconnect();
+});
+
 test('schema parser validates pin allowlists, signed disabled pin, discrete masks and integer steps',()=>{
   const {parseSettingSchema,settingValueValid,settingOptions,parseSettingValue,parseCoreSetting}=require('./core.js');
   const line='OK settings schema key=vibe_pin supported=1 min=-1 max=8 step=1 options=-1,2,8',s=parseSettingSchema(line,'vibe_pin');

@@ -725,7 +725,9 @@ static const int8_t notify_gpio_pins[] = {18, 15, 16, 17, 21, 33, 34, 35, 36, 37
 #elif defined(HELTEC_T096)
 static const int8_t notify_gpio_pins[] = {29, 31, 33, 34, 35, 36, 37, 39, 43, 45};
 #elif defined(HELTEC_T114)
-static const int8_t notify_gpio_pins[] = {35, 0, 1, 5, 7, 8, 9, 10, 13, 16, 18, 28, 29, 30, 31, 32, 33, 34, 36, 43, 44, 45, 46, 47};
+// Arduino pins 0/1 map to 0xff in this board's variant, not usable GPIOs.
+// Keep them out of both on-device selection and the CLI/helper pin schema.
+static const int8_t notify_gpio_pins[] = {35, 5, 7, 8, 9, 10, 13, 16, 18, 28, 29, 30, 31, 32, 33, 34, 36, 43, 44, 45, 46, 47};
 #else
 static const int8_t notify_gpio_pins[] = {
 #ifdef DEFAULT_NOTIFY_GPIO_PIN
