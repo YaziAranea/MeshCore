@@ -20,6 +20,7 @@ def main():
 #include <initializer_list>
 #include "BatteryShutdownPolicy.h"
 #include "UiTiming.h"
+#include "../DeviceSettings.h"
 #define PIN_MSG_ALERT 1
 #define PIN_MSG_TONE 9
 #define PIN_BUZZER 9
@@ -117,9 +118,11 @@ struct Prefs {
   uint32_t night_prompt_day=0;
   double node_lat=1.5, node_lon=2.5;
 };
+static Prefs saved_prefs;
 bool Mesh::savePrefs() {
   ++saves;
   if (prefs) { prefs->node_lat=3.5; prefs->node_lon=4.5; }
+  if (save_ok && prefs) saved_prefs=*prefs;
   return save_ok;
 }
 struct Buzzer {
@@ -165,6 +168,7 @@ public:
   void debugHeartbeat() {}
   void updateConnectionState() {}
   void nightModeHandler();
+  smartui::NightQuietResult setNightQuiet(bool);
   bool persistNightPrefs(uint8_t,uint8_t,uint32_t);
   bool hasTrustedTime() const { return trusted; }
   uint32_t getLocalClockTime(uint32_t value) const { return value; }
@@ -229,7 +233,8 @@ public:
                       "void UITask::setAdcCalibrationServiceActive(",
                       "void UITask::previewNotifyMode()", "void UITask::notify(UIEventType",
                       "uint8_t UITask::getNotifyToneVolume() const", "char UITask::handleLongPress(char c)",
-                      "bool UITask::persistNightPrefs(", "void UITask::nightModeHandler()"):
+                      "bool UITask::persistNightPrefs(", "void UITask::nightModeHandler()",
+                      "smartui::NightQuietResult UITask::setNightQuiet("):
         code += function(source, signature) + "\n"
     code += r'''
 static int checks=0;
@@ -379,6 +384,65 @@ int main() {
     now=wrap._night_save_retry_at; wrap.nightModeHandler();
     CHECK(the_mesh.saves==2 && wrap.prefs.notifications_muted==0 && wrap._night_save_retry_at==0);
   }
+  // CLI timed quiet persists through a simulated reboot and expires at morning.
+  using NightResult=smartui::NightQuietResult;
+  UITask controlled; the_mesh.prefs=&controlled.prefs; the_mesh.saves=0;
+  now=100000; the_mesh.save_ok=true;
+  controlled._node_prefs=nullptr;
+  CHECK(controlled.setNightQuiet(true)==NightResult::UNSUPPORTED && the_mesh.saves==0);
+  controlled._node_prefs=&controlled.prefs; controlled._storage_recovery_active=true;
+  CHECK(controlled.setNightQuiet(true)==NightResult::STORAGE && the_mesh.saves==0);
+  controlled._storage_recovery_active=false;
+  rtc_now=20010U*86400+UI_NIGHT_MODE_PROMPT_MINUTE*60;
+  controlled.trusted=false;
+  CHECK(controlled.setNightQuiet(true)==NightResult::TIME && the_mesh.saves==0);
+  controlled.trusted=true; rtc_now=0;
+  CHECK(controlled.setNightQuiet(true)==NightResult::TIME && the_mesh.saves==0);
+  rtc_now=20010U*86400+UI_NIGHT_MODE_PROMPT_MINUTE*60-1;
+  CHECK(controlled.setNightQuiet(true)==NightResult::TIME && the_mesh.saves==0);
+  ++rtc_now;
+  // Explicit manual mute is never taken over by the automatic morning release.
+  controlled.prefs.notifications_muted=1;
+  CHECK(controlled.setNightQuiet(true)==NightResult::MUTED && the_mesh.saves==0);
+  CHECK(controlled.setNightQuiet(false)==NightResult::OK && the_mesh.saves==0);
+  CHECK(controlled.prefs.notifications_muted==1 && controlled.prefs.night_quiet_active==0);
+  controlled.prefs.notifications_muted=0;
+  controlled._night_prompt_active=true; controlled._night_prompt_expires=999;
+  the_mesh.save_ok=false;
+  CHECK(controlled.setNightQuiet(true)==NightResult::STORAGE && the_mesh.saves==1);
+  CHECK(controlled.prefs.night_quiet_active==0 && controlled.prefs.notifications_muted==0);
+  CHECK(controlled.prefs.night_prompt_day==0 && controlled.prefs.node_lat==1.5 && controlled.prefs.node_lon==2.5);
+  CHECK(controlled._night_prompt_active && controlled._night_prompt_expires==999 && controlled.stopped==0);
+  the_mesh.save_ok=true;
+  CHECK(controlled.setNightQuiet(true)==NightResult::OK && the_mesh.saves==2);
+  CHECK(controlled.prefs.night_quiet_active==1 && controlled.prefs.notifications_muted==1);
+  CHECK(controlled.prefs.night_prompt_day==20010 && saved_prefs.night_prompt_day==20010);
+  CHECK(saved_prefs.night_quiet_active==1 && saved_prefs.notifications_muted==1);
+  CHECK(!controlled._night_prompt_active && controlled._night_prompt_expires==0 && controlled.stopped==1);
+  rtc_now=20011U*86400+60;
+  CHECK(controlled.setNightQuiet(true)==NightResult::OK && the_mesh.saves==2);
+  CHECK(controlled.prefs.night_prompt_day==20010);
+  rtc_now=20011U*86400+UI_NIGHT_MODE_PROMPT_MINUTE*60;
+  CHECK(controlled.setNightQuiet(true)==NightResult::TIME && the_mesh.saves==2);
+  CHECK(controlled.prefs.night_prompt_day==20010);
+  UITask rebooted; rebooted.prefs=saved_prefs; the_mesh.prefs=&rebooted.prefs;
+  rtc_now=20011U*86400+UI_NIGHT_MODE_END_MINUTE*60-1;
+  rebooted.nightModeHandler();
+  CHECK(rebooted.prefs.night_quiet_active==1 && rebooted.prefs.notifications_muted==1 && the_mesh.saves==2);
+  ++rtc_now;
+  CHECK(rebooted.setNightQuiet(true)==NightResult::TIME && the_mesh.saves==2);
+  rebooted.nightModeHandler();
+  CHECK(rebooted.prefs.night_quiet_active==0 && rebooted.prefs.notifications_muted==0 && the_mesh.saves==3);
+  CHECK(saved_prefs.night_quiet_active==0 && saved_prefs.notifications_muted==0 && !rebooted._night_prompt_active);
+  // Turning an owned night mute off needs no clock; failed persistence rolls back.
+  the_mesh.prefs=&controlled.prefs; rtc_now=0; controlled.trusted=false;
+  the_mesh.save_ok=false;
+  CHECK(controlled.setNightQuiet(false)==NightResult::STORAGE && the_mesh.saves==4);
+  CHECK(controlled.prefs.night_quiet_active==1 && controlled.prefs.notifications_muted==1);
+  the_mesh.save_ok=true;
+  CHECK(controlled.setNightQuiet(false)==NightResult::OK && the_mesh.saves==5);
+  CHECK(controlled.prefs.night_quiet_active==0 && controlled.prefs.notifications_muted==0);
+  CHECK(saved_prefs.night_quiet_active==0 && saved_prefs.notifications_muted==0);
   printf("PASS %d actual UITask null-display loop, notification and protection checks\n",checks);
 }
 '''

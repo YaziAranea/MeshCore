@@ -111,6 +111,16 @@ size_t SmartUiCli::handle(const uint8_t* request, size_t length,
         arm_mode = true;
         break;
       }
+      // The compact console uses the same delayed mode transaction. Arm it
+      // only for this exact request/target/reply pair, after the outer owner
+      // has queued the complete response; unrelated or stale replies cannot
+      // close the connection.
+      snprintf(command, sizeof(command), "set connection %s", mode);
+      snprintf(reply, sizeof(reply), "OK mode target=%s state=pending", mode);
+      if (strcmp(_command, command) == 0 && strcmp(_reply, reply) == 0) {
+        arm_mode = true;
+        break;
+      }
     }
   }
   response[0] = RESPONSE;

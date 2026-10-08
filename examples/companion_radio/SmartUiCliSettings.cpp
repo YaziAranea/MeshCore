@@ -11,13 +11,13 @@ const char* const CAP_KEYS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration",
     "gps", "battery_protection", "display", "melody_max", "adc_min",
     "adc_max", "agc_reset", "fem_lna", "fem_pa", "bridge",
-    "melody_names", "adc_service", "schema", "sound_preview",
+    "melody_names", "adc_service", "schema", "sound_preview", "night_quiet",
 };
 
 const char* const GET_KEYS[] = {
     "battery_mv", "adc_multiplier", "adc_default", "sound_quiet",
     "volume", "melody", "board_led", "unread_led", "vibration", "gps",
-    "battery_protection", "shutdown_mv", "muted", "agc_reset", "fem_lna",
+    "battery_protection", "shutdown_mv", "muted", "night_quiet", "agc_reset", "fem_lna",
     "fem_pa", "bridge",
     "notify_mode", "important_notify_mode", "led_pin", "tone_pin", "vibe_pin",
     "melody_dm", "melody_mention", "melody_system", "tone_8bit", "high_drive",
@@ -28,7 +28,7 @@ const char* const GET_KEYS[] = {
 
 const char* const SET_KEYS[] = {
     "sound_quiet", "volume", "melody", "board_led", "unread_led",
-    "vibration", "gps", "battery_protection", "muted", "agc_reset",
+    "vibration", "gps", "battery_protection", "muted", "night_quiet", "agc_reset",
     "fem_lna", "fem_pa", "bridge",
     "notify_mode", "important_notify_mode", "led_pin", "tone_pin", "vibe_pin",
     "melody_dm", "melody_mention", "melody_system", "tone_8bit", "high_drive",
@@ -231,10 +231,11 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
 
   char key[24];
   if (strncmp(command, "ui schema", 9) == 0 || strncmp(command, "ui get", 6) == 0 ||
-      strcmp(command, "ui caps schema") == 0 || strcmp(command, "ui caps sound_preview") == 0) {
+      strcmp(command, "ui caps schema") == 0 || strcmp(command, "ui caps sound_preview") == 0 ||
+      strcmp(command, "ui caps night_quiet") == 0) {
     const bool schema = strncmp(command, "ui schema", 9) == 0;
     const bool direct_cap = strcmp(command, "ui caps schema") == 0 ||
-        strcmp(command, "ui caps sound_preview") == 0;
+        strcmp(command, "ui caps sound_preview") == 0 || strcmp(command, "ui caps night_quiet") == 0;
     if (!direct_cap && (!oneWordAfter(command, schema ? "ui schema " : "ui get ", key, sizeof(key)) ||
         !allowedKey(key, GET_KEYS))) {
       response(reply, capacity, "ERR ui invalid"); return true;

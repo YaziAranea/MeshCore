@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.3.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.4.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -444,15 +444,20 @@ test('staged Wi-Fi explicit save, safe developer values and secret isolation',as
     await p.locator('#api-command').fill('ui wifi password 736563726574');await p.locator('#api-command-send').click();assert.match(await p.locator('#api-feedback').textContent(),/специальные формы/);
   }finally{await f.close();}
 });
-test('0.15 console help presets never send themselves and TX setter confirms with readback',async()=>{
-  const f=await fixture({console:1,meshcore:1});try{const p=f.page;await connect(p);
+test('control command presets never send themselves and TX setter confirms with readback',async()=>{
+  const f=await fixture({console:1,control:1,meshcore:1,firmware:'0.17',soundPreview:true});try{const p=f.page;await connect(p);
     await tab(p,'service');
     const before=await p.evaluate(()=>__apiMock.commands.length);
-    await p.locator('#api-command-presets [data-command="help"]').click();
-    assert.equal(await p.locator('#api-command').inputValue(),'help');
+    assert.equal(await p.locator('#api-command-presets [data-command^="help"]').count(),0);
+    for(const command of ['get volume','get melody','get adc.multiplier','get radio','get tx','sound preview']){
+      await p.locator('#api-command-presets [data-command="'+command+'"]').click();
+      assert.equal(await p.locator('#api-command').inputValue(),command);
+      assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    }
+    await p.locator('#api-command-presets [data-command="get volume"]').click();
     assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
     await p.locator('#api-command-send').click();await ready(p);
-    assert.match(await p.locator('#api-command-result').textContent(),/help sound 2/);
+    assert.match(await p.locator('#api-command-result').textContent(),/> 7/);
     await p.locator('#api-command-presets [data-command="get tx"]').click();await p.locator('#api-command-send').click();await ready(p);
     assert.match(await p.locator('#api-command-result').textContent(),/> 20/);
     await p.locator('#api-command').fill('set tx 18');await p.locator('#api-command-send').click();await p.locator('#confirm-no').click();
@@ -465,6 +470,29 @@ test('0.15 console help presets never send themselves and TX setter confirms wit
     assert.doesNotMatch(await p.locator('#api-log').textContent(),/set tx|Трель|help sound/);
     await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.1-console-desktop.png')});
     await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.1-console-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('control field preserves UTF8 phrase bytes and cannot bypass connection form',async()=>{
+  const f=await fixture({console:1,control:1,meshcore:1,firmware:'0.17',soundPreview:true});try{const p=f.page;await connect(p);await tab(p,'service');
+    const before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-command').fill('set connection ble');await p.locator('#api-command-send').click();
+    assert.match(await p.locator('#api-feedback').textContent(),/специальные формы/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    const command='reply set 1 <b>Привет!</b>  ';
+    await p.locator('#api-command').fill(command);await p.locator('#api-command-send').click();
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),before);
+    await p.locator('#confirm-yes').click();await ready(p);
+    assert.equal(await p.evaluate(c=>__apiMock.commands.filter(v=>v===c).length,command),1);
+    assert.equal(await p.evaluate(()=>__apiMock.phrases[0]),'<b>Привет!</b>  ');
+    await p.locator('#api-command').fill('reply get 1');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/> <b>Привет!<\/b>  /);
+    assert.equal(await p.locator('#api-command-result b').count(),0);
+    assert.doesNotMatch(await p.locator('#api-log').textContent(),/Привет|reply set/);
+    const after=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-command').fill('help');await p.locator('#api-command-send').click();await ready(p);
+    assert.match(await p.locator('#api-command-result').textContent(),/Справка в прошивке удалена/);
+    assert.equal(await p.evaluate(()=>__apiMock.commands.length),after);
   }finally{await f.close();}
 });
 

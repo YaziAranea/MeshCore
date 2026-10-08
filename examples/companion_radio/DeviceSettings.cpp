@@ -13,7 +13,7 @@ constexpr uint32_t ADC_CALIBRATION_SAMPLE_MAX_AGE_MS = 120000U;
 enum class Support : uint8_t {
   ALWAYS, SOUND, VIBE, LED, BOARD_LED, GPS, BATTERY, AGC, LNA, PA, BRIDGE,
   NOTIFY, PIN_LED, PIN_TONE, PIN_VIBE, TONE_8BIT, DRIVE, RESONANCE,
-  MELODIES, DISPLAY, FONT, THEME, COLOR, GPS_SOURCE, PROFILE
+  MELODIES, DISPLAY, FONT, THEME, COLOR, GPS_SOURCE, PROFILE, NIGHT
 };
 struct ScalarSetting {
   const char* key;
@@ -37,6 +37,7 @@ const ScalarSetting SCALARS[] = {
   SCALAR("gps", gps, 0, 1, 1, GPS, false),
   SCALAR("battery_protection", battery_protection, 0, 1, 1, BATTERY, false),
   SCALAR("muted", muted, 0, 1, 1, ALWAYS, false),
+  SCALAR("night_quiet", night_quiet, 0, 1, 1, NIGHT, true),
   SCALAR("agc_reset", agc_reset, 0, 1, 1, AGC, false),
   SCALAR("fem_lna", fem_lna, 0, 1, 1, LNA, false),
   SCALAR("fem_pa", fem_pa, 0, 1, 1, PA, false),
@@ -99,6 +100,7 @@ bool supported(const ScalarSetting& item, const DeviceSettingsCaps& c) {
     case Support::COLOR: return c.display && c.colors;
     case Support::GPS_SOURCE: return c.phone_gps || c.gps;
     case Support::PROFILE: return c.profiles;
+    case Support::NIGHT: return c.night_quiet;
   }
   return false;
 }
@@ -215,6 +217,8 @@ bool DeviceSettings::handleSettings(const char* command, char* reply, size_t cap
     return true;
   }
   if (handleExtended(command, reply, capacity, allow_mutation)) return true;
+  if (strncmp(command, "settings melody ", 16) == 0)
+    return handleMelody(command + 16, "settings", reply, capacity);
   const DeviceSettingsCaps caps = _hooks.caps();
   const DeviceSettingsState before = _hooks.read();
   if (strcmp(command, "settings caps") == 0) {
@@ -482,6 +486,11 @@ bool DeviceSettings::handleSettings(const char* command, char* reply, size_t cap
 
 bool DeviceSettings::handleExtended(const char* command, char* reply, size_t capacity,
                                     bool allow_mutation) {
+  if (strcmp(command, "settings caps night_quiet") == 0) {
+    snprintf(reply, capacity, "OK settings caps key=night_quiet value=%u",
+        _hooks.caps().night_quiet && _hooks.setNightQuiet ? 1U : 0U);
+    return true;
+  }
   if (strcmp(command, "settings caps sound_preview") == 0) {
     snprintf(reply, capacity, "OK settings caps key=sound_preview value=%u",
         _hooks.caps().sound && _hooks.previewSound ? 1U : 0U);
@@ -574,6 +583,20 @@ bool DeviceSettings::handleExtended(const char* command, char* reply, size_t cap
       (!_hooks.pinAllowed || !_hooks.pinAllowed(key, value))) {
     response(reply, capacity, "ERR settings pin_conflict"); return true;
   }
+  if (item->support == Support::NIGHT) {
+    if (!_hooks.setNightQuiet) { response(reply, capacity, "ERR settings unsupported"); return true; }
+    const NightQuietResult result = _hooks.setNightQuiet(value != 0);
+    if (result == NightQuietResult::OK) {
+      _preview_token = 0;
+      snprintf(reply, capacity, "OK settings set key=night_quiet value=%ld", static_cast<long>(value));
+    } else {
+      const char* reason = result == NightQuietResult::TIME ? "time" :
+          result == NightQuietResult::MUTED ? "muted" :
+          result == NightQuietResult::STORAGE ? "storage" : "unsupported";
+      snprintf(reply, capacity, "ERR settings %s", reason);
+    }
+    return true;
+  }
   if (item->support == Support::BRIDGE) {
     if (!_hooks.setToneBridge) { response(reply, capacity, "ERR settings unsupported"); return true; }
     if (!_hooks.setToneBridge(value != 0)) response(reply, capacity, "ERR settings storage");
@@ -613,6 +636,41 @@ bool DeviceSettings::handleExtended(const char* command, char* reply, size_t cap
   return true;
 }
 
+bool DeviceSettings::handleMelody(const char* argument, const char* prefix,
+                                 char* reply, size_t capacity) {
+  uint32_t id;
+  const DeviceSettingsCaps caps = _hooks.caps();
+  auto error = [&](const char* why) { snprintf(reply, capacity, "ERR %s %s", prefix, why); };
+  if (!unsignedNumber(argument, id)) error("invalid");
+  else if (!caps.sound || !_hooks.melodyName) error("unsupported");
+  else if (id > caps.melody_max) error("range");
+  else {
+    const char* name = _hooks.melodyName(static_cast<uint8_t>(id));
+    size_t length = 0;
+    if (name) while (length <= MELODY_NAME_MAX && name[length]) ++length;
+    if (length == 0 || length > MELODY_NAME_MAX) {
+      error("internal");
+    } else {
+      // Hex keeps arbitrary UTF-8 labels out of the ASCII record grammar.
+      static const char hex[] = "0123456789abcdef";
+      const int used = snprintf(reply, capacity, "OK %s melody id=%lu name_hex=",
+                                prefix, static_cast<unsigned long>(id));
+      if (used < 0 || static_cast<size_t>(used) + 2 * length >= capacity) {
+        error("internal");
+        return true;
+      }
+      size_t position = static_cast<size_t>(used);
+      for (size_t i = 0; i < length; ++i) {
+        const uint8_t byte = static_cast<uint8_t>(name[i]);
+        reply[position++] = hex[byte >> 4];
+        reply[position++] = hex[byte & 15];
+      }
+      reply[position] = 0;
+    }
+  }
+  return true;
+}
+
 bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity,
                                bool allow_mutation) {
   static_assert(48 + 2 * MELODY_NAME_MAX < REPLY_CAPACITY, "Melody record must fit the response");
@@ -626,38 +684,8 @@ bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity
     response(reply, capacity, "ERR api unavailable");
     return true;
   }
-  if (strncmp(command, "api melody ", 11) == 0) {
-    uint32_t id;
-    const DeviceSettingsCaps caps = _hooks.caps();
-    if (!unsignedNumber(command + 11, id)) response(reply, capacity, "ERR api invalid");
-    else if (!caps.sound || !_hooks.melodyName) response(reply, capacity, "ERR api unsupported");
-    else if (id > caps.melody_max) response(reply, capacity, "ERR api range");
-    else {
-      const char* name = _hooks.melodyName(static_cast<uint8_t>(id));
-      size_t length = 0;
-      if (name) while (length <= MELODY_NAME_MAX && name[length]) ++length;
-      if (length == 0 || length > MELODY_NAME_MAX) {
-        response(reply, capacity, "ERR api internal");
-      } else {
-        // Hex keeps arbitrary UTF-8 labels out of the ASCII record grammar.
-        static const char hex[] = "0123456789abcdef";
-        const int prefix = snprintf(reply, capacity, "OK api melody id=%lu name_hex=",
-                                    static_cast<unsigned long>(id));
-        if (prefix < 0 || static_cast<size_t>(prefix) + 2 * length >= capacity) {
-          response(reply, capacity, "ERR api internal");
-          return true;
-        }
-        size_t position = static_cast<size_t>(prefix);
-        for (size_t i = 0; i < length; ++i) {
-          const uint8_t byte = static_cast<uint8_t>(name[i]);
-          reply[position++] = hex[byte >> 4];
-          reply[position++] = hex[byte & 15];
-        }
-        reply[position] = 0;
-      }
-    }
-    return true;
-  }
+  if (strncmp(command, "api melody ", 11) == 0)
+    return handleMelody(command + 11, "api", reply, capacity);
 
   if (strncmp(command, "api set ", 8) == 0) {
     const char* key_start = command + 8;

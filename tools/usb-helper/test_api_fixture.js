@@ -4,8 +4,8 @@ function installApiMock(options={}) {
   const enc=new TextEncoder(),hex=text=>Array.from(enc.encode(text),b=>b.toString(16).padStart(2,'0')).join('');
   const mock={
     commands:[],packets:[],requests:0,openCount:0,maxOpen:0,closed:true,readerCount:0,readCalls:0,drop:false,wrong:false,errorNext:null,phrases:Array(9).fill(''),mode:'usb',
-    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...options.caps},
-    settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...options.settings},
+    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...(options.control===1?{night_quiet:1}:{}),...options.caps},
+    settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...(options.control===1?{night_quiet:0}:{}),...options.settings},
     settingsReadErrors:{...options.settingsReadErrors},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',adcService:{supported:1,active:0,remaining_ms:0,external:1},adcServiceDeadline:0,
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
@@ -21,25 +21,35 @@ function installApiMock(options={}) {
       const raw=new TextDecoder().decode(request.slice(1)),tag=raw.slice(0,2),original=raw.slice(3);let cmd=original;this.commands.push(cmd);
       if(this.drop)return;
       if(this.errorNext){const e=this.errorNext;this.errorNext=null;this.reply(tag,e);return;}
-      let friendly=false;
+      let friendly=false,invertSound=false,humanReply=false;
       if(options.console===1){
-        const aliases={'fem.lna':'fem_lna','fem.pa':'fem_pa','sound.bridge':'bridge','adc':'adc_multiplier','adc.multiplier':'adc_multiplier','adc.default':'adc_default','battery':'battery_mv'};
+        const aliases={'fem.lna':'fem_lna','fem.pa':'fem_pa','sound.bridge':'bridge','adc':'adc_multiplier','adc.multiplier':'adc_multiplier','adc.default':'adc_default','battery':'battery_mv',...(options.control===1?{sound:'sound_quiet',mute:'muted'}:{})};
         const short=/^(get|set) ([a-z_.]+)(?: (.+))?$/.exec(cmd);
         if(short){const [,verb,key,value]=short,internal=aliases[key]||key;
           if(verb==='get'&&Object.hasOwn(this.settings,internal)){cmd='ui get '+internal;friendly=true;}
-          else if(verb==='set'&&Object.hasOwn(this.settings,internal)){cmd=internal==='adc_multiplier'?'ui adc set '+value:'ui set '+internal+' '+(value==='on'?'1':value==='off'?'0':value);friendly=true;}
+          else if(verb==='set'&&Object.hasOwn(this.settings,internal)){const scalar=value==='on'?'1':value==='off'?'0':value;cmd=internal==='adc_multiplier'?'ui adc set '+value:'ui set '+internal+' '+(key==='sound'?Number(!Number(scalar)):scalar);friendly=true;}
           else if(key==='advert'){cmd='ui advert'+(verb==='set'?' set '+value:'');friendly=true;}
+          if(key==='sound'&&options.control===1)invertSound=verb==='get';
         }
         const cap=/^(?:get )?caps ([a-z_.]+)$/.exec(original);
         if(cap){cmd='ui caps '+(['fem.lna','fem.pa','sound.bridge'].includes(cap[1])?aliases[cap[1]]:cap[1]);friendly=true;}
         if(/^adc (?:preview |apply |manual$|reset$|service)/.test(original)){cmd='ui '+original;friendly=true;}
         if(original==='test notification'){cmd='ui test';friendly=true;}
         if(/^melody \d+$/.test(original)){cmd='ui '+original;friendly=true;}
+        if(options.control===1){
+          if(original==='test'||original==='sound preview'){cmd=original==='test'?'ui test':'ui sound preview';friendly=true;}
+          if(original==='get connection'){cmd='ui connection';friendly=true;}
+          if(original==='connection status'){cmd='ui mode status';friendly=true;}
+          if(/^set connection (ble|usb|wifi)$/.test(original)){cmd='ui mode '+original.slice(15);friendly=true;}
+          if(/^schema (sound|mute|night_quiet)$/.test(original)){cmd='ui schema '+(aliases[original.slice(7)]||original.slice(7));friendly=true;}
+          const phrase=/^reply (get|set|reset) ([1-9])(?: (.*))?$/u.exec(original);
+          if(phrase){cmd=phrase[1]==='get'?'ui reply get '+phrase[2]:'ui reply set '+phrase[2]+' '+(phrase[1]==='reset'?'-':hex(phrase[3]));friendly=true;humanReply=phrase[1]==='get';}
+        }
       }
       let text;
-      if(cmd==='ui hello')text='OK ui hello version=1 firmware='+(options.firmware||'0.14')+' max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'')+(options.console!==undefined?' console='+options.console:'');
-      else if(options.console===1&&/^help(?: |$)/.test(cmd))text='> get volume; set volume 1..10; get tx; set tx DBM; help sound 2';
-      else if(options.console===1&&cmd==='melodies')text='> current='+this.settings.melody+' max='+this.caps.melody_max+'; melody N';
+      if(cmd==='ui hello')text='OK ui hello version=1 firmware='+(options.firmware||'0.14')+' max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'')+(options.console!==undefined?' console='+options.console:'')+(options.control!==undefined?' control='+options.control:'');
+      else if(options.console===1&&options.control!==1&&/^help(?: |$)/.test(cmd))text='> get volume; set volume 1..10; get tx; set tx DBM; help sound 2';
+      else if(options.console===1&&cmd==='melodies')text='> current='+this.settings.melody+' max='+this.caps.melody_max+(options.control===1?'':'; melody N');
       else if(options.meshcore===1&&cmd.startsWith('get ')&&Object.hasOwn(this.meshcore,cmd.slice(4)))text='> '+this.meshcore[cmd.slice(4)];
       else if(options.meshcore===1&&cmd.startsWith('set ')){
         if(options.readonly)text='Error: readonly';
@@ -100,7 +110,10 @@ function installApiMock(options={}) {
       else text='Unknown command';
       if(friendly){
         if(text.startsWith('ERR ui '))text='Error: '+text.slice(7);
-        else if(/^ui (get|caps) /.test(cmd))text='> '+text.split('value=')[1];
+        else if(/^ui (get|caps) /.test(cmd))text='> '+(invertSound?Number(!Number(text.split('value=')[1])):text.split('value=')[1]);
+        else if(humanReply){const slot=Number(original.split(' ')[2]);text=this.phrases[slot-1]?'> '+this.phrases[slot-1]:'OK reply slot='+slot+' default=1';}
+        else if(cmd.startsWith('ui schema '))text=text.replace('OK ui ','OK ').replace(/key=[^ ]+/, 'key='+original.slice(7));
+        else if(cmd==='ui connection'||cmd.startsWith('ui mode ')||cmd.startsWith('ui reply set ')||cmd==='ui sound preview')text=text.replace('OK ui ','OK ');
         else if(cmd.startsWith('ui melody '))text='> '+cmd.split(' ').at(-1)+': '+new TextDecoder().decode(Uint8Array.from(text.split('name_hex=')[1].match(/../g),b=>parseInt(b,16)));
         else if(/^(get|set) advert(?: |$)/.test(original))text='> interval_min='+this.advert.interval_min;
         else if(cmd.startsWith('ui adc '))text=text.replace('OK ui ','OK ');

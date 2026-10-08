@@ -106,11 +106,26 @@ int main() {
     run(cli, request("ui wifi status"));  // Stale callback text cannot arm anything else.
     reply_text += " extra";
     run(cli, request(std::string("ui mode ") + mode));
+    reply_text = std::string("OK mode target=") + mode + " state=pending";
+    assert(run(cli, request(std::string("set connection ") + mode), &armed) == reply_text);
+    assert(armed);
+    assert(run(cli, request(std::string("B2|set connection ") + mode), &armed) == "B2|" + reply_text);
+    assert(armed);
+    run(cli, request("connection status"));
+    run(cli, request(std::string("ui mode ") + mode)); // Wrong response namespace.
+    reply_text += " extra";
+    run(cli, request(std::string("set connection ") + mode));
+    reply_text = std::string("OK mode target=") + mode + " state=active";
+    run(cli, request(std::string("set connection ") + mode));
   }
   reply_text = "OK ui mode target=ble state=pending";
   run(cli, request("ui mode wifi"));
   reply_text = "ERR ui readonly";
   run(cli, request("ui mode ble"));
+  reply_text = "OK mode target=ble state=pending";
+  run(cli, request("set connection wifi"));
+  reply_text = "Error: readonly";
+  run(cli, request("set connection ble"));
   reply_text = "OK";
   const unsigned repeated = calls;
   run(cli, request("AA|ui caps"));

@@ -9,6 +9,10 @@ enum class SoundPreviewResult : uint8_t {
   STARTED, MUTED, BUSY, PIN_CONFLICT, UNSUPPORTED
 };
 
+enum class NightQuietResult : uint8_t {
+  OK, UNSUPPORTED, TIME, MUTED, STORAGE
+};
+
 // Small, display-independent transaction image. Never copy NodePrefs (including
 // quick replies and serializers) onto the nRF52's 4 KiB loop stack.
 struct DeviceSettingsState {
@@ -79,6 +83,7 @@ struct DeviceSettingsCaps {
   bool phone_gps = false;
   bool colors = false;
   bool profiles = false;
+  bool night_quiet = false;
   bool night_theme = false;
   uint8_t font_count = 0;
   uint8_t theme_count = 0;
@@ -106,6 +111,8 @@ struct DeviceSettingsHooks {
   // Dedicated checked transaction: fixed bridge pins and peripheral ownership
   // cannot be safely represented by changing the preferences byte alone.
   bool (*setToneBridge)(bool enabled) = nullptr;
+  // Timed quiet owns its prompt day and morning-release policy in UITask.
+  NightQuietResult (*setNightQuiet)(bool enabled) = nullptr;
   void (*adcService)(const char* action, char* reply, size_t capacity,
                      bool allow_mutation) = nullptr;
   void (*adcCommitted)() = nullptr;
@@ -142,6 +149,7 @@ private:
   bool handleApi(const char* command, char* reply, size_t capacity, bool allow_mutation);
   bool handleSettings(const char* command, char* reply, size_t capacity, bool allow_mutation);
   bool handleExtended(const char* command, char* reply, size_t capacity, bool allow_mutation);
+  bool handleMelody(const char* argument, const char* prefix, char* reply, size_t capacity);
 };
 
 }  // namespace smartui

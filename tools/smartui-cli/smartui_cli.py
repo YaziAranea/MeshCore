@@ -30,10 +30,23 @@ EXTENDED_KEYS = ("notify_mode|important_notify_mode|led_pin|tone_pin|vibe_pin|me
                  "backlight_timeout|gps_source|gps_interval|advert_location|profile")
 EXTENDED_COMMAND = re.compile(r"(?:get (?:" + EXTENDED_KEYS + r")|set (?:" + EXTENDED_KEYS +
                               r") (?:-?\d+|on|off)|schema [a-z][a-z0-9_.]*|help (?:display|pins|profile|replies)(?: [1-9]\d*)?)", re.ASCII)
+CONTROL_READ = re.compile(
+    r"(?:get (?:sound|mute|night_quiet|connection)|connection status|reply get [1-9]|"
+    r"(?:get )?caps (?:sound_preview|night_quiet)|schema (?:sound|mute|night_quiet))", re.ASCII)
+CONTROL_WRITE = re.compile(
+    r"(?:set (?:sound|mute|night_quiet) (?:on|off|0|1)|set connection (?:ble|usb|wifi)|"
+    r"reply (?:set [1-9] .+|reset [1-9])|sound preview|test)", re.ASCII)
+
+
+def needs_control(command):
+    return bool(CONTROL_READ.fullmatch(command) or CONTROL_WRITE.fullmatch(command) or
+                re.fullmatch(r"ui (?:get night_quiet|set night_quiet [01]|schema night_quiet|caps night_quiet)", command))
 
 
 def is_friendly(command):
-    return bool(FRIENDLY_READ.fullmatch(command) or FRIENDLY_WRITE.fullmatch(command) or EXTENDED_COMMAND.fullmatch(command))
+    return bool(FRIENDLY_READ.fullmatch(command) or FRIENDLY_WRITE.fullmatch(command) or
+                EXTENDED_COMMAND.fullmatch(command) or CONTROL_READ.fullmatch(command) or
+                CONTROL_WRITE.fullmatch(command))
 
 
 ERROR_TEXT = {
@@ -41,6 +54,8 @@ ERROR_TEXT = {
     "unsupported": "smartui_cli:1 not discovered; use archived Helper 1.4 for 0.11.",
     "meshcore_unsupported": "meshcore=1 not discovered in ui hello; use supported ui commands.",
     "console_unsupported": "console=1 not discovered in ui hello; short commands require SmartUI 0.15.",
+    "control_unsupported": "control=1 not discovered in ui hello; this command is unavailable.",
+    "help_unavailable": "Firmware help is unavailable; use client documentation and schema KEY.",
     "busy": "Another command is pending.",
     "closed": "Transport is closed.",
     "timeout": "No reply; result unknown. Reconnect and read state, do not retry writes.",
@@ -67,7 +82,11 @@ def encode_command(tag, command):
         raise CliError("input") from None
     if len(encoded) > 156:
         raise CliError("input")
-    if command.startswith("set name "):
+    if command.startswith("reply set "):
+        match = re.fullmatch(r"reply set [1-9] (.+)", command, re.ASCII)
+        if not match or re.search(r"[|\x7f-\x9f\u2028-\u202e\u2066-\u2069]", match[1]) or not 1 <= len(match[1].encode("utf-8")) <= 64:
+            raise CliError("input")
+    elif command.startswith("set name "):
         if not MESHCORE_SET.fullmatch(command):
             raise CliError("input")
     elif not command.isascii() or not (command.startswith("ui ") or command in READ_COMMANDS or
@@ -139,7 +158,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |name |reply set |tx set |test$|sound preview$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
+    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or CONTROL_WRITE.fullmatch(command) or re.match(r"ui (set |name |reply set |tx set |test$|sound preview$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:
@@ -216,6 +235,10 @@ class CliClient:
             if self.uncertain:
                 raise CliError("uncertain")
             encode_command("00", command)  # Validate before capability/permission checks; no I/O.
+            if needs_control(command) and self.hello.get("control") != "1":
+                raise CliError("control_unsupported")
+            if re.match(r"help(?: |$)", command) and self.hello.get("control") == "1":
+                raise CliError("help_unavailable")
             friendly = is_friendly(command)
             if friendly and self.hello.get("console") != "1":
                 raise CliError("console_unsupported")

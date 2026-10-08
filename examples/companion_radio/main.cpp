@@ -459,6 +459,14 @@ static smartui::SoundPreviewResult previewDeviceSound() {
   return smartui::SoundPreviewResult::UNSUPPORTED;
 #endif
 }
+static smartui::NightQuietResult setDeviceNightQuiet(bool enabled) {
+#ifdef DISPLAY_CLASS
+  return ui_task.setNightQuiet(enabled);
+#else
+  (void)enabled;
+  return smartui::NightQuietResult::UNSUPPORTED;
+#endif
+}
 static bool handleCompanionDeviceSettings(const char* command, char* reply,
                                           size_t capacity, bool allow_mutation) {
   if (smartui::handleCoreSettingsCommand(command, reply, capacity, allow_mutation,
@@ -622,7 +630,7 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
       meshcore_cli, the_mesh.getNodePrefs()->node_name, MAX_LORA_TX_POWER)) return true;
   if (strcmp(command, "ui hello") == 0) {
     snprintf(reply, capacity,
-        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1",
+        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1 control=1",
         SMARTUI_VERSION, writable ? 1U : 0U);
     return true;
   }
@@ -1026,11 +1034,12 @@ void setup() {
   settings_hooks.pinValue = deviceSettingsPinValue;
   settings_hooks.testNotification = testDeviceNotification;
   settings_hooks.previewSound = previewDeviceSound;
+  settings_hooks.melodyName = apiMelodyName;
+  settings_hooks.setToneBridge = apiSetToneBridge;
+  settings_hooks.setNightQuiet = setDeviceNightQuiet;
   settings_hooks.adcService = consoleAdcService;
   settings_hooks.adcCommitted = stopSmartUiAdcCalibrationService;
   device_settings.begin(settings_hooks);
-  settings_hooks.melodyName = apiMelodyName;
-  settings_hooks.setToneBridge = apiSetToneBridge;
   settings_hooks.adcService = companionAdcService;
   cli_device_settings.begin(settings_hooks);
   smartui::RadioSettingsHooks radio_hooks;

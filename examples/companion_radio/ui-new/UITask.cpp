@@ -11961,6 +11961,7 @@ void UITask::describeDeviceSettings(smartui::DeviceSettingsCaps& c) const {
   c.phone_gps = UI_PHONE_GPS == 1;
   c.colors = UI_COLOR_APPEARANCE_MENU != 0;
   c.profiles = UI_SMART_B11_EXTRAS == 1;
+  c.night_quiet = UI_NIGHT_MODE_PROMPT != 0;
 #if UI_T096_PREMIUM_TFT
   c.night_theme = true;
 #endif
@@ -13328,6 +13329,56 @@ void UITask::closeNightPrompt(bool enable_quiet, bool timed_out) {
 #else
   (void)enable_quiet;
   (void)timed_out;
+#endif
+}
+
+smartui::NightQuietResult UITask::setNightQuiet(bool enabled) {
+#if UI_NIGHT_MODE_PROMPT
+  using Result = smartui::NightQuietResult;
+  if (_node_prefs == NULL) return Result::UNSUPPORTED;
+  if (_storage_recovery_active) return Result::STORAGE;
+
+  uint32_t local_day = _node_prefs->night_prompt_day;
+  if (enabled) {
+    // A timed mode must not silently acquire a manual mute and release it in
+    // the morning. The user can explicitly clear manual mute before opting in.
+    if (_node_prefs->notifications_muted && !_node_prefs->night_quiet_active)
+      return Result::MUTED;
+    const uint32_t now = rtc_clock.getCurrentTime();
+    if (!hasTrustedTime() || now < UI_RTC_VALID_MIN) return Result::TIME;
+    const uint32_t local_now = getLocalClockTime(now);
+    const uint16_t minute = (local_now % 86400UL) / 60U;
+    // Match the existing nightly offer and morning release, rather than
+    // accepting a daytime setting that the next loop would immediately undo.
+    if (minute >= UI_NIGHT_MODE_END_MINUTE && minute < UI_NIGHT_MODE_PROMPT_MINUTE)
+      return Result::TIME;
+    if (_node_prefs->night_quiet_active && local_now / 86400UL > local_day &&
+        minute >= UI_NIGHT_MODE_PROMPT_MINUTE) return Result::TIME;
+    if (!_node_prefs->night_quiet_active) local_day = local_now / 86400UL;
+  }
+
+  const uint8_t before_quiet = _node_prefs->night_quiet_active;
+  const uint8_t before_muted = _node_prefs->notifications_muted;
+  const uint32_t before_day = _node_prefs->night_prompt_day;
+  const uint8_t next_muted = enabled ? 1 : (before_quiet ? 0 : before_muted);
+  if (before_quiet != static_cast<uint8_t>(enabled) || before_muted != next_muted ||
+      before_day != local_day) {
+    _node_prefs->night_quiet_active = enabled ? 1 : 0;
+    _node_prefs->notifications_muted = next_muted;
+    _node_prefs->night_prompt_day = local_day;
+    if (!persistNightPrefs(before_quiet, before_muted, before_day)) return Result::STORAGE;
+  }
+  // A successful explicit decision supersedes any open offer. On storage
+  // failure both the saved state and the existing prompt remain unchanged.
+  _night_prompt_active = false;
+  _night_prompt_expires = 0;
+  _night_prompt_yes = true;
+  if (enabled) stopNotifyOutputs();
+  _next_refresh = 0;
+  return Result::OK;
+#else
+  (void)enabled;
+  return smartui::NightQuietResult::UNSUPPORTED;
 #endif
 }
 

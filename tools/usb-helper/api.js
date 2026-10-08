@@ -15,6 +15,8 @@
     UNSUPPORTED:'Нода не сообщает smartui_cli:1. Для API SmartUI 0.11 используйте архивный Helper 1.4; прежние настройки доступны через консоль.',
     MESHCORE_UNSUPPORTED:'Нода не сообщает meshcore=1 в ui hello. Эти команды оригинального MeshCore недоступны; используйте поддержанные ui-команды.',
     CONSOLE_UNSUPPORTED:'Нода не сообщает console=1 в ui hello. Для коротких команд и справки нужна SmartUI 0.15; прежние ui-команды остаются доступны.',
+    CONTROL_UNSUPPORTED:'Нода не сообщает control=1 в ui hello. Эта короткая команда недоступна в текущей прошивке.',
+    HELP_UNAVAILABLE:'Справка в прошивке удалена. Используйте документацию клиента и schema KEY.',
     DENIED:'Нода разрешает только чтение. Изменение не выполнено.',
     FAILED:'Команда отклонена. Изменение не подтверждено.',
     INPUT:'Недопустимая команда или значение.',EXHAUSTED:'Теги запросов исчерпаны. Подключитесь заново.',
@@ -53,9 +55,12 @@
   const extendedKeys='notify_mode|important_notify_mode|led_pin|tone_pin|vibe_pin|melody_dm|melody_mention|melody_system|tone_8bit|high_drive|resonance_hz|offline_dm_led|ble_dm_led|msg_popup|ui_font|ui_theme|ui_top_color|ui_bottom_color|backlight_timeout|gps_source|gps_interval|advert_location|profile';
   const extendedRead=new RegExp('^(?:get (?:'+extendedKeys+')|schema [a-z][a-z0-9_.]*|help (?:display|pins|profile|replies)(?: [1-9]\\d*)?)$');
   const extendedWrite=new RegExp('^set (?:'+extendedKeys+') (?:-?\\d+|on|off)$');
-  const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command)||extendedRead.test(command)||extendedWrite.test(command);
+  const controlReads=/^(?:get (?:sound|mute|night_quiet|connection)|connection status|reply get [1-9]|(?:get )?caps (?:sound_preview|night_quiet)|schema (?:sound|mute|night_quiet))$/;
+  const controlWrites=/^(?:set (?:sound|mute|night_quiet) (?:on|off|0|1)|set connection (?:ble|usb|wifi)|reply (?:set [1-9] .+|reset [1-9])|sound preview|test)$/u;
+  const needsControl=command=>controlReads.test(command)||controlWrites.test(command)||/^ui (?:get night_quiet|set night_quiet [01]|schema night_quiet|caps night_quiet)$/.test(command);
+  const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command)||extendedRead.test(command)||extendedWrite.test(command)||controlReads.test(command)||controlWrites.test(command);
   const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command)&&!isFriendly(command);
-  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |name |reply set |tx set |test$|sound preview$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+  const mutates=command=>friendlyWrites.test(command)||controlWrites.test(command)||command.startsWith('set ')||/^ui (set |name |reply set |tx set |test$|sound preview$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
   function tagFor(index){
     if(!Number.isInteger(index)||index<0||index>=alphabet.length**2)throw fail('EXHAUSTED');
     return alphabet[Math.floor(index/alphabet.length)]+alphabet[index%alphabet.length];
@@ -65,7 +70,10 @@
     const bytes=encoder.encode(command);
     // TextEncoder replaces lone UTF-16 surrogates. Reject, never change a name silently.
     if(bytes.length>156||new TextDecoder().decode(bytes)!==command)throw fail('INPUT');
-    if(command.startsWith('set name ')){
+    if(command.startsWith('reply set ')){
+      const match=/^reply set [1-9] (.+)$/u.exec(command);
+      if(!match||/[|\x7f-\x9f\u2028-\u202e\u2066-\u2069]/u.test(match[1])||encoder.encode(match[1]).length>64)throw fail('INPUT');
+    }else if(command.startsWith('set name ')){
       if(!meshcoreSet.test(command))throw fail('INPUT');
     }else if(/[^\x20-\x7e]/.test(command)||
       !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||meshcoreSet.test(command)||isFriendly(command)))throw fail('INPUT');
@@ -81,7 +89,9 @@
     const extendedUiWrite=new RegExp('^ui set (?:'+extendedKeys+') -?\\d+$');
     if(!(uiRead.test(command)||uiWrite.test(command)||extendedUiRead.test(command)||extendedUiWrite.test(command)||extendedRead.test(command)||extendedWrite.test(command)||['ui test','ui sound preview','ui caps sound_preview'].includes(command)||legacyReads.includes(command)||
       meshcoreReads.includes(command)||(meshcoreSet.test(command)&&!command.startsWith('set pin '))||
-      friendlyReads.test(command)||friendlyWrites.test(command)&&!/^adc |^set adc/.test(command)))throw fail('INPUT');
+      friendlyReads.test(command)||friendlyWrites.test(command)&&!/^adc |^set adc/.test(command)||
+      controlReads.test(command)||controlWrites.test(command)&&!command.startsWith('set connection ')||
+      /^ui (?:get night_quiet|set night_quiet [01]|schema night_quiet|caps night_quiet)$/.test(command)))throw fail('INPUT');
     const write=mutates(command);
     const warning=/^(?:ui set battery_protection 0|set battery_protection (?:0|off))$/.test(command)?'battery':
       /^(?:ui set bridge 1|set sound\.bridge (?:1|on))$/.test(command)?'bridge':/^(?:ui )?set (?:led_pin|tone_pin|vibe_pin) /.test(command)?'pin':/^(?:ui )?set profile /.test(command)?'profile':null;
@@ -225,6 +235,8 @@
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
       validateCommand(command);
+      if(needsControl(command)&&this.state.hello.control!=='1')throw fail('CONTROL_UNSUPPORTED');
+      if(/^help(?: |$)/.test(command)&&this.state.hello.control==='1')throw fail('HELP_UNAVAILABLE');
       if(isFriendly(command)&&this.state.hello.console!=='1')throw fail('CONSOLE_UNSUPPORTED');
       if(needsMeshcore(command)&&this.state.hello.meshcore!=='1')throw fail('MESHCORE_UNSUPPORTED');
       mutate=mutate||mutates(command);

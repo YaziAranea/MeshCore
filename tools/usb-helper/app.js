@@ -44,7 +44,7 @@
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
   ].concat(SmartUiConsole.EXTENDED_FIELDS.map(field=>({...field,extended:true,options:[]})));
-  // Exact public 0.08..0.16 notify_tones order; the package test checks source parity.
+  // Exact public 0.08..0.17 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
   const addOptions = (select, options) => {
@@ -79,7 +79,7 @@
     $("settings-load").disabled=!readReady || !state.settingsSupported;
     $("sound-read").disabled=!readReady || !state.settingsSupported;
     previewButton.disabled=!ready||!state.soundPreviewSupported||!caps?.sound;
-    previewHint.textContent=!saved?'Сначала считайте настройки звука.':!state.soundPreviewSupported?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
+    previewHint.textContent=!saved?'Сначала считайте настройки звука.':!state.soundPreviewSupported?'Для отдельного прослушивания нужна SmartUI 0.16 или новее с возможностью sound_preview. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
     $("device-fields").hidden=!caps;
     $("settings-status").textContent=!state.connected ? "Ожидает подключения" : !state.settingsSupported ? "Совместимый режим" : !saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
     $("settings-hint").textContent=state.settingsSupported ? "У каждого поля отдельное сохранение. Успех — только после подтверждения и совпавшего чтения с ноды." : "Эта консоль пока не сообщает Settings 1. Помощник не отправляет ей новые команды; подключение и прежние инструменты сохранены.";
@@ -93,7 +93,7 @@
     renderAdcService(readReady,ready);
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16","0.17"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));

@@ -17,11 +17,11 @@ static DeviceSettingsCaps caps;
 static SmartUiCli transport;
 static bool writable = true, save_ok = true;
 static float multiplier = 4.9f;
-static unsigned saves, applies, samples, checks;
+static unsigned saves, applies, samples, writes, checks;
 #define CHECK(condition) do { ++checks; assert(condition); } while (0)
 
 static DeviceSettingsState readState() { return state; }
-static void writeState(const DeviceSettingsState& value) { state = value; }
+static void writeState(const DeviceSettingsState& value) { ++writes; state = value; }
 static bool saveState() { ++saves; if (!save_ok) return false; persisted = state; return true; }
 static void applyState(bool battery_changed) {
   CHECK(battery_changed);
@@ -47,7 +47,7 @@ static void fresh() {
   caps.adc = true;
   caps.adc_default = 4.9f;  // T114 factory coefficient, not a voltage.
   multiplier = caps.adc_default;
-  saves = applies = samples = 0;
+  saves = applies = samples = writes = 0;
   writable = save_ok = true;
   DeviceSettingsHooks hooks;
   hooks.read = readState; hooks.write = writeState; hooks.save = saveState;
@@ -83,7 +83,9 @@ int main() {
       CHECK(persisted.adc_override == state.adc_override && multiplier == state.adc_override);
       // A second phone command still succeeds and uses the same committed data.
       CHECK(call("get adc.multiplier").find("> ") == 0);
-      CHECK(call("help adc").find("get battery") == 0);
+      const unsigned writes_before_help = writes;
+      CHECK(call("help adc") == "Unknown command");
+      CHECK(writes == writes_before_help && saves == 1 && applies == 1 && samples == 0);
     }
     for (const char* value : {"0", "1", "3.2", "6.126", "999", "4294.967295"}) {
       fresh();

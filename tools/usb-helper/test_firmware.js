@@ -55,6 +55,19 @@ test('preflight validates all seven profiles and reconstructs split UF2 markers'
   }
 });
 
+test('0.17 preflight accepts all seven profiles and rejects mismatched version markers',async()=>{
+  for(const profile of PROFILES){
+    for(const merged of (profile.format==='bin'?[false,true]:[false])){
+      const f=fixture(profile.id,merged,undefined,'0.17');
+      const result=await verify(f.args());
+      assert.equal(result.version,'0.17');assert.equal(result.board,profile.label);
+      assert.equal(result.destructive,merged);
+      f.manifest.version='0.16';
+      await assert.rejects(verify(f.args()),/метка платы\/версии/);
+    }
+  }
+});
+
 test('preflight retains 0.09 through 0.12 release compatibility for all six profiles', async()=>{
   const legacyProfiles=PROFILES.filter(profile=>profile.id!=='v4r8');
   assert.equal(legacyProfiles.length,6);

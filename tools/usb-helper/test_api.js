@@ -20,6 +20,84 @@ const friendlyWrites=['set volume 5','set vibration on','set vibration off','set
   'set battery_protection on','set agc_reset 1','set fem.lna on','set fem.pa off','set sound.bridge on',
   'set adc 4.9','set adc.multiplier 4.900000','set advert 120','test notification','adc preview 3800',
   'adc apply 7','adc reset','adc service start'];
+const controlReads=['get sound','get mute','get night_quiet','get connection','connection status','reply get 1',
+  'caps sound_preview','get caps sound_preview','caps night_quiet','get caps night_quiet','schema night_quiet','schema sound','schema mute'];
+const controlWrites=['set sound on','set sound off','set mute on','set mute off','set night_quiet on','set night_quiet off',
+  'sound preview','test','set connection ble','set connection usb','set connection wifi','reply set 1 Привет, мир!','reply reset 1'];
+
+test('control marker gates new syntax before I/O and retires only new-firmware help',async()=>{
+  for(const control of [undefined,0,2]){
+    const f=await connected({console:1,meshcore:1,control});try{
+      const before=f.port.commands.length;
+      for(const cmd of [...controlReads,...controlWrites,'ui get night_quiet','ui set night_quiet 1','ui caps night_quiet'])
+        await assert.rejects(f.client.execute(cmd),{code:'CONTROL_UNSUPPORTED'},cmd);
+      assert.equal(f.port.commands.length,before);assert.equal(f.client.state.uncertain,false);
+      assert.match(await f.client.execute('get volume'),/^> /);assert.match(await f.client.execute('help'),/^> /);
+    }finally{await f.client.disconnect();}
+  }
+  const f=await connected({console:1,control:1,soundPreview:true});try{
+    const before=f.port.commands.length;
+    for(const cmd of ['help','help sound 2','help pins'])await assert.rejects(f.client.execute(cmd),{code:'HELP_UNAVAILABLE'});
+    assert.equal(f.port.commands.length,before);assert.equal(f.client.state.hello.control,'1');
+    for(const cmd of controlReads)assert.match(await f.client.execute(cmd),/^(?:> |OK )/,cmd);
+    for(const cmd of controlWrites)assert.match(await f.client.execute(cmd),/^OK/,cmd);
+    assert.equal(await f.client.execute('get sound'),'> 0');
+    assert.equal(await f.client.execute('reply set 1 Привет, мир!'),'OK reply_saved slot=1');
+    f.port.reply('ZZ','> wrong');f.port.emit(Uint8Array.of(0x83));
+    assert.equal(await f.client.execute('reply get 1'),'> Привет, мир!');
+    assert.equal(await f.client.execute('reply reset 1'),'OK reply_saved slot=1');
+    assert.equal(await f.client.execute('reply get 1'),'OK reply slot=1 default=1');
+    await f.client.execute('reply set 1 -');assert.equal(await f.client.execute('reply get 1'),'> -');
+    assert.match(await f.client.execute('schema sound'),/^OK schema key=sound /);
+    assert.match(await f.client.execute('schema mute'),/^OK schema key=mute /);
+    assert.doesNotMatch(JSON.stringify(f.events),/Привет|reply set|wrong/);
+  }finally{await f.client.disconnect();}
+});
+
+test('control writes respect readonly and reply/preview actions never retry',async()=>{
+  const f=await connected({console:1,control:1,readonly:true,soundPreview:true});try{
+    const before=f.port.commands.length;
+    for(const cmd of [...controlWrites,'ui set night_quiet 1'])await assert.rejects(f.client.execute(cmd,{mutate:false}),{code:'DENIED'},cmd);
+    assert.equal(f.port.commands.length,before);
+    for(const cmd of controlReads)assert.match(await f.client.execute(cmd),/^(?:> |OK )/,cmd);
+  }finally{await f.client.disconnect();}
+  for(const cmd of ['reply set 1 Привет','reply reset 1','sound preview','set connection ble']){
+    const f=await connected({console:1,control:1,soundPreview:true});try{
+      f.port.drop=true;const before=f.port.commands.length;
+      await assert.rejects(f.client.execute(cmd),{code:'TIMEOUT'});
+      await assert.rejects(f.client.execute(cmd),{code:'UNCERTAIN'});
+      assert.equal(f.port.commands.length,before+1);
+    }finally{await f.client.disconnect();}
+  }
+});
+
+test('human quick replies are strict UTF8 with 64-byte payload and safe helper classification',()=>{
+  for(const text of ['a'.repeat(64),'я'.repeat(32),'Привет, мир!','<b>Текст</b>']){
+    const cmd='reply set 9 '+text;
+    assert.equal(new TextDecoder().decode(api.encodeCommand('a9',cmd).slice(4)),cmd);
+    assert.equal(api.developerCommand(cmd).write,true);
+  }
+  for(const cmd of ['reply set 1 ','reply set 0 Hi','reply set 10 Hi','reply set 1 '+'я'.repeat(33),
+    'reply set 1 a|b','reply set 1 \ud800','reply set 1 Hi\nreboot','reply set 1 \u0085','reply set 1 \u2028','reply set 1 \u2029','reply get 01','reply reset 10'])
+    assert.throws(()=>api.encodeCommand('a9',cmd),{code:'INPUT'},cmd);
+  for(const cmd of controlReads)assert.equal(api.developerCommand(cmd).write,false,cmd);
+  for(const cmd of controlWrites.filter(c=>!c.startsWith('set connection ')))assert.equal(api.developerCommand(cmd).write,true,cmd);
+  for(const cmd of ['set connection usb','ui mode ble'])assert.throws(()=>api.developerCommand(cmd),{code:'INPUT'},cmd);
+});
+
+test('bidi quick-reply controls fail before I/O without rejecting ordinary RTL text',async()=>{
+  const f=await connected({console:1,control:1});try{
+    const before=f.port.commands.length;
+    for(const point of [0x202a,0x202b,0x202c,0x202d,0x202e,0x2066,0x2067,0x2068,0x2069]){
+      const command='reply set 1 left'+String.fromCodePoint(point)+'right';
+      assert.throws(()=>api.developerCommand(command),{code:'INPUT'});
+      await assert.rejects(f.client.execute(command),{code:'INPUT'},point.toString(16));
+    }
+    assert.equal(f.port.commands.length,before);assert.equal(f.client.state.uncertain,false);
+    assert.equal(await f.client.execute('reply set 1 مرحبا'),'OK reply_saved slot=1');
+    assert.equal(f.port.commands.length,before+1);
+  }finally{await f.client.disconnect();}
+});
 
 test('friendly console marker is independent and preserves original ui commands',async()=>{
   const f=await connected({console:1,manualAdc:true,caps:{adc_service:1}});try{

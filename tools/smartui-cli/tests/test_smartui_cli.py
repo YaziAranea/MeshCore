@@ -24,6 +24,12 @@ FRIENDLY_WRITES = ("set volume 5", "set vibration on", "set vibration off", "set
                    "set gps 0", "set battery_protection on", "set agc_reset 1", "set fem.lna on", "set fem.pa off",
                    "set sound.bridge on", "set adc 4.9", "set adc.multiplier 4.900000", "set advert 120",
                    "test notification", "adc preview 3800", "adc apply 7", "adc reset", "adc service start")
+CONTROL_READS = ("get sound", "get mute", "get night_quiet", "get connection", "connection status",
+                 "reply get 1", "caps sound_preview", "get caps sound_preview", "caps night_quiet",
+                 "get caps night_quiet", "schema night_quiet", "schema sound", "schema mute")
+CONTROL_WRITES = ("set sound on", "set sound off", "set mute 1", "set mute 0", "set night_quiet on",
+                  "set night_quiet off", "sound preview", "test", "set connection ble", "set connection usb",
+                  "set connection wifi", "reply set 1 Привет, мир!", "reply reset 1")
 
 class ExtendedCommands(unittest.TestCase):
     def test_all_extended_keys_are_bounded_and_classified(self):
@@ -40,11 +46,11 @@ class ExtendedCommands(unittest.TestCase):
 
 
 class Board:
-    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None):
+    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None, control=None):
         self.requests, self.closed = [], False
         self.readonly, self.discovery, self.error, self.timeout = readonly, discovery, None, False
         self.meshcore, self.name, self.tx = meshcore, "Тестовая нода", "20"
-        self.console = console
+        self.console, self.control = console, control
 
     def close(self):
         self.closed = True
@@ -71,6 +77,8 @@ class Board:
                         text += f" meshcore={self.meshcore}"
                     if self.console is not None:
                         text += f" console={self.console}"
+                    if self.control is not None:
+                        text += f" control={self.control}"
                 elif self.console == 1 and is_friendly(command):
                     text = "OK" if mutates(command) else "> 7"
                     if command == "melody 1":
@@ -107,6 +115,80 @@ class CliTests(unittest.TestCase):
         client.connect()
         self.addCleanup(client.close)
         return client, board
+
+    def test_control_marker_gates_new_commands_before_io_and_preserves_old(self):
+        for marker in (None, 0, 2):
+            client, board = self.connected(console=1, meshcore=1, control=marker)
+            before = len(board.requests)
+            for command in CONTROL_READS + CONTROL_WRITES + ("ui get night_quiet", "ui set night_quiet 1", "ui caps night_quiet"):
+                with self.subTest(marker=marker, command=command), self.assertRaises(CliError) as error:
+                    client.execute(command)
+                self.assertEqual(error.exception.code, "control_unsupported")
+            self.assertEqual(len(board.requests), before)
+            self.assertFalse(client.uncertain)
+            self.assertEqual(client.execute("get volume"), "> 7")
+            self.assertEqual(client.execute("help"), "> 7")
+        client, board = self.connected(console=1, control=1)
+        self.assertEqual(client.hello["control"], "1")
+        before = len(board.requests)
+        for command in ("help", "help sound 2", "help pins"):
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "help_unavailable")
+        self.assertEqual(len(board.requests), before)
+        for command in CONTROL_READS + CONTROL_WRITES:
+            self.assertRegex(client.execute(command), r"^(?:OK|> )")
+        self.assertEqual(board.requests[-1][4:].decode(), "reply reset 1")
+
+    def test_control_readonly_and_uncertain_writes_do_not_send_or_retry(self):
+        client, board = self.connected(console=1, control=1, readonly=True)
+        before = len(board.requests)
+        for command in CONTROL_WRITES + ("ui set night_quiet 1",):
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "readonly")
+        self.assertEqual(len(board.requests), before)
+        for command in CONTROL_READS:
+            self.assertTrue(client.execute(command).startswith("> "))
+        for command in ("reply set 1 Привет", "reply reset 1", "sound preview", "set connection ble"):
+            client, board = self.connected(console=1, control=1)
+            before = len(board.requests)
+            board.timeout = True
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "timeout")
+            with self.assertRaises(CliError) as error:
+                client.execute(command)
+            self.assertEqual(error.exception.code, "uncertain")
+            self.assertEqual(len(board.requests), before + 1)
+
+    def test_human_reply_utf8_budget_and_tag_routing(self):
+        for text in ("a" * 64, "я" * 32, "Привет, мир!", "<b>Текст</b>"):
+            command = "reply set 9 " + text
+            self.assertEqual(encode_command("a9", command)[4:].decode(), command)
+            self.assertTrue(mutates(command))
+        for command in ("reply set 1 ", "reply set 0 Hi", "reply set 10 Hi", "reply set 1 " + "я" * 33,
+                        "reply set 1 a|b", "reply set 1 \ud800", "reply set 1 Hi\nreboot", "reply set 1 \u0085",
+                        "reply set 1 \u2028", "reply set 1 \u2029", "reply get 01", "reply reset 10"):
+            with self.subTest(command=repr(command)), self.assertRaises(CliError):
+                encode_command("a9", command)
+        request = encode_command("a9", "reply get 1")
+        reply = b"\x1da9|> " + "Привет".encode()
+        self.assertFalse(matches(request, b"\x1dZZ|> wrong"))
+        self.assertTrue(matches(request, reply))
+        self.assertEqual(decode_reply(reply, "a9", False), "> Привет")
+
+    def test_bidi_reply_controls_are_rejected_before_io(self):
+        client, board = self.connected(console=1, control=1)
+        before = len(board.requests)
+        for point in (*range(0x202a, 0x202f), *range(0x2066, 0x206a)):
+            with self.subTest(point=hex(point)), self.assertRaises(CliError) as error:
+                client.execute("reply set 1 left" + chr(point) + "right")
+            self.assertEqual(error.exception.code, "input")
+        self.assertEqual(len(board.requests), before)
+        self.assertFalse(client.uncertain)
+        client.execute("reply set 1 مرحبا")
+        self.assertEqual(len(board.requests), before + 1)
 
     def test_friendly_discovery_independent_from_upstream_and_utf8_reply(self):
         client, board = self.connected(console=1)

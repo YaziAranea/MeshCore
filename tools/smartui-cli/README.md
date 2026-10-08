@@ -1,4 +1,7 @@
-# SmartUI 0.16 Local CLI SDK
+# SmartUI Local CLI SDK — 0.17
+
+SDK для SmartUI 0.17. Новое компактное управление требует `control=1`;
+прежняя 0.16 этого признака не сообщает.
 
 Локальные CMD66/RESP29 для настроек подключённой ноды. Текущая прошивка сообщает
 companion protocol 14; прежние SmartUI с protocol 13 сохраняют свои `ui`-команды.
@@ -6,40 +9,52 @@ SDK не работает с удалённой LoRa-CLI и не поддерж�
 из SmartUI 0.11.
 
 [Русская спецификация](../../docs/SMARTUI_CLI_RU.md).
-Обычному пользователю достаточно USB Helper 2.3.
+Обычному пользователю достаточно USB Helper 2.4.
 [Полная пользовательская справка](../../docs/CONSOLE_COMMANDS_RU.md).
 
-## Короткие команды SmartUI 0.16
+## Короткие команды
 
-После handshake `ui hello` сообщает `console=1`. Без этого признака SDK
-отклоняет новые короткие команды локально, сохраняя прежние `ui …`.
-Это отдельная возможность от `meshcore=1`, отвечающей за имена MeshCore.
+После handshake проверяйте поля `ui hello`: `console=1` — прежние короткие
+команды, `meshcore=1` — имена MeshCore, `control=1` — новое компактное управление.
+SDK проверяет нужный признак до отправки. Прежние `ui …` сохранены.
 
 ~~~python
 hello = client.connect()
-if hello.get("console") == "1":
-    print(client.execute("help sound"))
-    print(client.execute("get volume"))
+if hello.get("control") == "1":
+    print(client.execute("get sound"))
+    print(client.execute("schema melody"))
     # Только после действия пользователя:
-    # assert client.execute("set volume 7") == "OK"
-    # assert client.execute("get volume") == "> 7"
+    # assert client.execute("set melody 18") == "OK"
+    # assert client.execute("get melody") == "> 18"
+    # assert client.execute("sound preview") == "OK sound_preview"
 ~~~
 
-Список: get/set для `volume`, `vibration`, `melody`, `sound_quiet`, `muted`,
+Основные get/set: `sound`, `mute`, `night_quiet`, `volume`, `vibration`, `melody`,
 `board_led`, `unread_led`, `gps`, `battery_protection`, `agc_reset`, `fem.lna`,
 `fem.pa`, `sound.bridge`, `adc.multiplier` (синоним `adc`), `advert`;
 чтение `battery`, `battery_mv`, `adc.default`, `shutdown_mv`; `caps KEY`,
-`get caps KEY`, `help [TOPIC [PAGE]]`, `melodies`, `melody N`, `test notification`;
+`get caps KEY`, `schema KEY`, `melodies`, `melody N`, `sound preview`, `test`;
 `adc preview MV`, `adc apply TOKEN`, `adc reset`, `adc manual`,
-`adc service [start|stop]`.
+`adc service [start|stop]`; `get/set connection`, `connection status`;
+`reply get N`, `reply set N TEXT`, `reply reset N`.
+Полный список параметров экрана, пинов, уведомлений и GPS — в справочнике.
+`help` отсутствует в новом локальном CLI; SDK допускает его только у старых нод.
 
 Переключатели принимают on/off/0/1. Границы проверяет прошивка. Ответы —
-`> VALUE`, `OK`, `Error: REASON`; ADC сохраняет структурированные поля токена,
+`> VALUE`, `OK`, `OK RECORD key=value`, `Error: REASON`; ADC сохраняет поля токена,
 `get/set advert` возвращает `> interval_min=N`; `melody N` — UTF-8 название.
 Успешный set сам по себе не обновляет модель клиента: перечитайте параметр.
 
-Все записи и ADC preview классифицируются как изменения; нельзя снять эту
-классификацию аргументом `mutate=False`. Сервисный stop остаётся разрешённым
+Фразы: слот 1–9, максимум 64 байта UTF-8, текст без кавычек. Пробелы сохраняются,
+`|` и управляющие символы запрещены. Чтение встроенной фразы возвращает
+`OK reply slot=N default=1`, своей — `> TEXT`; не обрезайте TEXT через strip/trim.
+Запись/сброс возвращает `OK reply_saved slot=N`. `-` — допустимый текст, не сброс.
+При смене подключения `OK mode target=MODE state=pending` означает ожидаемый
+переход после ответа; подключитесь новым способом. `state=active` — режим уже выбран.
+
+Все записи и ADC preview классифицируются как изменения. Python `execute`
+принимает только команду; JS-опция `{mutate:false}` не отменяет классификацию
+записи. Сервисный stop остаётся разрешённым
 завершением окна при режиме только чтения. Автоматических повторов нет.
 SDK поддерживает прямую настройку ADC; командное поле Helper намеренно
 направляет такие изменения в специальную форму с проверкой/подтверждением.

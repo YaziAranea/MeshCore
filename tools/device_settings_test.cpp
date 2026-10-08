@@ -28,6 +28,8 @@ static unsigned adc_commits, adc_service_calls;
 static unsigned sound_previews;
 static SoundPreviewResult sound_preview_result;
 static bool adc_service_active;
+static unsigned night_calls;
+static NightQuietResult night_result;
 static DeviceSettings service;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
 
@@ -70,6 +72,14 @@ static bool setToneBridge(bool enabled) {
   persisted = state;
   return true;
 }
+static NightQuietResult setNightQuiet(bool enabled) {
+  ++night_calls;
+  if (night_result != NightQuietResult::OK) return night_result;
+  state.muted = enabled ? 1 : (state.night_quiet ? 0 : state.muted);
+  state.night_quiet = enabled ? 1 : 0;
+  persisted = state;
+  return NightQuietResult::OK;
+}
 static bool pinAllowed(const char* key, int pin) {
   return pin == 35 || pin == 36 || (strcmp(key, "vibe_pin") == 0 && pin == -1);
 }
@@ -106,6 +116,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   bridge_calls = 0; bridge_ok = true;
   adc_commits = adc_service_calls = 0; adc_service_active = false;
   sound_previews = 0; sound_preview_result = SoundPreviewResult::STARTED;
+  night_calls = 0; night_result = NightQuietResult::OK;
   persisted = state;
   DeviceSettingsHooks hooks;
   hooks.read = read; hooks.write = write; hooks.save = save; hooks.apply = apply;
@@ -116,6 +127,7 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   hooks.previewSound = previewSound;
   hooks.melodyName = names ? melodyName : nullptr;
   hooks.setToneBridge = bridge_hook ? setToneBridge : nullptr;
+  hooks.setNightQuiet = setNightQuiet;
   hooks.adcCommitted = adcCommitted;
   hooks.pinAllowed = pinAllowed;
   hooks.pinOptions = pinOptions;
@@ -451,6 +463,9 @@ int main() {
 
   // Melody labels are bounded byte strings represented as ASCII-safe hex.
   fresh();
+  CHECK(command("settings melody 0", false) == "OK settings melody id=0 name_hex=5465737420746f6e65");
+  CHECK(saves == 0 && applies == 0 && melody_reads == 1);
+  melody_reads = 0;
   CHECK(command("api melody 0", false) == "OK api melody id=0 name_hex=5465737420746f6e65");
   melody_name = "\xd0\x97\xd0\xb2\xd1\x83\xd0\xba";
   CHECK(command("api melody 30") == "OK api melody id=30 name_hex=d097d0b2d183d0ba");
@@ -512,6 +527,42 @@ int main() {
   fresh(4.9f, true, false); caps.bridge = true;
   CHECK(command("api caps").find("bridge=0") != std::string::npos);
   CHECK(command("api set bridge 1") == "ERR api unsupported" && bridge_calls == 0);
+
+  // Timed night quiet uses the UI-owned transaction, never a raw ownership bit.
+  fresh();
+  CHECK(cliCommand("ui caps night_quiet", false) == "OK ui caps key=night_quiet value=0");
+  CHECK(cliCommand("ui schema night_quiet", false).find("supported=0") != std::string::npos);
+  CHECK(cliCommand("ui set night_quiet 1") == "ERR ui unsupported");
+  CHECK(night_calls == 0);
+  caps.night_quiet = true;
+  CHECK(command("settings caps night_quiet", false) == "OK settings caps key=night_quiet value=1");
+  CHECK(cliCommand("ui caps night_quiet", false) == "OK ui caps key=night_quiet value=1");
+  CHECK(cliCommand("ui schema night_quiet", false).find("supported=1 min=0 max=1 step=1") != std::string::npos);
+  CHECK(cliCommand("ui get night_quiet", false) == "OK ui get key=night_quiet value=0");
+  CHECK(cliCommand("ui set night_quiet 1", false) == "ERR ui readonly");
+  CHECK(command("settings set night_quiet 1", false) == "ERR settings readonly");
+  CHECK(night_calls == 0);
+  for (const char* value : {"2", "256", "4294967296", "-1", "1 extra"})
+    CHECK(cliCommand((std::string("ui set night_quiet ") + value).c_str()).find("ERR ui ") == 0);
+  CHECK(night_calls == 0);
+  for (const auto result : {NightQuietResult::TIME, NightQuietResult::MUTED,
+                           NightQuietResult::STORAGE, NightQuietResult::UNSUPPORTED}) {
+    night_result = result;
+    const char* reason = result == NightQuietResult::TIME ? "time" :
+        result == NightQuietResult::MUTED ? "muted" :
+        result == NightQuietResult::STORAGE ? "storage" : "unsupported";
+    CHECK(cliCommand("ui set night_quiet 1") == std::string("ERR ui ") + reason);
+    CHECK(state.night_quiet == 0 && state.muted == 0);
+  }
+  CHECK(night_calls == 4 && writes == 0 && saves == 0 && applies == 0);
+  night_result = NightQuietResult::OK;
+  token = preview();
+  CHECK(cliCommand("ui set night_quiet 1") == "OK ui set key=night_quiet value=1");
+  CHECK(state.night_quiet == 1 && state.muted == 1 && persisted.night_quiet == 1);
+  CHECK(applyToken(token) == "ERR settings stale");
+  CHECK(command("settings get night_quiet", false) == "OK settings get key=night_quiet value=1");
+  CHECK(command("settings set night_quiet 0") == "OK settings set key=night_quiet value=0");
+  CHECK(state.night_quiet == 0 && state.muted == 0);
 
   // Reset invalidates both entry points, but does not recycle the next token.
   fresh();

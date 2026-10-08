@@ -283,8 +283,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and public release marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.16" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.16 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.17" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.17 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -1526,7 +1526,7 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.16")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.17")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(
@@ -1556,7 +1556,7 @@ check(
 
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"SmartUI 0.16 six-board contract audit: {passed} passed, {failed} failed")
+print(f"SmartUI 0.17 six-board contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:

@@ -434,6 +434,7 @@ public:
   void cycleNotifyMode();
   void previewNotifyMode();
   smartui::SoundPreviewResult previewSavedMelody();
+  smartui::NightQuietResult setNightQuiet(bool enabled);
   bool areBoardLedsEnabled() const;
   void toggleBoardLeds();
   void applyBoardLedsState();

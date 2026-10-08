@@ -7,18 +7,21 @@
 namespace smartui {
 namespace {
 constexpr size_t MAX_TEXT = 156;
-// Every valid friendly command fits comfortably: the longest setting name is
+// Scalar commands fit comfortably: the longest setting name is
 // 18 bytes and the production ADC parser permits at most 17 decimal bytes.
 // This limit applies only after ownership is established; upstream UTF-8
 // names and existing ui commands retain their full transport allowance.
 constexpr size_t MAX_FRIENDLY = 64;
 
-enum class Kind : uint8_t { NUMBER, BOOLEAN, ADC, READONLY, PIN };
+enum class Kind : uint8_t { NUMBER, BOOLEAN, INVERSE_BOOLEAN, ADC, READONLY, PIN };
 struct Key { const char* name; const char* backend; Kind kind; };
 const Key KEYS[] = {
     {"volume", "volume", Kind::NUMBER},
     {"vibration", "vibration", Kind::BOOLEAN},
     {"melody", "melody", Kind::NUMBER},
+    {"sound", "sound_quiet", Kind::INVERSE_BOOLEAN},
+    {"mute", "muted", Kind::BOOLEAN},
+    {"night_quiet", "night_quiet", Kind::BOOLEAN},
     {"sound_quiet", "sound_quiet", Kind::BOOLEAN},
     {"muted", "muted", Kind::BOOLEAN},
     {"board_led", "board_led", Kind::BOOLEAN},
@@ -62,32 +65,7 @@ const Key KEYS[] = {
 const char* const CAPS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration", "gps",
     "battery_protection", "display", "melody_max", "adc_min", "adc_max",
-    "agc_reset", "fem_lna", "fem_pa", "bridge", "melody_names", "adc_service", "schema",
-};
-
-struct Help { const char* topic; unsigned page; const char* text; };
-const Help HELP[] = {
-    {"", 1, "help TOPIC [PAGE]: sound 1-3; fem; adc 1-3; radio 1-2; connection 1-2; system; advert; led; gps 1-2; display; pins; profile; replies. schema KEY."},
-    {"sound", 1, "get/set volume 1..10; get/set vibration on|off; get/set melody N; melodies; melody N (name); test notification (play selected)."},
-    {"sound", 2, "get/set sound_quiet on|off; get/set muted on|off; get/set sound.bridge on|off (supported piezo wiring only). caps sound; caps vibration."},
-    {"sound", 3, "get/set notify_mode; important_notify_mode; tone_8bit; high_drive; resonance_hz. schema KEY gives support, bounds and choices. 1=LED 2=sound 4=vibe."},
-    {"fem", 1, "get/set fem.lna on|off; get/set fem.pa on|off; caps fem.lna; caps fem.pa. Only supported boards. Does not change TX power; get tx."},
-    {"adc", 1, "get battery (mV); get adc.multiplier; get adc.default; set adc.multiplier DECIMAL; caps adc_min; caps adc_max. adc reset: factory value."},
-    {"adc", 2, "adc preview MV (multimeter); adc apply TOKEN (save preview); adc manual (support). ProMicro preview needs a battery-only sample before USB."},
-    {"adc", 3, "adc service [start|stop]: 120s calibration window, confirmed USB power only. No erase. ADC save, timeout or USB loss ends window."},
-    {"radio", 1, "get radio; get freq; get/set tx DBM (board limits); set radio MHz,kHz,SF,CR; CR=5..8 means 4/5..4/8. Changes must match your mesh."},
-    {"radio", 2, "get/set af; get/set dutycycle 10..100; get/set rxdelay; get/set multi.acks; get/set path.hash.mode; get/set radio.rxgain on|off."},
-    {"connection", 1, "ui connection; ui mode ble|usb|wifi; ui mode status; get wifi.status; get wifi.ip. Mode switch disconnects current client."},
-    {"connection", 2, "ui wifi begin; ui wifi ssid HEX; ui wifi password HEX; ui wifi test; ui wifi status; ui wifi save (test_ok only); ui wifi cancel."},
-    {"system", 1, "board; ver; get/set name; set pin; get/set tz.offset; get/set battery_protection on|off; get shutdown_mv; get/set agc_reset on|off."},
-    {"advert", 1, "get advert; set advert MIN: 0=off, 15,30,60,120,180. Saved schedule; not an immediate advert. Radio parameters stay unchanged."},
-    {"led", 1, "get/set board_led on|off (board activity); get/set unread_led on|off (unread reminders); caps board_led; caps unread_led. Separate controls."},
-    {"gps", 1, "get/set gps on|off; caps gps. Requires supported external/built-in GPS and correct wiring. Enabling GPS does not guarantee a position fix."},
-    {"gps", 2, "get/set gps_source: 0=hardware 1=phone; gps_interval: 0..86400 seconds; advert_location on|off. schema KEY checks board support."},
-    {"display", 1, "get/set ui_font; ui_theme; ui_top_color; ui_bottom_color; msg_popup; backlight_timeout: 0=15s 1=30s 2=60s. schema KEY for board limits."},
-    {"pins", 1, "get/set led_pin; tone_pin; vibe_pin. schema KEY lists safe Arduino pin numbers. vibe_pin -1 disables. No arbitrary GPIO; bridge reserves its pair."},
-    {"profile", 1, "get/set profile: 0=custom 1=quiet 2=outdoor 3=night. Changes notification, LEDs and timeout together. Individual changes select custom."},
-    {"replies", 1, "ui reply get N; ui reply set N HEX (UTF-8, '-' resets). Slots 1..9. Existing USB service: reply get/set. Helper handles text encoding."},
+    "agc_reset", "fem_lna", "fem_pa", "bridge", "melody_names", "adc_service", "schema", "sound_preview", "night_quiet",
 };
 
 void respond(char* reply, size_t capacity, const char* value) {
@@ -296,10 +274,78 @@ bool melody(SmartUiConsoleExecute execute, const char* id, char* reply, size_t c
   memcpy(reply + prefix - 2, ": ", 2);
   return true;
 }
-}  // namespace
 
-bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capacity,
-                                 SmartUiConsoleExecute execute) {
+// Quick replies have a separate parser: the UTF-8 text, including spaces, is
+// data rather than scalar command tokens. One command buffer is needed for
+// hex encoding; the backend response is decoded in place, without a second
+// maximum-sized reply buffer on the nRF52 stack. Keep both branch helpers out
+// of the wrapper: inlining either one reserves its buffer during the other
+// branch too, even though their source-level lifetimes do not overlap.
+__attribute__((noinline)) bool quickReply(const char* command, size_t length, char* reply, size_t capacity,
+                SmartUiConsoleExecute execute) {
+  const bool get = strncmp(command, "reply get ", 10) == 0;
+  const bool set = strncmp(command, "reply set ", 10) == 0;
+  const bool reset = strncmp(command, "reply reset ", 12) == 0;
+  const size_t offset = reset ? 12 : 10;
+  if ((!get && !set && !reset) || length <= offset ||
+      command[offset] < '1' || command[offset] > '9' ||
+      (set ? length <= offset + 2 || command[offset + 1] != ' ' : length != offset + 1)) {
+    respond(reply, capacity, "Error: invalid"); return true;
+  }
+  const char slot = command[offset];
+  const char* text = set ? command + offset + 2 : nullptr;
+  const size_t size = set ? length - offset - 2 : 0;
+  if (set && (size > 64 || !utf8Printable(text, size) || strchr(text, '|'))) {
+    respond(reply, capacity, "Error: invalid"); return true;
+  }
+  char mapped[144];  // "ui reply set 9 " + 64 hex-encoded UTF-8 bytes + NUL.
+  size_t used = static_cast<size_t>(snprintf(mapped, sizeof(mapped), "ui reply %s %c",
+                                            get ? "get" : "set", slot));
+  if (!get) {
+    mapped[used++] = ' ';
+    if (reset) mapped[used++] = '-';
+    else {
+      static const char digits[] = "0123456789abcdef";
+      for (size_t i = 0; i < size; ++i) {
+        const uint8_t byte = static_cast<uint8_t>(text[i]);
+        mapped[used++] = digits[byte >> 4];
+        mapped[used++] = digits[byte & 15];
+      }
+    }
+    mapped[used] = 0;
+    return invoke(execute, mapped, reply, capacity);
+  }
+  if (!backendCall(execute, mapped, reply, reply, capacity)) return true;
+  const char* returned_slot = nullptr;
+  const char* hex = nullptr;
+  size_t slot_length = 0, hex_length = 0;
+  if (strncmp(reply, "OK ui reply ", 12) != 0 ||
+      !fieldView(reply, "slot", returned_slot, slot_length) ||
+      slot_length != 1 || returned_slot[0] != slot ||
+      !fieldView(reply, "hex", hex, hex_length)) {
+    respond(reply, capacity, "Error: internal"); return true;
+  }
+  if (hex_length == 1 && hex[0] == '-') {
+    snprintf(reply, capacity, "OK reply slot=%c default=1", slot); return true;
+  }
+  if (!hex_length || (hex_length & 1) || hex_length > 128 || hex < reply + 2) {
+    respond(reply, capacity, "Error: internal"); return true;
+  }
+  for (size_t i = 0; i < hex_length; i += 2) {
+    const int hi = hexDigit(hex[i]), lo = hexDigit(hex[i + 1]);
+    if (hi < 0 || lo < 0) { respond(reply, capacity, "Error: internal"); return true; }
+    reply[2 + i / 2] = static_cast<char>((hi << 4) | lo);
+  }
+  reply[2 + hex_length / 2] = 0;
+  if (!utf8Printable(reply + 2, hex_length / 2) || strchr(reply + 2, '|')) {
+    respond(reply, capacity, "Error: internal"); return true;
+  }
+  memcpy(reply, "> ", 2);
+  return true;
+}
+
+__attribute__((noinline)) bool scalarCommand(const char* command, char* reply, size_t capacity,
+                   SmartUiConsoleExecute execute) {
   if (command == nullptr) return false;
   size_t length;
   if (!textLength(command, length)) { respond(reply, capacity, "Error: invalid"); return true; }
@@ -314,9 +360,10 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
     if (count < sizeof(key_name)) { memcpy(key_name, command + 4, count); key = findKey(key_name); }
   }
   const bool owned = key || (getter && strcmp(key_name, "caps") == 0) ||
-      ((getter || setter) && strcmp(key_name, "advert") == 0) ||
-      word(command, "help") || word(command, "caps") || word(command, "schema") || word(command, "adc") ||
-      word(command, "melody") || word(command, "melodies") || word(command, "test");
+      ((getter || setter) && (strcmp(key_name, "advert") == 0 || strcmp(key_name, "connection") == 0)) ||
+      word(command, "caps") || word(command, "schema") || word(command, "adc") ||
+      word(command, "melody") || word(command, "melodies") || word(command, "test") ||
+      word(command, "sound") || word(command, "connection");
   if (!owned) return false;
   if (reply == nullptr || capacity <= MAX_TEXT) { respond(reply, capacity, "Error: buffer"); return true; }
   if (length > MAX_FRIENDLY || !ascii(command) || !length ||
@@ -340,22 +387,47 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
       respond(reply, capacity, "Error: invalid; use schema SETTING"); return true;
     }
     snprintf(mapped, sizeof(mapped), "ui schema %s", setting->backend);
-    return invoke(execute, mapped, reply, capacity);
+    invoke(execute, mapped, reply, capacity);
+    if ((strcmp(tokens[1], "sound") == 0 || strcmp(tokens[1], "mute") == 0) &&
+        strncmp(reply, "Error:", 6) != 0) {
+      const char* value = nullptr;
+      size_t value_length = 0;
+      const size_t alias_length = strlen(tokens[1]);
+      if (strncmp(reply, "OK schema ", 10) != 0 ||
+          !fieldView(reply, "key", value, value_length) ||
+          value_length != strlen(setting->backend) ||
+          memcmp(value, setting->backend, value_length) != 0 || alias_length > value_length) {
+        respond(reply, capacity, "Error: internal"); return true;
+      }
+      // Both positive aliases are shorter than their compatibility keys. Keep
+      // the schema record in place, including all bounds and option fields.
+      char* name = reply + (value - reply);
+      memmove(name + alias_length, value + value_length, strlen(value + value_length) + 1);
+      memcpy(name, tokens[1], alias_length);
+    }
+    return true;
   }
   if (key != nullptr) {
     if (getter && count == 2) {
       snprintf(mapped, sizeof(mapped), "ui get %s", key->backend);
-      return invoke(execute, mapped, reply, capacity, true);
+      invoke(execute, mapped, reply, capacity, true);
+      if (key->kind == Kind::INVERSE_BOOLEAN) {
+        if (strcmp(reply, "> 0") == 0) respond(reply, capacity, "> 1");
+        else if (strcmp(reply, "> 1") == 0) respond(reply, capacity, "> 0");
+        else if (strncmp(reply, "Error:", 6) != 0) respond(reply, capacity, "Error: internal");
+      }
+      return true;
     }
     if (!setter || count != 3) { respond(reply, capacity, "Error: invalid"); return true; }
     if (key->kind == Kind::READONLY) { respond(reply, capacity, "Error: readonly"); return true; }
     const char* value = tokens[2];
-    if (key->kind == Kind::BOOLEAN) {
+    if (key->kind == Kind::BOOLEAN || key->kind == Kind::INVERSE_BOOLEAN) {
       if (strcmp(value, "on") == 0) value = "1";
       else if (strcmp(value, "off") == 0) value = "0";
       else if (strcmp(value, "0") != 0 && strcmp(value, "1") != 0) {
         respond(reply, capacity, "Error: range"); return true;
       }
+      if (key->kind == Kind::INVERSE_BOOLEAN) value = value[0] == '1' ? "0" : "1";
     } else if (key->kind == Kind::ADC ? !decimal(value) :
                !(unsignedNumber(value) || (key->kind == Kind::PIN && strcmp(value, "-1") == 0))) {
       respond(reply, capacity, "Error: invalid"); return true;
@@ -368,20 +440,6 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
     }
     return invoke(execute, mapped, reply, capacity, false, key->kind != Kind::ADC);
   }
-  if (strcmp(tokens[0], "help") == 0) {
-    uint32_t page = 1;
-    if (count > 3 || (count == 3 && !unsignedNumber(tokens[2], &page))) {
-      respond(reply, capacity, "Error: invalid"); return true;
-    }
-    const char* topic = count > 1 ? tokens[1] : "";
-    for (const Help& help : HELP) {
-      if (strcmp(help.topic, topic) != 0 || help.page != page) continue;
-      if (strlen(help.text) > MAX_TEXT) respond(reply, capacity, "Error: internal");
-      else respond(reply, capacity, help.text);
-      return true;
-    }
-    respond(reply, capacity, "Error: unknown help page; use help"); return true;
-  }
   if (strcmp(tokens[0], "caps") == 0 || (getter && strcmp(key_name, "caps") == 0)) {
     const size_t index = getter ? 2 : 1;
     const char* backend_key = count == index + 1 ? capKey(tokens[index]) : nullptr;
@@ -389,7 +447,14 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
     snprintf(mapped, sizeof(mapped), "ui caps %s", backend_key);
     return invoke(execute, mapped, reply, capacity, true);
   }
-  if (strcmp(key_name, "advert") == 0) {
+  if (strcmp(key_name, "connection") == 0) {
+    if (getter && count == 2) return invoke(execute, "ui connection", reply, capacity);
+    if (setter && count == 3 && (strcmp(tokens[2], "ble") == 0 ||
+        strcmp(tokens[2], "usb") == 0 || strcmp(tokens[2], "wifi") == 0)) {
+      snprintf(mapped, sizeof(mapped), "ui mode %s", tokens[2]);
+      return invoke(execute, mapped, reply, capacity);
+    }
+  } else if (strcmp(key_name, "advert") == 0) {
     if (getter && count == 2) return invoke(execute, "ui advert", reply, capacity);
     if (setter && count == 3 && unsignedNumber(tokens[2])) {
       snprintf(mapped, sizeof(mapped), "ui advert set %s", tokens[2]);
@@ -418,13 +483,27 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
     if (!field(reply, "value", maximum, sizeof(maximum)) || !unsignedNumber(maximum)) {
       respond(reply, capacity, "Error: internal"); return true;
     }
-    snprintf(reply, capacity, "> current=%s max=%s; melody N: name; set melody N: select; test notification: play", current, maximum);
+    snprintf(reply, capacity, "> current=%s max=%s", current, maximum);
     return true;
-  } else if (strcmp(command, "test notification") == 0) {
+  } else if (strcmp(command, "test") == 0 || strcmp(command, "test notification") == 0) {
     return invoke(execute, "ui test", reply, capacity, false, true);
+  } else if (strcmp(command, "sound preview") == 0) {
+    return invoke(execute, "ui sound preview", reply, capacity);
+  } else if (strcmp(command, "connection status") == 0) {
+    return invoke(execute, "ui mode status", reply, capacity);
   }
   respond(reply, capacity, "Error: invalid");
   return true;
+}
+}  // namespace
+
+bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capacity,
+                                 SmartUiConsoleExecute execute) {
+  if (!command || !word(command, "reply")) return scalarCommand(command, reply, capacity, execute);
+  size_t length = 0;
+  if (!textLength(command, length)) { respond(reply, capacity, "Error: invalid"); return true; }
+  if (!reply || capacity <= MAX_TEXT) { respond(reply, capacity, "Error: buffer"); return true; }
+  return quickReply(command, length, reply, capacity, execute);
 }
 
 }  // namespace smartui

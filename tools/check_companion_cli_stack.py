@@ -2,8 +2,9 @@
 """Check actual ARM CLI stack frames from a PlatformIO compilation database.
 
 Run after `pio run -e Heltec_t114_companion_radio_ble -t compiledb`.
-The small per-function budgets prevent the specific nested-scratch regression;
-they are not a whole-program worst-case stack or hardware stability proof.
+Per-function budgets and conservative console wrapper/branch sums prevent the
+specific nested-scratch regression. They are not a whole-program worst-case
+stack or hardware stability proof.
 """
 from pathlib import Path
 import argparse
@@ -17,6 +18,10 @@ import tempfile
 
 SOURCES = ("MyMesh.cpp", "SmartUiCli.cpp", "SmartUiConsoleCommands.cpp",
            "SmartUiCliSettings.cpp", "DeviceSettings.cpp")
+CONSOLE_WRAPPER = "smartui::handleSmartUiConsoleCommand("
+CONSOLE_BRANCHES = ("smartui::{anonymous}::scalarCommand(",
+                    "smartui::{anonymous}::quickReply(")
+CONSOLE_BRANCH_BUDGET = 384
 BUDGETS = {
     "MyMesh::handleCmdFrame(": 64,
     "MyMesh::handleLocalCliFrame(": 64,
@@ -24,10 +29,37 @@ BUDGETS = {
     "MyMesh::setLocalNodeName(": 96,
     "MyMesh::setLocalTxPower(": 80,
     "smartui::SmartUiCli::handle(": 160,
-    "smartui::handleSmartUiConsoleCommand(": 384,
+    CONSOLE_WRAPPER: 64,
+    CONSOLE_BRANCHES[0]: CONSOLE_BRANCH_BUDGET,
+    CONSOLE_BRANCHES[1]: CONSOLE_BRANCH_BUDGET,
     "smartui::handleSmartUiSettingsCli(": 384,
     "smartui::DeviceSettings::handle(": 96,
 }
+
+
+def check_budgets(records):
+    frames = {}
+    for function, limit in BUDGETS.items():
+        matches = [record for record in records if function in record[0]]
+        if not matches:
+            raise RuntimeError(f"Missing production stack record for {function}")
+        maximum = max(record[1] for record in matches)
+        if any(record[2] != "static" for record in matches):
+            raise RuntimeError(f"Unbounded/dynamic stack frame: {function}")
+        frames[function] = maximum
+        print(f"{function} {maximum} B (budget {limit} B)", flush=True)
+        if maximum > limit:
+            raise RuntimeError(f"CLI stack regression: {function} uses {maximum} > {limit} bytes")
+    # The compiler may keep the wrapper alive across either helper call.
+    # Never count on a tail call; moving a buffer into an unchecked helper
+    # must not make a nested stack regression appear to pass this check.
+    for branch in CONSOLE_BRANCHES:
+        total = frames[CONSOLE_WRAPPER] + frames[branch]
+        print(f"Console wrapper + {branch} {total} B "
+              f"(budget {CONSOLE_BRANCH_BUDGET} B)", flush=True)
+        if total > CONSOLE_BRANCH_BUDGET:
+            raise RuntimeError(f"Nested CLI stack regression: wrapper + {branch} "
+                               f"uses {total} > {CONSOLE_BRANCH_BUDGET} bytes")
 
 
 def main():
@@ -69,17 +101,8 @@ def main():
             for line in usage.read_text(encoding="utf-8").splitlines():
                 identity, size, category = line.rsplit("\t", 2)
                 records.append((identity, int(size), category))
-        for function, limit in BUDGETS.items():
-            matches = [record for record in records if function in record[0]]
-            if not matches:
-                raise RuntimeError(f"Missing production stack record for {function}")
-            maximum = max(record[1] for record in matches)
-            if any(record[2] != "static" for record in matches):
-                raise RuntimeError(f"Unbounded/dynamic stack frame: {function}")
-            print(f"{function} {maximum} B (budget {limit} B)", flush=True)
-            if maximum > limit:
-                raise RuntimeError(f"CLI stack regression: {function} uses {maximum} > {limit} bytes")
-    print("PASS production ARM local CLI stack-frame budgets (not a full call-graph proof)")
+        check_budgets(records)
+    print("PASS production ARM local CLI frames and console branch sums (not a full call-graph proof)")
 
 
 if __name__ == "__main__":

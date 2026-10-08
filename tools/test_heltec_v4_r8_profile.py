@@ -51,7 +51,7 @@ def configuration_checks():
     assert "HELTEC_LORA_V4" not in r8 and "PIN_ADC_CTRL" not in r8 and "PIN_GPS_RESET" not in r8
     assert config[ENV]["custom_smartui_fresh_spiffs"] == "yes"
     assert "tool-mkspiffs @ 2.230.0" in config[ENV]["platform_packages"]
-    assert "V4 R8 SmartUI 0.16" in resolve(ENV, "build_flags")
+    assert "V4 R8 SmartUI 0.17" in resolve(ENV, "build_flags")
     assert "-DAUTO_SHUTDOWN_MILLIVOLTS=3400" in config[ENV]["build_unflags"]
     assert flags("env:SmartUI_V43_R8_headless")["SMARTUI_HEADLESS"] == "1"
     board = json.loads((ROOT / "boards/heltec_v4_r8.json").read_text())
