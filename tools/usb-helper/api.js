@@ -33,6 +33,7 @@
     restore:'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
     repeat:'Включённая ретрансляция несовместима с выбранной частотой. Помощник не отключает её автоматически; измените настройку на ноде.',
     range:'Значение выходит за допустимые границы платы.',
+    pin_conflict:'Вывод занят другой функцией или не разрешён для этого выхода. Обновите настройки и выберите свободный вывод.',
     usb_required:'Нода не подтвердила питание USB и локальное USB-подключение. Сервисное окно не включено.',
     transport:'Операция недоступна через этот транспорт. Настраивайте Wi-Fi по BLE или USB.',
     unconfigured:'Сначала настройте и сохраните подключение.',notready:'Нода ещё не готова к этой операции.',
@@ -48,9 +49,12 @@
   const meshcoreSet=/^set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|(?:af|dutycycle|rxdelay|tz\.offset) [-+]?(?:\d+(?:\.\d*)?|\.\d+)|radio\.rxgain (?:on|off)|radio [-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?\d+,[-+]?\d+)$/u;
   const friendlyReads=/^(?:get (?:volume|vibration|melody|sound_quiet|muted|board_led|unread_led|gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge|adc(?:\.multiplier|\.default)?|battery|battery_mv|shutdown_mv|advert)|(?:get )?caps [a-z][a-z_.]*|help(?: (?:sound|fem|adc|radio|connection|system|advert|led|gps)(?: [1-9]\d*)?)?|melody \d+|melodies|adc (?:manual|service(?: stop)?))$/;
   const friendlyWrites=/^(?:set (?:(?:volume|melody|advert) \d+|(?:vibration|sound_quiet|muted|board_led|unread_led|gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge) (?:on|off|0|1)|adc(?:\.multiplier)? (?:\d+(?:\.\d*)?|\.\d+))|test notification|adc (?:preview \d+|apply \d+|reset|service start))$/;
-  const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command);
+  const extendedKeys='notify_mode|important_notify_mode|led_pin|tone_pin|vibe_pin|melody_dm|melody_mention|melody_system|tone_8bit|high_drive|resonance_hz|offline_dm_led|ble_dm_led|msg_popup|ui_font|ui_theme|ui_top_color|ui_bottom_color|backlight_timeout|gps_source|gps_interval|advert_location|profile';
+  const extendedRead=new RegExp('^(?:get (?:'+extendedKeys+')|schema [a-z][a-z0-9_.]*|help (?:display|pins|profile|replies)(?: [1-9]\\d*)?)$');
+  const extendedWrite=new RegExp('^set (?:'+extendedKeys+') (?:-?\\d+|on|off)$');
+  const isFriendly=command=>friendlyReads.test(command)||friendlyWrites.test(command)||extendedRead.test(command)||extendedWrite.test(command);
   const needsMeshcore=command=>!command.startsWith('ui ')&&!legacyReads.includes(command)&&!isFriendly(command);
-  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |test$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
+  const mutates=command=>friendlyWrites.test(command)||command.startsWith('set ')||/^ui (set |name |reply set |tx set |test$|radio set |advert set |adc (preview |apply |set |reset$|service start$)|wifi (?!status$)|mode (?!status$))/.test(command);
   function tagFor(index){
     if(!Number.isInteger(index)||index<0||index>=alphabet.length**2)throw fail('EXHAUSTED');
     return alphabet[Math.floor(index/alphabet.length)]+alphabet[index%alphabet.length];
@@ -72,12 +76,14 @@
     validateCommand(command);
     const uiRead=/^ui (?:hello|caps (?:v|adc|sound|board_led|unread_led|vibration|gps|battery_protection|display|melody_max|adc_min|adc_max|agc_reset|fem_lna|fem_pa|bridge|melody_names|adc_service)|get (?:battery_mv|adc_multiplier|adc_default|sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|shutdown_mv|muted|agc_reset|fem_lna|fem_pa|bridge)|connection|radio|advert|melody \d+|mode status|adc (?:manual|service))$/;
     const uiWrite=/^ui set (?:sound_quiet|volume|melody|board_led|unread_led|vibration|gps|battery_protection|muted|agc_reset|fem_lna|fem_pa|bridge) \d+$/;
-    if(!(uiRead.test(command)||uiWrite.test(command)||command==='ui test'||legacyReads.includes(command)||
+    const extendedUiRead=new RegExp('^ui (?:get (?:'+extendedKeys+')|schema [a-z][a-z0-9_]*|identity|tx|reply get [1-9])$');
+    const extendedUiWrite=new RegExp('^ui set (?:'+extendedKeys+') -?\\d+$');
+    if(!(uiRead.test(command)||uiWrite.test(command)||extendedUiRead.test(command)||extendedUiWrite.test(command)||extendedRead.test(command)||extendedWrite.test(command)||command==='ui test'||legacyReads.includes(command)||
       meshcoreReads.includes(command)||(meshcoreSet.test(command)&&!command.startsWith('set pin '))||
       friendlyReads.test(command)||friendlyWrites.test(command)&&!/^adc |^set adc/.test(command)))throw fail('INPUT');
     const write=mutates(command);
     const warning=/^(?:ui set battery_protection 0|set battery_protection (?:0|off))$/.test(command)?'battery':
-      /^(?:ui set bridge 1|set sound\.bridge (?:1|on))$/.test(command)?'bridge':null;
+      /^(?:ui set bridge 1|set sound\.bridge (?:1|on))$/.test(command)?'bridge':/^(?:ui )?set (?:led_pin|tone_pin|vibe_pin) /.test(command)?'pin':/^(?:ui )?set profile /.test(command)?'profile':null;
     return {write,warning};
   }
   function encodeCommand(tag,command){

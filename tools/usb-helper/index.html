@@ -62,8 +62,8 @@
     :focus-visible { outline:3px solid var(--blue); outline-offset:3px; }
     .buttons { display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }
     label.field { display:block; margin:18px 0 7px; font-weight:600; font-size:14px; }
-    input[type="text"],input[type="password"],select { max-width:100%; min-height:46px; border:1px solid #627779; border-radius:11px; background:var(--surface); color:var(--text); padding:10px 12px; }
-    input[type="text"],input[type="password"] { width:100%; }
+    input[type="text"],input[type="password"],input[type="number"],select { max-width:100%; min-height:46px; border:1px solid #627779; border-radius:11px; background:var(--surface); color:var(--text); padding:10px 12px; }
+    input[type="text"],input[type="password"],input[type="number"] { width:100%; }
     select { font-size:15px; }
     input:disabled { opacity:.55; }
     input[type="file"] { width:100%; min-width:0; font-size:14px; }
@@ -96,7 +96,9 @@
     #settings-status { color:var(--accent); }
     #settings-capabilities { font-size:13px; }
     .api-workspace { display:grid; grid-template-columns:1fr; gap:20px; }
-    #api-settings-fields { display:grid; grid-template-columns:1fr 1fr; gap:0 28px; }
+    #api-settings-fields,.device-grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
+    .settings-filter { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:16px 0; }
+    .settings-filter input[type="text"] { flex:1 1 220px; width:auto; }
     #api-command { font-family:ui-monospace,Consolas,monospace; }
     #api-command-result { padding:16px; background:var(--surface); border-radius:12px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
     #api-feedback { margin-bottom:16px; }
@@ -133,7 +135,7 @@
     dialog::backdrop { background:#000b; }
     [hidden] { display:none!important; }
     @media(max-width:1100px) { main { padding:28px 24px; } .app-rail { position:static; width:auto; padding:0; border:0; background:none; } .rail-brand,.rail-sub,.rail-foot { display:none; } .tool-nav { flex-direction:row; flex-wrap:wrap; gap:6px; margin-bottom:24px; } .tool-nav a { background:#14262a; padding:10px 12px; } .nav-icon { display:none; } }
-    @media(max-width:760px) { main { padding:24px 16px; } header { flex-direction:column; gap:16px; margin-bottom:24px; } header .local-badge { display:inline-flex; margin:0 0 0 8px; } .grid,.settings-grid,.radio-workspace,#api-settings-fields { grid-template-columns:1fr; } .card { padding:22px 18px; border-radius:19px; } .transport-dock { grid-template-columns:1fr; padding:20px 18px; } .advert-panel { border-left:0; border-top:1px solid var(--edge); padding:22px 0 0; } .device-panel { padding:18px; } .tool-nav a { font-size:12px; } }
+    @media(max-width:760px) { main { padding:24px 16px; } header { flex-direction:column; gap:16px; margin-bottom:24px; } header .local-badge { display:inline-flex; margin:0 0 0 8px; } .grid,.settings-grid,.device-grid,.radio-workspace,#api-settings-fields { grid-template-columns:1fr; } .card { padding:22px 18px; border-radius:19px; } .transport-dock { grid-template-columns:1fr; padding:20px 18px; } .advert-panel { border-left:0; border-top:1px solid var(--edge); padding:22px 0 0; } .device-panel { padding:18px; } .tool-nav a { font-size:12px; } }
     @media(max-width:380px) { main { padding:20px 12px; } .setting-controls { grid-template-columns:1fr; } .setting-controls button { justify-self:start; } h1 { font-size:28px; } header .local-badge { display:flex; margin:8px 0 0; } }
     @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
   </style>
@@ -142,16 +144,21 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ближе к вашей сети.</h1><p class="subtitle">Выберите город. Настройте ноду под себя.<br>Без аккаунта, облака и лишних действий.</p></div>
-    <div><span class="tag">Помощник 1.9 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><span class="tag">Помощник 2.0 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
   <aside class="app-rail"><p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#0d191e" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p><p class="rail-sub">Локальный центр управления</p><nav class="tool-nav" aria-label="Разделы помощника"><a href="#connection-section">Обзор подключения</a><a href="#radio-section">Город и радио</a><a href="#device-section" data-console-nav>Устройство</a><a href="#api-settings" data-api-nav hidden>Устройство</a><a href="#wifi-title" data-console-nav>Сеть Wi-Fi</a><a href="#api-wifi" data-api-nav hidden>Сеть Wi-Fi</a><a href="#replies-section" data-console-nav>Быстрые фразы</a><a href="#firmware-section">Файл прошивки</a><a href="#api-developer" data-api-nav hidden>Для разработчика</a></nav><p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p></aside>
   <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
   <details id="connection-help" class="notice"><summary>Если подключение не получается</summary><p><strong>Выберите подходящий вход:</strong> для режима Bluetooth или Wi-Fi на ноде — «Настройки (консоль)»; для режима USB — «Настройки (USB-компаньон)». Оба работают через USB-кабель. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</p>
-  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.15 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
+  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.16 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   </details>
   <div class="grid">
+    <section id="core-section" class="card wide" aria-labelledby="core-title">
+      <p class="panel-kicker">Нода</p><h2 id="core-title">Имя и мощность</h2><p class="hint">Читаем ограничения самой платы. После каждого изменения проверяем сохранённое значение. Нужна SmartUI 0.16.</p>
+      <div class="device-grid"><section class="device-panel"><label class="field" for="node-name">Имя ноды · до 31 байта UTF-8</label><input id="node-name" type="text" disabled autocomplete="off" spellcheck="false"><div class="buttons"><button id="node-name-save" disabled>Сохранить имя</button></div><p id="node-name-status" class="setting-state" role="status">Не прочитано</p></section>
+      <section class="device-panel"><label class="field" for="node-tx">Мощность передатчика, дБм</label><input id="node-tx" type="number" disabled step="1"><div class="buttons"><button id="node-tx-save" disabled>Сохранить мощность</button></div><p id="node-tx-status" class="setting-state" role="status">Не прочитано</p><p class="safety-note">Учитывайте допустимую мощность и антенну. Нода может отклонить изменение, пока радио занято.</p></section></div>
+    </section>
     <section id="radio-section" class="card wide radio-card" aria-labelledby="radio-title">
       <div class="section-heading"><div><p class="panel-kicker">Ваш город · Ваша сеть</p><h2 id="radio-title">Подключитесь к местному эфиру</h2></div><span id="radio-capability" class="status-pill">Ожидает подключения</span></div>
       <p class="hint">Городской пресет настраивает частоту, полосу и кодирование. Выбор города ничего не меняет — применение отдельной кнопкой.</p>
@@ -216,6 +223,7 @@
       <p id="settings-hint" class="hint">Доступные функции определяет прошивка. Изменения в полях не сохраняются автоматически.</p>
       <div class="buttons"><button id="settings-load" disabled>Прочитать настройки</button></div>
       <p id="settings-capabilities" class="hint">Для новых настроек нужна SmartUI 0.08 с протоколом Settings 1. Старые прошивки сохраняют прежние инструменты.</p>
+      <div class="settings-filter"><input id="settings-filter" type="text" placeholder="Найти настройку: звук, pin, GPS…" aria-label="Поиск настроек"><label class="check"><input id="settings-unavailable" type="checkbox">Показать недоступные</label></div>
       <div id="device-fields" class="settings-grid" hidden>
         <section id="battery-panel" class="device-panel" aria-labelledby="battery-title">
           <p class="panel-kicker">Питание</p><h3 id="battery-title">Аккумулятор и калибровка</h3>
@@ -249,9 +257,11 @@
           <div id="battery-settings"></div>
           <p id="battery-protection-warning" class="safety-note">Защита включена: порог 3,2 В. При выключении остаётся нижняя отсечка 2,7 В — это не безопасная цель разряда. Нужны исправный BMS и проверенный ADC. Внешнее питание может менять поведение отключения.</p>
         </section>
-        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">В публичных сборках звук относится к уведомлениям ЛС. Мелодия общая для важных уведомлений. Тест использует только сохранённые настройки.</p><div id="sound-settings"></div><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div><p class="hint">Общая тишина отключает звук и вибрацию; обычные статусные LED могут оставаться включёнными. Принятая команда теста не подтверждает работу физического излучателя.</p></section>
+        <section id="sound-panel" class="device-panel" aria-labelledby="sound-title"><p class="panel-kicker">Уведомления</p><h3 id="sound-title">Звук и общая тишина</h3><p class="hint">Каналы уведомлений, звук и мелодии. Отдельные мелодии ЛС и упоминаний доступны только при поддержке сборкой. Тест использует сохранённые настройки.</p><div id="sound-settings"></div><div class="buttons"><button id="settings-test" disabled>Проверить уведомление</button></div><p class="hint">Общая тишина отключает звук и вибрацию; обычные статусные LED могут оставаться включёнными. Принятая команда теста не подтверждает работу физического излучателя.</p></section>
         <section id="lights-panel" class="device-panel" aria-labelledby="lights-title"><p class="panel-kicker">Индикация</p><h3 id="lights-title">Светодиоды и вибрация</h3><p class="hint">LED платы и LED уведомлений — разные настройки. Аппаратный индикатор зарядки может не управляться прошивкой.</p><div id="lights-settings"></div></section>
-        <section id="gps-panel" class="device-panel" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Аппаратный GPS</h3><p class="hint">Доступен только при поддержке сборкой. Включение не означает, что спутники уже найдены. GPS телефона не используется.</p><div id="gps-settings"></div></section>
+        <section id="gps-panel" class="device-panel" aria-labelledby="gps-title"><p class="panel-kicker">Геопозиция</p><h3 id="gps-title">Источник координат</h3><p class="hint">Модуль ноды или координаты телефона — по возможностям прошивки. Телефон должен передавать координаты через приложение. Включение модуля не гарантирует спутниковый фикс.</p><div id="gps-settings"></div></section>
+        <section id="display-panel" class="device-panel" aria-labelledby="display-title" hidden><p class="panel-kicker">SmartUI</p><h3 id="display-title">Экран и оформление</h3><p class="hint">Набор вариантов зависит от дисплея. Значения и доступность сообщает сама нода.</p><div id="display-settings"></div></section>
+        <section id="system-panel" class="device-panel" aria-labelledby="system-title" hidden><p class="panel-kicker">Система</p><h3 id="system-title">Профиль и радиоусилитель</h3><p class="hint">FEM доступен только совместимым платам. Профиль изменяет несколько параметров уведомлений сразу.</p><div id="system-settings"></div></section>
       </div>
     </section>
     <section id="replies-section" class="card wide" aria-labelledby="replies-title">
@@ -274,7 +284,7 @@
       <h2 id="mode-title"><span class="step">3</span>Выберите способ подключения</h2>
       <p class="hint">Это выбор подключения приложения к ноде. LoRa продолжает работать. При смене режима текущее соединение приложения прервётся.</p>
       <div class="buttons"><button id="mode-ble" data-mode="ble" disabled>Bluetooth</button><button id="mode-wifi" data-mode="wifi" disabled>Wi-Fi</button><button id="mode-usb" data-mode="usb" disabled>USB-компаньон</button></div>
-      <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Настройки (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.15.</p>
+      <p class="hint">При выборе USB-компаньона текстовая консоль закроется. Отключите порт, выберите в помощнике «Настройки (USB-компаньон)» и подключитесь заново. Для возврата к консоли выберите Bluetooth/Wi-Fi на экране либо используйте описанное выше долгое нажатие после запуска SmartUI 0.08–0.16.</p>
       <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
       <details><summary>Что делать после сохранения Wi-Fi?</summary><ol><li>Выберите режим Wi-Fi кнопкой выше или в меню ноды.</li><li>Нажмите «Обновить состояние» и посмотрите адрес ноды.</li><li>В совместимом приложении MeshCore выберите TCP/Wi-Fi, укажите этот адрес и порт 5000. Компьютер или телефон должен быть в той же локальной сети.</li><li>Нода принимает приложение автоматически, без кнопки. Второй клиент не вытеснит первый.</li></ol><p class="hint">Важно: отдельного TCP-пароля и TLS нет. Любой имеющий сетевой доступ к ноде может подключиться. Только доверенная локальная сеть, без проброса порта в Интернет. Этот офлайн-помощник подключается только по USB, не по TCP, и не прошивает устройство.</p></details>
       <details><summary>Не подключается или окно порта пустое?</summary><p>Проверьте кабель, закройте другие программы и убедитесь, что на ноде выбран Bluetooth или Wi-Fi. В режиме USB-компаньона консоль недоступна. После неудачной настройки выберите «Отменить проверку» либо переподключите помощник.</p><p>Если устройство перезагрузилось при открытии порта, дождитесь загрузки и повторите подключение. Помощник не стирает память и не прошивает устройство.</p><p class="hint">Если браузер запрещает USB локальному файлу, проверьте его настройки или используйте обычную консоль по инструкции из релиза. Отключать защиту браузера не нужно.</p></details>

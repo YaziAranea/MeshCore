@@ -58,8 +58,8 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertNotIn("base_source_commit", manifest)
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
-            self.assertIn("SmartUI 0.15", readme)
-            self.assertIn("USB Helper 1.9", readme)
+            self.assertIn("SmartUI 0.16", readme)
+            self.assertIn("USB Helper 2.0", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
             self.assertNotIn("LOCAL DEVELOPMENT", readme)
             self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md"})
@@ -77,9 +77,9 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertNotEqual(first, other)
 
     def test_current_release_and_optional_development_names(self):
-        self.assertEqual(kit.VERSION, "0.15")
-        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.15.zip")
-        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.15-development.zip")
+        self.assertEqual(kit.VERSION, "0.16")
+        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.16.zip")
+        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.16-development.zip")
 
     def test_local_secrets_caches_and_unlisted_files_are_excluded(self):
         for name in ("tools/smartui-cli/.env", "tools/smartui-cli/node_modules/test.js",
@@ -134,7 +134,7 @@ class DeveloperKitTests(unittest.TestCase):
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 1.9", readme)
+            self.assertIn("USB Helper 2.0", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))

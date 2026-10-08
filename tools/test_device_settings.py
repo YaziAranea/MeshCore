@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from test_smartui_api import setting_effects_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,6 +32,17 @@ def main():
         else:
             raise RuntimeError("Host C++ compiler required; no skipped test success")
         subprocess.run(build, check=True)
+        subprocess.run(execute, check=True)
+        # Reuse only the current production hook fixture, not the archived C9
+        # protocol suites. This exercises real main.cpp read/write/apply/rollback.
+        runtime = Path(directory) / "device_settings_runtime.cpp"
+        runtime.write_text(setting_effects_source(), encoding="utf-8")
+        runtime_build = [part.replace("device_settings_test.cpp", "device_settings_runtime.cpp")
+                         if isinstance(part, str) else part for part in build]
+        original = str(paths[0]) if compiler else linux(paths[0])
+        runtime_build[runtime_build.index(original.replace("device_settings_test.cpp", "device_settings_runtime.cpp"))] = (
+            str(runtime) if compiler else linux(runtime))
+        subprocess.run(runtime_build, check=True)
         subprocess.run(execute, check=True)
         # Exercise the strict fixed-point manual parser under the nRF52
         # optimization mode too. Invalid tokens must not reach float parsing.

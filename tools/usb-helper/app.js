@@ -40,8 +40,8 @@
     {key:"unread_led",cap:"unread_led",group:"lights",label:"LED уведомлений",options:[[1,"Включён"],[0,"Выключен"]]},
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
-  ];
-  // Exact public 0.08..0.15 notify_tones order; the package test checks source parity.
+  ].concat(SmartUiConsole.EXTENDED_FIELDS.map(field=>({...field,extended:true,options:[]})));
+  // Exact public 0.08..0.16 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
   const addOptions = (select, options) => {
@@ -52,14 +52,19 @@
     const row=document.createElement("div"); row.className="setting-row"; row.id="row-"+field.key;
     const label=document.createElement("label"); label.htmlFor="setting-"+field.key; label.textContent=field.label;
     const controls=document.createElement("div"); controls.className="setting-controls";
-    const select=document.createElement("select"); select.id="setting-"+field.key; select.disabled=true; select.setAttribute("aria-describedby","saved-"+field.key); addOptions(select,field.options);
+    const select=document.createElement(field.key==='gps_interval'?"input":"select"); select.id="setting-"+field.key; select.disabled=true; select.setAttribute("aria-describedby","saved-"+field.key);
+    if(select.tagName==='INPUT')select.type='number';else addOptions(select,field.options);
     const save=document.createElement("button"); save.id="save-"+field.key; save.textContent="Сохранить"; save.setAttribute("aria-label","Сохранить: "+field.label); save.disabled=true;
     const status=document.createElement("p"); status.className="setting-state"; status.id="saved-"+field.key; status.textContent="Не прочитано";
     select.onchange=()=>{settingsDirty.add(field.key); renderDeviceSettings();};
+    if(select.tagName==='INPUT')select.oninput=select.onchange;
     save.onclick=async()=>{
       const value=Number(select.value);
       if (field.key==="battery_protection" && value===0 && !await confirmAction("Выключить защиту аккумулятора 3,2 В? Останется только нижняя отсечка 2,7 В. Это не безопасная цель разряда; необходим исправный BMS и проверенная калибровка ADC.")) return;
-      await run(()=>client.saveDeviceSetting(field.key,value));
+      if(field.key.endsWith('_pin')&&!await confirmAction('Изменить '+field.label.toLowerCase()+' на '+value+'? Номера — обозначения выводов прошивки, не номера ножек корпуса. Проверьте проводку платы. Нельзя подключать LED без резистора или мотор напрямую без драйвера.'))return;
+      if(field.key==='bridge'&&value===1&&!await confirmAction('Включить мостовой звук? Нужен плавающий пьезоизлучатель между совместимыми выводами, без соединения с землёй.'))return;
+      if(field.key==='profile'&&!await confirmAction('Применить профиль? Он изменяет несколько настроек звука и индикации. Несохранённые поля помощника останутся черновиками.'))return;
+      await run(async()=>{try{status.textContent='Сохраняем и проверяем…';await client.saveDeviceSetting(field.key,value);renderDeviceSettings();}catch(error){status.textContent=(error.safe?error.message:'Сохранение не подтверждено.')+' Изменение ещё не сохранено.';status.dataset.kind='error';throw error;}});
     };
     controls.append(select,save); row.append(label,controls,status); $(field.group+"-settings").append(row);
   }
@@ -77,31 +82,41 @@
     renderAdcService(readReady,ready);
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));
       melody.dataset.catalog=catalogKey;
     }
     for (const field of settingFields) {
-      const supported=!field.cap || Boolean(caps[field.cap]);
-      $("row-"+field.key).hidden=!supported;
+      const schema=state.settingSchemas?.[field.key];
+      const supported=schema?schema.supported:!field.extended&&(!field.cap || Boolean(caps[field.cap]));
+      $("row-"+field.key).hidden=(field.extended&&!schema)||!supported&&!$('settings-unavailable').checked||!(field.label+' '+field.key).toLowerCase().includes($('settings-filter').value.trim().toLowerCase());
       const input=$("setting-"+field.key), stored=saved?.[field.key];
+      if(schema){
+        const signature=JSON.stringify(schema);if(input.dataset.schema!==signature){const draft=input.value;
+          if(input.tagName==='SELECT')addOptions(input,SmartUiConsole.settingOptions(field,schema,melodyCatalog?melodyNames:[])||[]);
+          else{input.min=schema.min;input.max=schema.max;input.step=schema.step;}
+          if(settingsDirty.has(field.key))input.value=draft;input.dataset.schema=signature;
+        }
+      }
       if (stored!==undefined && (!settingsDirty.has(field.key) || Number(input.value)===stored)) { input.value=String(stored); settingsDirty.delete(field.key); }
       const dirty=stored!==undefined && Number(input.value)!==stored;
       input.disabled=!ready || !supported;
       $("save-"+field.key).disabled=!ready || !supported || !dirty;
-      const label=stored===undefined ? "—" : [...input.options].find(o=>Number(o.value)===stored)?.textContent || String(stored);
-      $("saved-"+field.key).textContent=stored===undefined ? "Значение не подтверждено" : "На ноде: "+label+(dirty ? " · Изменение ещё не сохранено" : " · Прочитано");
+      const label=stored===undefined ? "—" : [...(input.options||[])].find(o=>Number(o.value)===stored)?.textContent || String(stored);
+      $("saved-"+field.key).textContent=!supported?"Недоступно на этой плате или в этой сборке":stored===undefined ? "Значение не подтверждено" : "На ноде: "+label+(dirty ? " · Изменение ещё не сохранено" : " · Прочитано")+(field.key.endsWith('_pin')?' · Только разрешённые прошивкой выводы.':'');
       $("saved-"+field.key).dataset.dirty=String(dirty);
     }
     $("settings-status").textContent=!saved ? "Значения не подтверждены" : state.status?.readOnly ? "Только чтение" : settingsDirty.size ? "Есть несохранённые поля" : "Прочитано с ноды";
-    $("battery-panel").hidden=!(caps.adc || caps.battery_protection);
-    $("adc-fields").hidden=!caps.adc;
+    const query=$('settings-filter').value.trim().toLowerCase();
+    const adcVisible=Boolean(caps.adc)&&(!query||'adc аккумулятор калибровка напряжение множитель'.includes(query));
+    const hasVisibleSettings=group=>[...$(group+'-settings').querySelectorAll('.setting-row')].some(row=>!row.hidden);
+    $("battery-panel").hidden=!adcVisible&&!hasVisibleSettings('battery');
+    $("adc-fields").hidden=!adcVisible;
     $("battery-protection-warning").hidden=!caps.battery_protection;
-    $("lights-panel").hidden=!(caps.board_led || caps.unread_led || caps.vibration);
+    for(const group of ['sound','lights','gps','display','system'])$(group+'-panel').hidden=!hasVisibleSettings(group);
     $("lights-panel").classList.toggle("device-panel-wide",!caps.gps);
-    $("gps-panel").hidden=!caps.gps;
     $("battery-voltage").textContent=saved?.battery_mv ? (saved.battery_mv/1000).toLocaleString("ru-RU",{minimumFractionDigits:3,maximumFractionDigits:3})+" В" : "Нет данных";
     $("adc-current").textContent=saved ? saved.adc_multiplier.toFixed(6) : "—";
     $("adc-range").textContent="Заводской: "+(saved ? saved.adc_default.toFixed(6) : "—")+". Допустимо: "+caps.adc_min.toFixed(6)+"–"+caps.adc_max.toFixed(6)+".";
@@ -117,6 +132,8 @@
     if (preview) $("adc-preview-result").textContent="Расчёт, ещё не сохранён: "+preview.multiplier.toFixed(6)+". Опорный замер: "+(preview.sampled_mv/1000).toFixed(3)+" В; мультиметр — "+(preview.measured_mv/1000).toFixed(3)+" В.";
     $("settings-test").disabled=!ready || !(caps.sound || caps.unread_led || caps.vibration);
   }
+  $('settings-filter').oninput=renderDeviceSettings;
+  $('settings-unavailable').onchange=renderDeviceSettings;
   function renderAdcService(readReady,ready) {
     const enabled=Boolean(state.settingsCaps?.adc_service), service=state.adcService;
     $("adc-service-box").hidden=!enabled;

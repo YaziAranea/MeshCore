@@ -18,6 +18,18 @@ const SETTINGS = {battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet
 const wireRecord=(kind,values)=>'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('schema parser validates pin allowlists, signed disabled pin, discrete masks and integer steps',()=>{
+  const {parseSettingSchema,settingValueValid,settingOptions,parseSettingValue,parseCoreSetting}=require('./core.js');
+  const line='OK settings schema key=vibe_pin supported=1 min=-1 max=8 step=1 options=-1,2,8',s=parseSettingSchema(line,'vibe_pin');
+  assert.ok(s);assert.equal(settingValueValid(s,-1),true);assert.equal(settingValueValid(s,3),false);
+  assert.equal(parseSettingValue('OK ui get key=vibe_pin value=-1','vibe_pin','ui'),-1);
+  assert.equal(settingOptions({key:'notify_mode'},{min:0,max:7,step:1})[1][1],'LED');
+  assert.equal(settingOptions({key:'notify_mode'},{min:0,max:7,step:1})[2][1],'Звук');
+  for(const bad of [line+' extra=1',line.replace('step=1','step=0'),line.replace('-1,2,8','-1,2,2'),line.replace('-1,2,8','-1,9'),line.replace('supported=1','supported=2')])assert.equal(parseSettingSchema(bad,'vibe_pin'),null);
+  assert.deepEqual(parseCoreSetting('OK ui tx value=20 min=-9 max=22','tx','ui'),{value:20,min:-9,max:22});
+  assert.equal(parseCoreSetting('OK ui tx value=23 min=-9 max=22','tx','ui'),null);
+});
+
 test('radio/advert records bound every field and reject duplicate or hostile payloads',()=>{
   const {parseNetworkSetting,networkValuesValid,ADVERT_INTERVALS}=require('./core.js');
   const radio='OK settings radio freq_khz=868731 bw_hz=62500 sf=7 cr=7 path_bytes=2 tx_dbm=20 repeat=0';
@@ -125,7 +137,13 @@ class FakePort {
     const command = raw.trim().toLowerCase();
     if (this.options.settings && command.startsWith('settings ')) {
       if (command==='settings caps') this.reply(wireRecord('caps',this.settingsCaps));
-      else if (command==='settings get') this.reply(wireRecord('get',this.settingsState));
+      else if (command==='settings get') this.reply(wireRecord('get',Object.fromEntries(Object.keys(SETTINGS).map(key=>[key,this.settingsState[key]]))));
+      else if(command==='settings caps schema')this.reply(this.options.schemas?'OK settings caps key=schema value=1':'ERR settings unsupported');
+      else if(command.startsWith('settings schema ')){
+        const key=command.slice(16),schema=this.options.schemas?.[key]||{supported:Number(Object.hasOwn(SETTINGS,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};
+        this.reply('OK settings schema key='+key+' '+Object.entries(schema).map(([k,v])=>k+'='+v).join(' '));
+      }
+      else if(command.startsWith('settings get ')){const key=command.slice(13);this.reply('OK settings get key='+key+' value='+this.settingsState[key]);}
       else if (command==='settings adc manual') this.reply(this.options.manualAdc===undefined?'ERR settings invalid':'OK settings adc_manual supported='+Number(this.options.manualAdc));
       else if (command.startsWith('settings adc set ')) {
         if(!this.options.manualAdc){this.reply('ERR settings unsupported');return;}
@@ -811,11 +829,25 @@ test('settings are explicitly advertised, automatically read and never probed on
   await assert.rejects(legacy.instance.loadDeviceSettings(),code('SETTINGS_UNAVAILABLE'));
   await legacy.instance.disconnect();
   const f=await connected({settings:true,fragment:1});
-  assert.deepEqual(f.port.commands.slice(-3),['settings caps','settings get','settings adc manual']);
+  assert.deepEqual(f.port.commands.slice(-4),['settings caps','settings get','settings caps schema','settings adc manual']);
   assert.deepEqual(f.instance.state.deviceSettings,SETTINGS);
   const copy=f.instance.state;copy.settingsCaps.adc=0;copy.deviceSettings.volume=1;
   assert.equal(f.instance.state.settingsCaps.adc,1);assert.equal(f.instance.state.deviceSettings.volume,10);
   await f.instance.disconnect();
+});
+
+test('extended service schemas expose safe pins and preserve bounded readback without bulk growth',async()=>{
+  const schemas={tone_pin:{supported:1,min:2,max:8,step:1,options:'2,8'},vibe_pin:{supported:1,min:-1,max:9,step:1,options:'-1,9'},gps_interval:{supported:1,min:0,max:86400,step:1,options:'-'}};
+  const f=await connected({settings:true,schemas,settingsState:{tone_pin:2,vibe_pin:-1,gps_interval:60}});
+  try{
+    assert.equal(f.instance.state.deviceSettings.tone_pin,2);assert.equal(f.instance.state.deviceSettings.vibe_pin,-1);
+    const copy=f.instance.state;copy.settingSchemas.tone_pin.options.push(7);assert.equal(f.instance.state.settingSchemas.tone_pin.options.includes(7),false);
+    await assert.rejects(f.instance.saveDeviceSetting('tone_pin',7),code('SETTINGS_INVALID'));
+    assert.equal(f.port.commands.includes('settings set tone_pin 7'),false);
+    await f.instance.saveDeviceSetting('tone_pin',8);assert.equal(f.instance.state.deviceSettings.tone_pin,8);
+    await f.instance.saveDeviceSetting('gps_interval',3600);assert.equal(f.instance.state.deviceSettings.gps_interval,3600);
+    await assert.rejects(f.instance.saveDeviceSetting('ui_theme',1),code('SETTINGS_UNSUPPORTED'));
+  }finally{await f.instance.disconnect();}
 });
 
 test('every supported setting requires matched ACK then current readback',async()=>{

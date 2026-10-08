@@ -37,6 +37,9 @@ static const uint32_t UI_TONE_BRIDGE_OWNER = 0x42525A54UL; // "BRZT"
 static bool ui_tone_bridge_owned = false;
 
 static void uiStopToneBridge(int primary_pin, int secondary_pin) {
+  // With bridge mode off these pins may belong to the LED/vibration role.
+  // Stopping an unowned PWM must not reconfigure or pull their outputs low.
+  if (!ui_tone_bridge_owned) return;
   if (ui_tone_bridge_owned) {
     HwPWM3.stop();
     HwPWM3.removeAllPins();
@@ -11936,6 +11939,110 @@ void UITask::applyDeviceSettingsRuntime(bool battery_changed) {
     // Re-evaluate on the next normal check, never add another boot grace period.
     next_batt_chck = 0;
   }
+  _next_refresh = 0;
+}
+
+uint8_t UITask::storedUiFontChoice(uint8_t choice) const {
+#if UI_T096_PREMIUM_TFT
+  return UI_T096_FONT_VISIBLE_FIRST + choice;
+#else
+  return choice;
+#endif
+}
+
+void UITask::describeDeviceSettings(smartui::DeviceSettingsCaps& c) const {
+  c.notify_pins = UI_NOTIFY_GPIO_SELECT != 0;
+  c.tone_8bit = UI_TONE_8BIT_PAGE == 1;
+  c.high_drive = UI_TONE_HIGH_DRIVE_PAGE == 1;
+  c.resonance = UI_TONE_RESONANCE_PAGE == 1;
+  c.separate_melodies = UI_SMART_B12_TONE_LIST != 1;
+  c.phone_gps = UI_PHONE_GPS == 1;
+  c.colors = UI_COLOR_APPEARANCE_MENU != 0;
+  c.profiles = UI_SMART_B11_EXTRAS == 1;
+#if UI_T096_PREMIUM_TFT
+  c.night_theme = true;
+#endif
+  c.font_count = _display ? getUiFontCount() : 0;
+  c.theme_count = _display ? getUiThemeCount() : 0;
+  c.notify_mask = getSupportedNotifyMode();
+}
+
+bool UITask::isDeviceSettingsPinAllowed(const char* key, int pin) const {
+#if UI_NOTIFY_GPIO_SELECT
+  const bool led = strcmp(key, "led_pin") == 0;
+  const bool tone = strcmp(key, "tone_pin") == 0;
+  const bool vibe = strcmp(key, "vibe_pin") == 0;
+  if (!led && !tone && !vibe) return false;
+#ifndef PIN_MSG_ALERT
+  if (led) return false;
+#endif
+#ifndef PIN_MSG_TONE
+  if (tone) return false;
+#endif
+  if (vibe && pin == -1) return true;
+  if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return false;
+  const int current = led ? getNotifyLedPin() : tone ? getNotifyTonePin() : getNotifyVibePin();
+  // Keeping an existing shared/default output is allowed; selecting an output
+  // already owned by another role is rejected instead of silently hijacking it.
+  if (pin == current) return true;
+#if UI_TONE_BRIDGE_PAGE == 1
+  if (isNotifyToneBridgeEnabled() && (tone || pin == DEFAULT_NOTIFY_TONE_PIN ||
+      pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return false;
+#endif
+  if (!led && pin == getNotifyLedPin()) return false;
+  if (!tone && pin == getNotifyTonePin()) return false;
+  if (!vibe && pin == getNotifyVibePin()) return false;
+  return true;
+#else
+  (void)key; (void)pin;
+  return false;
+#endif
+}
+
+void UITask::deviceSettingsPinOptions(const char* key, char* out, size_t capacity) const {
+  if (!out || !capacity) return;
+  snprintf(out, capacity, "-");
+#if UI_NOTIFY_GPIO_SELECT
+  size_t used = 0;
+  if (strcmp(key, "vibe_pin") == 0) {
+    const int count = snprintf(out, capacity, "-1");
+    if (count < 0 || static_cast<size_t>(count) >= capacity) return;
+    used = count;
+  }
+  for (int8_t pin : notify_gpio_pins) {
+    if (!isDeviceSettingsPinAllowed(key, pin)) continue;
+    const int count = snprintf(out + used, capacity - used, "%s%d", used ? "," : "", pin);
+    if (count < 0 || static_cast<size_t>(count) >= capacity - used) {
+      snprintf(out, capacity, "-"); return;
+    }
+    used += count;
+  }
+#else
+  (void)key;
+#endif
+}
+
+void UITask::applyDeviceSettingsAppearanceAndPins() {
+  if (!_node_prefs) return;
+  stopNotifyOutputs();
+  if (_display) {
+#if UI_T096_PREMIUM_TFT || UI_V4_3_OLED_PROFILE
+    _display->setUiFont(uiOledFontForRole(_node_prefs->ui_font, UI_OLED_FONT_M));
+    _display->setTextSize(uiOledTextSizeForRole(UI_OLED_FONT_M));
+#else
+    _display->setUiFont(_node_prefs->ui_font);
+    _display->setTextSize(1);
+#endif
+    _display->setUiTheme(_node_prefs->ui_theme);
+  }
+#ifdef PIN_MSG_ALERT
+  configureMsgAlertPin(_node_prefs->notify_gpio_pin);
+#endif
+#ifdef PIN_MSG_TONE
+  configureMsgTonePin(_node_prefs->notify_tone_pin);
+#endif
+  configureMsgVibePin(_node_prefs->notify_vibe_pin);
+  extendAutoOff();
   _next_refresh = 0;
 }
 

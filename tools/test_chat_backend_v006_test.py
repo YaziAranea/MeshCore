@@ -32,7 +32,11 @@ struct RecentChatEntry {
  char origin[32]={},text[160]={}; uint8_t channel_idx=255,channel_identity[32]={};
 };
 struct ChannelDetails { struct {uint8_t secret[32]={};} channel; };
-struct NodePrefs { char quick_replies[SMARTUI_QUICK_REPLY_COUNT][SMARTUI_QUICK_REPLY_MAX_BYTES+1]={}; };
+struct NodePrefs {
+ char quick_replies[SMARTUI_QUICK_REPLY_COUNT][SMARTUI_QUICK_REPLY_MAX_BYTES+1]={};
+ double node_lat=1.25,node_lon=2.5;
+ unsigned unrelated=1234;
+};
 void splitChannelText(const char* name,const char* text,char* origin,size_t n,char* dest,size_t len) {
  snprintf(origin,n,"%s",name); snprintf(dest,len,"%s",text);
 }
@@ -43,10 +47,15 @@ public:
  uint32_t recent_chat_revision=0; int recent_chat_head=0; int8_t last_rx_rssi=-72;
  ChannelDetails channels[3]; NodePrefs _prefs;
  bool storage_recovery_required=false,_cli_rescue=false,save_ok=true;
+ unsigned save_count=0; NodePrefs stored;
  Clock* getRTCClock(){return &clock;}
  int getRouteStatusFlags(int){return 0;}
  bool getChannel(uint8_t i,ChannelDetails& out){if(i>=3)return false;out=channels[i];return true;}
- bool commitPrefsOrRollback(const NodePrefs& before){if(!save_ok)_prefs=before;return save_ok;}
+ bool savePrefs(){
+   ++save_count; _prefs.node_lat=55.5; _prefs.node_lon=73.25;
+   if(save_ok)stored=_prefs;
+   return save_ok;
+ }
  void noteChannelChat(const char*,mesh::Packet*,const char*,uint8_t);
  int getRecentChannelMessages(RecentChatEntry*,int);
  int getRecentChannelMessagesForChannel(RecentChatEntry*,int,const uint8_t*);
@@ -81,16 +90,31 @@ int main(){
  CHECK(m.recent_chat_revision==1);
  CHECK(!m.getQuickReplyOverride(0)[0] && !m.getQuickReplyOverride(99)[0]);
  CHECK(m.setQuickReplyOverride(0,"На месте") && !strcmp(m.getQuickReplyOverride(0),"На месте"));
+ CHECK(m.save_count==1 && !strcmp(m.stored.quick_replies[0],"На месте"));
+ CHECK(m._prefs.node_lat==55.5 && m._prefs.node_lon==73.25);
+ m._prefs.node_lat=10.25;m._prefs.node_lon=20.75;
+ strcpy(m._prefs.quick_replies[1],"keep another slot");
+ // Preserve all bytes, not only the visible phrase, on failed persistence.
+ m._prefs.quick_replies[0][SMARTUI_QUICK_REPLY_MAX_BYTES-1]='z';
+ char before[SMARTUI_QUICK_REPLY_MAX_BYTES+1];memcpy(before,m._prefs.quick_replies[0],sizeof(before));
  m.save_ok=false;CHECK(!m.setQuickReplyOverride(0,"Подхожу"));
  CHECK(!strcmp(m.getQuickReplyOverride(0),"На месте"));
+ CHECK(!memcmp(before,m._prefs.quick_replies[0],sizeof(before)));
+ CHECK(m._prefs.node_lat==10.25 && m._prefs.node_lon==20.75);
+ CHECK(!strcmp(m._prefs.quick_replies[1],"keep another slot") && m._prefs.unrelated==1234);
+ CHECK(m.save_count==2 && !strcmp(m.stored.quick_replies[0],"На месте"));
  m.save_ok=true;CHECK(m.setQuickReplyOverride(0,"") && !m.getQuickReplyOverride(0)[0]);
+ CHECK(m._prefs.node_lat==55.5 && m._prefs.node_lon==73.25 && !m.stored.quick_replies[0][0]);
+ for(char value:m._prefs.quick_replies[0])CHECK(value==0);
+ unsigned saves_before=m.save_count;
  CHECK(!m.setQuickReplyOverride(9,"bad") && !m.setQuickReplyOverride(0,nullptr));
  CHECK(!m.setQuickReplyOverride(0,"bad\nline") && !m.setQuickReplyOverride(0,"\xD0"));
  char long_text[66];memset(long_text,'a',65);long_text[65]=0;
- CHECK(!m.setQuickReplyOverride(0,long_text));long_text[64]=0;
+ CHECK(!m.setQuickReplyOverride(0,long_text));CHECK(m.save_count==saves_before);long_text[64]=0;
  CHECK(m.setQuickReplyOverride(8,long_text) && strlen(m.getQuickReplyOverride(8))==64);
  m.storage_recovery_required=true;CHECK(!m.setQuickReplyOverride(8,"unsafe"));
  m.storage_recovery_required=false;m._cli_rescue=true;CHECK(!m.setQuickReplyOverride(8,"unsafe"));
+ CHECK(m.save_count==saves_before+1);
  printf("PASS %u production history/filter/revision/phrase checks\n",checks);
 }
 '''

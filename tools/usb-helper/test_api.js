@@ -35,6 +35,16 @@ test('friendly console marker is independent and preserves original ui commands'
   }finally{await f.client.disconnect();}
 });
 
+test('0.16 SDK classifies all extended settings and never sends new writes during read-only',async()=>{
+  const fields=require('./core').EXTENDED_FIELDS.map(f=>f.key).filter(k=>!['agc_reset','fem_lna','fem_pa','bridge'].includes(k));
+  for(const key of fields){api.encodeCommand('AA','get '+key);api.encodeCommand('AB','set '+key+' 1');assert.equal(api.mutates('set '+key+' 1'),true);api.developerCommand('ui schema '+key);}
+  api.encodeCommand('AC','set vibe_pin -1');assert.equal(api.developerCommand('set tone_pin 2').warning,'pin');
+  const f=await connected({console:1,readonly:true});try{const before=f.port.commands.length;
+    for(const command of fields.map(k=>'set '+k+' 1').concat(['ui name 6162','ui tx set 20','ui reply set 1 6162']))await assert.rejects(f.client.execute(command),{code:'DENIED'});
+    assert.equal(f.port.commands.length,before);
+  }finally{await f.client.disconnect();}
+});
+
 test('0.14 or malformed console marker never receives new commands; upstream still works',async()=>{
   for(const console of [undefined,0,2]){
     const f=await connected({console,meshcore:1});try{const before=f.port.commands.length;

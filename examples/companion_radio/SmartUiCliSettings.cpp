@@ -11,7 +11,7 @@ const char* const CAP_KEYS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration",
     "gps", "battery_protection", "display", "melody_max", "adc_min",
     "adc_max", "agc_reset", "fem_lna", "fem_pa", "bridge",
-    "melody_names", "adc_service",
+    "melody_names", "adc_service", "schema",
 };
 
 const char* const GET_KEYS[] = {
@@ -19,12 +19,22 @@ const char* const GET_KEYS[] = {
     "volume", "melody", "board_led", "unread_led", "vibration", "gps",
     "battery_protection", "shutdown_mv", "muted", "agc_reset", "fem_lna",
     "fem_pa", "bridge",
+    "notify_mode", "important_notify_mode", "led_pin", "tone_pin", "vibe_pin",
+    "melody_dm", "melody_mention", "melody_system", "tone_8bit", "high_drive",
+    "resonance_hz", "offline_dm_led", "ble_dm_led", "msg_popup", "ui_font",
+    "ui_theme", "ui_top_color", "ui_bottom_color", "backlight_timeout",
+    "gps_source", "gps_interval", "advert_location", "profile",
 };
 
 const char* const SET_KEYS[] = {
     "sound_quiet", "volume", "melody", "board_led", "unread_led",
     "vibration", "gps", "battery_protection", "muted", "agc_reset",
     "fem_lna", "fem_pa", "bridge",
+    "notify_mode", "important_notify_mode", "led_pin", "tone_pin", "vibe_pin",
+    "melody_dm", "melody_mention", "melody_system", "tone_8bit", "high_drive",
+    "resonance_hz", "offline_dm_led", "ble_dm_led", "msg_popup", "ui_font",
+    "ui_theme", "ui_top_color", "ui_bottom_color", "backlight_timeout",
+    "gps_source", "gps_interval", "advert_location", "profile",
 };
 
 void response(char* reply, size_t capacity, const char* message) {
@@ -85,15 +95,15 @@ bool keyAndUnsigned(const char* command, const char* prefix, char* key,
   memcpy(key, key_start, key_length);
   key[key_length] = 0;
   value = separator + 1;
-  return isUnsigned(value);
+  return isUnsigned(value) || (strcmp(key, "vibe_pin") == 0 && strcmp(value, "-1") == 0);
 }
 
-bool validBackendReply(const char* reply) {
+bool validBackendReply(const char* reply, size_t limit = SMARTUI_CLI_TEXT_MAX + 1) {
   if (reply == nullptr) return false;
   size_t length = 0;
   // Backend scratch is larger than the wire contract. Validate its own bound,
   // then apply the tighter wire bound only after response transformation.
-  for (; length < DeviceSettings::REPLY_CAPACITY; ++length) {
+  for (; length < limit; ++length) {
     const unsigned char c = static_cast<unsigned char>(reply[length]);
     if (c == 0)
       return strncmp(reply, "OK api ", 7) == 0 ||
@@ -129,10 +139,10 @@ bool renameBackendReply(const char* backend, char* reply, size_t capacity) {
 }
 
 bool callBackend(DeviceSettings& settings, const char* command, char* backend,
-                 bool allow_mutation) {
-  memset(backend, 0, DeviceSettings::REPLY_CAPACITY);
-  return settings.handle(command, backend, DeviceSettings::REPLY_CAPACITY,
-                         allow_mutation) && validBackendReply(backend);
+                 bool allow_mutation, size_t size = SMARTUI_CLI_TEXT_MAX + 1) {
+  memset(backend, 0, size);
+  return settings.handle(command, backend, size,
+                         allow_mutation) && validBackendReply(backend, size);
 }
 
 bool recordValue(const char* record, const char* key, char* value,
@@ -157,11 +167,11 @@ bool recordValue(const char* record, const char* key, char* value,
   return false;
 }
 
-bool singleValue(DeviceSettings& settings, const char* backend_command,
+__attribute__((noinline)) bool singleValue(DeviceSettings& settings, const char* backend_command,
                  const char* kind, const char* key, char* reply,
                  size_t capacity) {
   char backend[DeviceSettings::REPLY_CAPACITY];
-  if (!callBackend(settings, backend_command, backend, false)) {
+  if (!callBackend(settings, backend_command, backend, false, sizeof(backend))) {
     response(reply, capacity, "ERR ui internal");
     return true;
   }
@@ -202,6 +212,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
   }
   const bool settings_command =
       strncmp(command, "ui caps", 7) == 0 ||
+      strncmp(command, "ui schema", 9) == 0 ||
       strncmp(command, "ui get", 6) == 0 ||
       strncmp(command, "ui set", 6) == 0 ||
       strncmp(command, "ui adc", 6) == 0 ||
@@ -218,6 +229,28 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
   }
 
   char key[24];
+  if (strncmp(command, "ui schema", 9) == 0 || strncmp(command, "ui get", 6) == 0 ||
+      strcmp(command, "ui caps schema") == 0) {
+    const bool schema = strncmp(command, "ui schema", 9) == 0;
+    const bool caps_schema = strcmp(command, "ui caps schema") == 0;
+    if (!caps_schema && (!oneWordAfter(command, schema ? "ui schema " : "ui get ", key, sizeof(key)) ||
+        !allowedKey(key, GET_KEYS))) {
+      response(reply, capacity, "ERR ui invalid"); return true;
+    }
+    char mapped[56];
+    snprintf(mapped, sizeof(mapped), "api%s", command + 2);
+    // Compact single-key records fit directly in the caller's wire buffer.
+    // Avoid another 480-byte stack record just to read one scalar setting.
+    if (!callBackend(settings, mapped, reply, false, capacity)) {
+      response(reply, capacity, "ERR ui internal"); return true;
+    }
+    if (strncmp(reply, "OK api ", 7) == 0) {
+      memmove(reply + 6, reply + 7, strlen(reply + 7) + 1); memcpy(reply, "OK ui ", 6);
+    } else if (strncmp(reply, "ERR api ", 8) == 0) {
+      memmove(reply + 7, reply + 8, strlen(reply + 8) + 1); memcpy(reply, "ERR ui ", 7);
+    }
+    return true;
+  }
   if (strncmp(command, "ui caps", 7) == 0) {
     if (!oneWordAfter(command, "ui caps ", key, sizeof(key)) ||
         !allowedKey(key, CAP_KEYS)) {
@@ -248,7 +281,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
       response(reply, capacity, "ERR ui invalid");
       return true;
     }
-    char backend[DeviceSettings::REPLY_CAPACITY];
+    char backend[SMARTUI_CLI_TEXT_MAX + 1];
     if (!callBackend(settings, backend_command, backend, allow_mutation))
       response(reply, capacity, "ERR ui internal");
     else renameBackendReply(backend, reply, capacity);
@@ -299,7 +332,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
     } else {
       snprintf(backend_command, sizeof(backend_command), "%s", backend_prefix);
     }
-    char backend[DeviceSettings::REPLY_CAPACITY];
+    char backend[SMARTUI_CLI_TEXT_MAX + 1];
     if (!callBackend(settings, backend_command, backend, allow_mutation))
       response(reply, capacity, "ERR ui internal");
     else renameBackendReply(backend, reply, capacity);
@@ -318,7 +351,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
       response(reply, capacity, "ERR ui invalid");
       return true;
     }
-    char backend[DeviceSettings::REPLY_CAPACITY];
+    char backend[SMARTUI_CLI_TEXT_MAX + 1];
     if (!callBackend(settings, backend_command, backend, false))
       response(reply, capacity, "ERR ui internal");
     else renameBackendReply(backend, reply, capacity);
@@ -330,7 +363,7 @@ bool handleSmartUiSettingsCli(DeviceSettings& settings, const char* command,
       response(reply, capacity, "ERR ui invalid");
       return true;
     }
-    char backend[DeviceSettings::REPLY_CAPACITY];
+    char backend[SMARTUI_CLI_TEXT_MAX + 1];
     if (!callBackend(settings, "api test", backend, allow_mutation))
       response(reply, capacity, "ERR ui internal");
     else renameBackendReply(backend, reply, capacity);

@@ -24,10 +24,16 @@ FRIENDLY_WRITE = re.compile(
     r"gps|battery_protection|agc_reset|fem\.lna|fem\.pa|sound\.bridge) (?:on|off|0|1)|"
     r"adc(?:\.multiplier)? (?:\d+(?:\.\d*)?|\.\d+))|test notification|"
     r"adc (?:preview \d+|apply \d+|reset|service start))", re.ASCII)
+EXTENDED_KEYS = ("notify_mode|important_notify_mode|led_pin|tone_pin|vibe_pin|melody_dm|"
+                 "melody_mention|melody_system|tone_8bit|high_drive|resonance_hz|offline_dm_led|"
+                 "ble_dm_led|msg_popup|ui_font|ui_theme|ui_top_color|ui_bottom_color|"
+                 "backlight_timeout|gps_source|gps_interval|advert_location|profile")
+EXTENDED_COMMAND = re.compile(r"(?:get (?:" + EXTENDED_KEYS + r")|set (?:" + EXTENDED_KEYS +
+                              r") (?:-?\d+|on|off)|schema [a-z][a-z0-9_.]*|help (?:display|pins|profile|replies)(?: [1-9]\d*)?)", re.ASCII)
 
 
 def is_friendly(command):
-    return bool(FRIENDLY_READ.fullmatch(command) or FRIENDLY_WRITE.fullmatch(command))
+    return bool(FRIENDLY_READ.fullmatch(command) or FRIENDLY_WRITE.fullmatch(command) or EXTENDED_COMMAND.fullmatch(command))
 
 
 ERROR_TEXT = {
@@ -133,7 +139,7 @@ def matches(request, reply):
 
 
 def mutates(command):
-    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |test$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
+    return command.startswith("set ") or bool(FRIENDLY_WRITE.fullmatch(command) or re.match(r"ui (set |name |reply set |tx set |test$|(?:radio|advert) set |adc (preview |set |apply |reset$|service start$)|wifi (?!status$)|mode (?!status$))", command))
 
 
 class CliClient:

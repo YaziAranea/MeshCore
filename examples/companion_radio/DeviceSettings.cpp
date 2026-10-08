@@ -10,6 +10,119 @@ constexpr uint8_t TONE_MODE = 2;
 constexpr uint8_t VIBE_MODE = 4;
 constexpr uint32_t ADC_CALIBRATION_SAMPLE_MAX_AGE_MS = 120000U;
 
+enum class Support : uint8_t {
+  ALWAYS, SOUND, VIBE, LED, BOARD_LED, GPS, BATTERY, AGC, LNA, PA, BRIDGE,
+  NOTIFY, PIN_LED, PIN_TONE, PIN_VIBE, TONE_8BIT, DRIVE, RESONANCE,
+  MELODIES, DISPLAY, FONT, THEME, COLOR, GPS_SOURCE, PROFILE
+};
+struct ScalarSetting {
+  const char* key;
+  uint8_t offset;
+  uint8_t width;
+  int32_t minimum, maximum;
+  uint16_t step;
+  Support support;
+  bool extended;
+};
+#define SCALAR(key, field, lo, hi, step, support, ext) \
+  {key, static_cast<uint8_t>(offsetof(DeviceSettingsState, field)), \
+   static_cast<uint8_t>(sizeof(DeviceSettingsState::field)), lo, hi, step, Support::support, ext}
+const ScalarSetting SCALARS[] = {
+  SCALAR("sound_quiet", sound_quiet, 0, 1, 1, SOUND, false),
+  SCALAR("volume", volume, 1, 10, 1, SOUND, false),
+  SCALAR("melody", melody_system, 0, 255, 1, SOUND, false),
+  SCALAR("board_led", board_led, 0, 1, 1, BOARD_LED, false),
+  SCALAR("unread_led", unread_led, 0, 1, 1, LED, false),
+  SCALAR("vibration", vibe_quiet, 0, 1, 1, VIBE, false),
+  SCALAR("gps", gps, 0, 1, 1, GPS, false),
+  SCALAR("battery_protection", battery_protection, 0, 1, 1, BATTERY, false),
+  SCALAR("muted", muted, 0, 1, 1, ALWAYS, false),
+  SCALAR("agc_reset", agc_reset, 0, 1, 1, AGC, false),
+  SCALAR("fem_lna", fem_lna, 0, 1, 1, LNA, false),
+  SCALAR("fem_pa", fem_pa, 0, 1, 1, PA, false),
+  SCALAR("bridge", bridge, 0, 1, 1, BRIDGE, false),
+  SCALAR("notify_mode", notify_mode, 0, 7, 1, NOTIFY, true),
+  SCALAR("important_notify_mode", important_notify_mode, 0, 7, 1, NOTIFY, true),
+  SCALAR("led_pin", led_pin, 0, 127, 1, PIN_LED, true),
+  SCALAR("tone_pin", tone_pin, 0, 127, 1, PIN_TONE, true),
+  SCALAR("vibe_pin", vibe_pin, -1, 127, 1, PIN_VIBE, true),
+  SCALAR("melody_dm", melody_dm, 0, 255, 1, MELODIES, true),
+  SCALAR("melody_mention", melody_mention, 0, 255, 1, MELODIES, true),
+  SCALAR("melody_system", melody_system, 0, 255, 1, SOUND, true),
+  SCALAR("tone_8bit", tone_8bit, 0, 1, 1, TONE_8BIT, true),
+  SCALAR("high_drive", high_drive, 0, 1, 1, DRIVE, true),
+  SCALAR("resonance_hz", resonance_hz, 1800, 4200, 400, RESONANCE, true),
+  SCALAR("offline_dm_led", offline_dm_led, 0, 1, 1, LED, true),
+  SCALAR("ble_dm_led", ble_dm_led, 0, 1, 1, LED, true),
+  SCALAR("msg_popup", msg_popup, 0, 1, 1, DISPLAY, true),
+  SCALAR("ui_font", ui_font, 0, 255, 1, FONT, true),
+  SCALAR("ui_theme", ui_theme, 0, 255, 1, THEME, true),
+  SCALAR("ui_top_color", ui_top_color, 0, 5, 1, COLOR, true),
+  SCALAR("ui_bottom_color", ui_bottom_color, 0, 5, 1, COLOR, true),
+  SCALAR("backlight_timeout", backlight_timeout, 0, 2, 1, DISPLAY, true),
+  SCALAR("gps_source", gps_source, 0, 1, 1, GPS_SOURCE, true),
+  SCALAR("gps_interval", gps_interval, 0, 86400, 1, GPS, true),
+  SCALAR("advert_location", advert_location, 0, 1, 1, ALWAYS, true),
+  SCALAR("profile", profile, 0, 3, 1, PROFILE, true),
+};
+#undef SCALAR
+static_assert(sizeof(DeviceSettingsState) <= 64, "Keep CLI transactions small on nRF52");
+
+const ScalarSetting* scalar(const char* key) {
+  for (const auto& item : SCALARS) if (strcmp(key, item.key) == 0) return &item;
+  return nullptr;
+}
+bool supported(const ScalarSetting& item, const DeviceSettingsCaps& c) {
+  switch (item.support) {
+    case Support::ALWAYS: return true;
+    case Support::SOUND: return c.sound;
+    case Support::VIBE: return c.vibration;
+    case Support::LED: return c.unread_led;
+    case Support::BOARD_LED: return c.board_led;
+    case Support::GPS: return c.gps;
+    case Support::BATTERY: return c.battery_protection;
+    case Support::AGC: return c.agc_reset;
+    case Support::LNA: return c.fem_lna;
+    case Support::PA: return c.fem_pa;
+    case Support::BRIDGE: return c.bridge;
+    case Support::NOTIFY: return c.notify_mask != 0;
+    case Support::PIN_LED: return c.notify_pins && c.unread_led;
+    case Support::PIN_TONE: return c.notify_pins && c.sound;
+    case Support::PIN_VIBE: return c.notify_pins;
+    case Support::TONE_8BIT: return c.tone_8bit && c.sound;
+    case Support::DRIVE: return c.high_drive && c.sound;
+    case Support::RESONANCE: return c.resonance && c.sound;
+    case Support::MELODIES: return c.separate_melodies && c.sound;
+    case Support::DISPLAY: return c.display;
+    case Support::FONT: return c.display && c.font_count > 1;
+    case Support::THEME: return c.display && c.theme_count > 1;
+    case Support::COLOR: return c.display && c.colors;
+    case Support::GPS_SOURCE: return c.phone_gps || c.gps;
+    case Support::PROFILE: return c.profiles;
+  }
+  return false;
+}
+int32_t maximum(const ScalarSetting& item, const DeviceSettingsCaps& c) {
+  if (strncmp(item.key, "melody", 6) == 0) return c.melody_max;
+  if (item.support == Support::FONT) return c.font_count ? c.font_count - 1 : 0;
+  if (item.support == Support::THEME) return c.theme_count ? c.theme_count - 1 : 0;
+  return item.maximum;
+}
+int32_t scalarValue(const ScalarSetting& item, const DeviceSettingsState& state) {
+  const uint8_t* data = reinterpret_cast<const uint8_t*>(&state) + item.offset;
+  if (item.support == Support::PIN_LED || item.support == Support::PIN_TONE ||
+      item.support == Support::PIN_VIBE) return *reinterpret_cast<const int8_t*>(data);
+  if (item.width == 1) return *data;
+  if (item.width == 2) { uint16_t value; memcpy(&value, data, 2); return value; }
+  uint32_t value; memcpy(&value, data, 4); return static_cast<int32_t>(value);
+}
+void scalarWrite(const ScalarSetting& item, DeviceSettingsState& state, int32_t value) {
+  uint8_t* data = reinterpret_cast<uint8_t*>(&state) + item.offset;
+  if (item.width == 1) *data = static_cast<uint8_t>(value);
+  else if (item.width == 2) { const uint16_t v = value; memcpy(data, &v, 2); }
+  else { const uint32_t v = value; memcpy(data, &v, 4); }
+}
+
 bool unsignedNumber(const char* text, uint32_t& number) {
   if (text == nullptr || *text == 0) return false;
   number = 0;
@@ -86,7 +199,13 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
   }
   if (command == nullptr || strncmp(command, "settings", 8) != 0 ||
       (command[8] != 0 && command[8] != ' ')) return false;
-  if (reply == nullptr || capacity < REPLY_CAPACITY) {
+  return handleSettings(command, reply, capacity, allow_mutation);
+}
+
+bool DeviceSettings::handleSettings(const char* command, char* reply, size_t capacity,
+                                    bool allow_mutation) {
+  const bool bulk = strcmp(command, "settings caps") == 0 || strcmp(command, "settings get") == 0;
+  if (reply == nullptr || capacity < (bulk ? REPLY_CAPACITY : 157)) {
     response(reply, capacity, "ERR settings buffer");
     return true;
   }
@@ -95,6 +214,7 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
     response(reply, capacity, "ERR settings unavailable");
     return true;
   }
+  if (handleExtended(command, reply, capacity, allow_mutation)) return true;
   const DeviceSettingsCaps caps = _hooks.caps();
   const DeviceSettingsState before = _hooks.read();
   if (strcmp(command, "settings caps") == 0) {
@@ -340,10 +460,139 @@ bool DeviceSettings::handle(const char* command, char* reply, size_t capacity,
   return true;
 }
 
+bool DeviceSettings::handleExtended(const char* command, char* reply, size_t capacity,
+                                    bool allow_mutation) {
+  if (strcmp(command, "settings caps schema") == 0) {
+    response(reply, capacity, "OK settings caps key=schema value=1");
+    return true;
+  }
+  const bool schema = strncmp(command, "settings schema ", 16) == 0;
+  const bool get = strncmp(command, "settings get ", 13) == 0;
+  const bool set = strncmp(command, "settings set ", 13) == 0;
+  if (!schema && !get && !set) return false;
+  const char* start = command + (schema ? 16 : 13);
+  const char* space = strchr(start, ' ');
+  const size_t length = space ? static_cast<size_t>(space - start) : strlen(start);
+  char key[24];
+  if (!length || length >= sizeof(key) || ((schema || get) && space)) {
+    response(reply, capacity, "ERR settings invalid"); return true;
+  }
+  memcpy(key, start, length); key[length] = 0;
+  const ScalarSetting* item = scalar(key);
+  const bool api_extra = item && (item->support == Support::AGC || item->support == Support::LNA ||
+      item->support == Support::PA || item->support == Support::BRIDGE);
+  if (set && (!item || (!item->extended && !api_extra))) return false;
+  const DeviceSettingsCaps caps = _hooks.caps();
+  if (schema) {
+    if (!item) { response(reply, capacity, "ERR settings unsupported"); return true; }
+    char options[88] = "-";
+    if (supported(*item, caps)) {
+      if (item->support == Support::PIN_LED || item->support == Support::PIN_TONE ||
+          item->support == Support::PIN_VIBE) {
+        if (_hooks.pinOptions) _hooks.pinOptions(key, options, sizeof(options));
+      } else if (item->support == Support::NOTIFY) {
+        size_t used = 0;
+        for (unsigned value = 0; value < 8; ++value) {
+          if (value & ~caps.notify_mask) continue;
+          used += snprintf(options + used, sizeof(options) - used, "%s%u", used ? "," : "", value);
+        }
+      } else if (item->support == Support::GPS_SOURCE) {
+        snprintf(options, sizeof(options), "%s", caps.gps ? (caps.phone_gps ? "0,1" : "0") : "1");
+      }
+    }
+    const int count = snprintf(reply, capacity,
+        "OK settings schema key=%s supported=%u min=%ld max=%ld step=%u options=%s",
+        key, supported(*item, caps) ? 1U : 0U, static_cast<long>(item->minimum),
+        static_cast<long>(maximum(*item, caps)), item->step, options);
+    if (count < 0 || static_cast<size_t>(count) >= capacity || count > 156)
+      response(reply, capacity, "ERR settings internal");
+    return true;
+  }
+  if (get) {
+    if (strcmp(key, "adc_multiplier") == 0 || strcmp(key, "adc_default") == 0) {
+      snprintf(reply, capacity, "OK settings get key=%s value=%.6f", key,
+          strcmp(key, "adc_multiplier") == 0 ? _hooks.adcMultiplier() : caps.adc_default);
+      return true;
+    }
+    const DeviceSettingsState state = _hooks.read();
+    int32_t value;
+    if (strcmp(key, "battery_mv") == 0) value = _hooks.batteryMilliVolts();
+    else if (strcmp(key, "shutdown_mv") == 0)
+      value = caps.battery_protection ? (state.battery_protection ? 3200 : 2700) : 0;
+    else if (!item) { response(reply, capacity, "ERR settings unsupported"); return true; }
+    else if (strcmp(key, "sound_quiet") == 0) value = (caps.effective_notify_mode & TONE_MODE) ? 0 : 1;
+    else if (strcmp(key, "vibration") == 0) value = (caps.effective_notify_mode & VIBE_MODE) ? 1 : 0;
+    else if (strcmp(key, "gps") == 0) value = state.gps_source == 0 ? state.gps : 0;
+    else if (item->support == Support::NOTIFY) value = scalarValue(*item, state) & caps.notify_mask;
+    else if ((item->support == Support::PIN_LED || item->support == Support::PIN_TONE ||
+              item->support == Support::PIN_VIBE) && _hooks.pinValue) value = _hooks.pinValue(key);
+    else value = scalarValue(*item, state);
+    snprintf(reply, capacity, "OK settings get key=%s value=%ld", key, static_cast<long>(value));
+    return true;
+  }
+  if (!allow_mutation) { response(reply, capacity, "ERR settings readonly"); return true; }
+  if (!supported(*item, caps)) { response(reply, capacity, "ERR settings unsupported"); return true; }
+  int32_t value = 0;
+  uint32_t number = 0;
+  if (space && strcmp(space + 1, "-1") == 0 && item->minimum == -1) value = -1;
+  else if (!space || !unsignedNumber(space + 1, number) || number > INT32_MAX) {
+    response(reply, capacity, "ERR settings invalid"); return true;
+  } else value = number;
+  if (value < item->minimum || value > maximum(*item, caps) ||
+      (value - item->minimum) % item->step != 0 ||
+      (item->support == Support::NOTIFY && (value & ~caps.notify_mask)) ||
+      (item->support == Support::GPS_SOURCE && ((value == 0 && !caps.gps) || (value == 1 && !caps.phone_gps)))) {
+    response(reply, capacity, "ERR settings range"); return true;
+  }
+  if ((item->support == Support::PIN_LED || item->support == Support::PIN_TONE ||
+       item->support == Support::PIN_VIBE) &&
+      (!_hooks.pinAllowed || !_hooks.pinAllowed(key, value))) {
+    response(reply, capacity, "ERR settings pin_conflict"); return true;
+  }
+  if (item->support == Support::BRIDGE) {
+    if (!_hooks.setToneBridge) { response(reply, capacity, "ERR settings unsupported"); return true; }
+    if (!_hooks.setToneBridge(value != 0)) response(reply, capacity, "ERR settings storage");
+    else { _preview_token = 0; snprintf(reply, capacity, "OK settings set key=bridge value=%ld", static_cast<long>(value)); }
+    return true;
+  }
+  const DeviceSettingsState before = _hooks.read();
+  DeviceSettingsState after = before;
+  scalarWrite(*item, after, value);
+  if (item->support == Support::PROFILE) {
+    if (value == 1) {
+      after.muted = 0; after.notify_mode = after.important_notify_mode = caps.notify_mask & GPIO_MODE;
+      after.backlight_timeout = 0;
+    } else if (value == 2) {
+      after.muted = 0; after.notify_mode = after.important_notify_mode = caps.notify_mask;
+      after.board_led = 1; after.backlight_timeout = 2;
+      if (caps.high_drive) after.high_drive = 1;
+    } else if (value == 3) {
+      after.muted = 1; after.board_led = 0; after.backlight_timeout = 0;
+      if (caps.night_theme) after.ui_theme = 1;
+    }
+    after.sound_quiet = (after.important_notify_mode & TONE_MODE) ? 0 : 1;
+    after.vibe_quiet = (after.important_notify_mode & VIBE_MODE) ? 0 : 1;
+    after.night_quiet = 0;
+  } else after.profile = 0;
+  if (strcmp(key, "melody_system") == 0) {
+    after.melody = after.melody_system;
+    if (!caps.separate_melodies) after.melody_dm = after.melody_mention = after.melody_system;
+  }
+  if (strcmp(key, "high_drive") == 0) after.volume = 10;
+  if (item->support == Support::NOTIFY) {
+    after.sound_quiet = ((after.notify_mode | after.important_notify_mode) & TONE_MODE) ? 0 : 1;
+    after.vibe_quiet = ((after.notify_mode | after.important_notify_mode) & VIBE_MODE) ? 0 : 1;
+  }
+  if (!commit(before, after, false)) response(reply, capacity, "ERR settings storage");
+  else snprintf(reply, capacity, "OK settings set key=%s value=%ld", key, static_cast<long>(value));
+  return true;
+}
+
 bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity,
                                bool allow_mutation) {
   static_assert(48 + 2 * MELODY_NAME_MAX < REPLY_CAPACITY, "Melody record must fit the response");
-  if (reply == nullptr || capacity < REPLY_CAPACITY) {
+  const bool bulk = strcmp(command, "api caps") == 0 || strcmp(command, "api get") == 0;
+  if (reply == nullptr || capacity < (bulk ? REPLY_CAPACITY : 157)) {
     response(reply, capacity, "ERR api buffer");
     return true;
   }
@@ -369,6 +618,10 @@ bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity
         static const char hex[] = "0123456789abcdef";
         const int prefix = snprintf(reply, capacity, "OK api melody id=%lu name_hex=",
                                     static_cast<unsigned long>(id));
+        if (prefix < 0 || static_cast<size_t>(prefix) + 2 * length >= capacity) {
+          response(reply, capacity, "ERR api internal");
+          return true;
+        }
         size_t position = static_cast<size_t>(prefix);
         for (size_t i = 0; i < length; ++i) {
           const uint8_t byte = static_cast<uint8_t>(name[i]);
@@ -432,7 +685,7 @@ bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity
     response(reply, capacity, "ERR api invalid");
     return true;
   }
-  handle(legacy_command, reply, capacity, allow_mutation);
+  handleSettings(legacy_command, reply, capacity, allow_mutation);
   if (strncmp(reply, "OK settings ", 12) == 0) {
     memmove(reply + 7, reply + 12, strlen(reply + 12) + 1);
     memcpy(reply, "OK api ", 7);

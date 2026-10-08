@@ -210,6 +210,7 @@ def setting_effects_source():
 #define ENV_INCLUDE_GPS 1
 static unsigned checks, saves, applies, adc_calls, gps_calls, led_calls, lna_calls, pa_calls;
 static unsigned notification_stops, battery_changes, radio_calls, global_applies, preview_calls;
+static unsigned presentation_calls;
 static bool save_ok;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
 struct NodePrefs {
@@ -222,6 +223,13 @@ struct NodePrefs {
   uint8_t low_battery_shutdown_enabled = 1, notifications_muted = 0, night_quiet_active = 0;
   uint8_t smart_profile_id = 0, agc_reset_enabled = 0, radio_fem_rxgain = 0, radio_fem_txgain = 0;
   uint8_t notify_tone_bridge_enabled = 0;
+  int8_t notify_gpio_pin = 35, notify_tone_pin = 36, notify_vibe_pin = -1;
+  uint8_t notify_tone_8bit_enabled = 0, notify_tone_high_drive_enabled = 0;
+  uint16_t notify_tone_resonance_hz = 3000;
+  uint8_t offline_dm_led_enabled = 1, ble_dm_led_enabled = 1, msg_popup_enabled = 1;
+  uint8_t ui_font = 10, ui_theme = 0, ui_top_color = 1, ui_bottom_color = 0;
+  uint8_t backlight_timeout_idx = 0, advert_loc_policy = 0;
+  uint32_t gps_interval = 0;
 };
 struct Mesh {
   NodePrefs prefs, persisted;
@@ -242,6 +250,9 @@ struct Board {
 } board;
 struct Radio { void setRxBoostedGainMode(bool) { ++radio_calls; } } radio_driver;
 struct Ui {
+  uint8_t getUiFontChoiceIndex() { return the_mesh.prefs.ui_font - 10; }
+  uint8_t storedUiFontChoice(uint8_t choice) { return choice + 10; }
+  void applyDeviceSettingsAppearanceAndPins() { CHECK(save_ok && saves > 0); ++presentation_calls; }
   void applyDeviceSettingsRuntime(bool battery_changed) {
     CHECK(save_ok && saves > 0); ++notification_stops; battery_changes += battery_changed;
   }
@@ -264,6 +275,9 @@ static smartui::DeviceSettingsCaps capabilities() {
   caps.gps = caps.battery_protection = caps.agc_reset = caps.fem_lna = caps.fem_pa = true;
   caps.melody_max = 30; caps.adc_default = 4.0f;
   caps.effective_notify_mode = the_mesh.prefs.important_notify_mode;
+  caps.display = caps.notify_pins = caps.profiles = caps.colors = true;
+  caps.tone_8bit = caps.high_drive = caps.resonance = caps.phone_gps = true;
+  caps.notify_mask = 7; caps.font_count = 5; caps.theme_count = 3;
   return caps;
 }
 static uint16_t battery() { return 4000; }
@@ -271,14 +285,17 @@ static float multiplier() { return board.adc; }
 static uint32_t clockMillis() { return 100; }
 static void trackedApply(bool battery_changed) { ++applies; applyDeviceSettings(battery_changed); }
 static void previewNotification() { ++preview_calls; }
+static bool pinAllowed(const char*, int pin) { return pin == -1 || pin == 35 || pin == 36 || pin == 37; }
 static void fresh() {
   saves = applies = adc_calls = gps_calls = led_calls = lna_calls = pa_calls = 0;
   notification_stops = battery_changes = radio_calls = global_applies = preview_calls = 0;
+  presentation_calls = 0;
   save_ok = true; the_mesh = Mesh{}; board = Board{}; device_setting_effects = 0;
   smartui::DeviceSettingsHooks hooks;
   hooks.read = readDeviceSettings; hooks.write = writeDeviceSettings; hooks.save = saveDeviceSettings;
   hooks.apply = trackedApply; hooks.caps = capabilities; hooks.batteryMilliVolts = battery;
   hooks.adcMultiplier = multiplier; hooks.millis = clockMillis; hooks.testNotification = previewNotification;
+  hooks.pinAllowed = pinAllowed;
   service = smartui::DeviceSettings{}; other_service = smartui::DeviceSettings{};
   service.begin(hooks); other_service.begin(hooks);
 }
@@ -369,6 +386,25 @@ int main() {
   CHECK(command("api set volume 10", true) == "OK api set key=volume value=10");
   effects(0, 0, 0, 0, 0, 0, 0);
   CHECK(device_setting_effects == 0);
+  for (const char* change : {"settings set ui_font 2", "settings set ui_theme 2", "settings set led_pin 37",
+       "settings set tone_pin 37", "settings set vibe_pin 37", "settings set backlight_timeout 2",
+       "settings set ui_top_color 2", "settings set msg_popup 0"}) {
+    fresh(); const auto before = readDeviceSettings(); save_ok = false;
+    CHECK(command(change) == "ERR settings storage");
+    const auto after = readDeviceSettings();
+    CHECK(memcmp(&before, &after, sizeof(before)) == 0);
+    CHECK(presentation_calls == 0 && applies == 0);
+    save_ok = true;
+    CHECK(command(change).find("OK settings set ") == 0);
+    CHECK(presentation_calls == 1 && applies == 1);
+    effects(0, 0, 0, 0, 0, 0, 0);
+  }
+  fresh(); CHECK(command("settings set gps_interval 30").find("OK settings ") == 0);
+  CHECK(the_mesh.prefs.gps_interval == 30 && gps_calls == 1 && presentation_calls == 0 && radio_calls == 0);
+  fresh(); CHECK(command("settings set ui_font 4").find("OK settings ") == 0);
+  CHECK(the_mesh.prefs.ui_font == 14 && readDeviceSettings().ui_font == 4);
+  fresh(); CHECK(command("settings adc set 4.1") == "OK settings adc_set");
+  CHECK(presentation_calls == 0 && the_mesh.prefs.ui_font == 10 && the_mesh.prefs.notify_vibe_pin == -1);
   printf("PASS %u production DeviceSettings/main.cpp selective-effect/rollback assertions\n", checks);
 }
 '''

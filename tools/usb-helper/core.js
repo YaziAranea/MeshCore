@@ -69,6 +69,7 @@
     SETTINGS_RANGE: 'Значение вне допустимого диапазона. Проверьте измерение и параметры платы.',
     SETTINGS_UNCERTAIN: 'Результат изменения неизвестен. Переподключитесь и прочитайте настройки: не считайте их сохранёнными.',
     SETTINGS_READBACK: 'Не удалось прочитать настройки. Текущие значения не подтверждены.',
+    SETTINGS_PIN: 'Этот вывод занят другой функцией или не разрешён для выбранного выхода. Прочитайте настройки заново и выберите свободный вывод.',
     RADIO_FAILED: 'Радио отклонило параметры. Изменение не подтверждено; прочитайте состояние ноды.',
     RADIO_RESTORE: 'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
     RADIO_REPEAT: 'Включённая ретрансляция несовместима с выбранной частотой. Помощник не выключает её автоматически; измените настройку на ноде.',
@@ -151,6 +152,53 @@
   }
 
   const SETTING_CAPS = Object.freeze({sound_quiet:'sound',volume:'sound',melody:'sound',board_led:'board_led',unread_led:'unread_led',vibration:'vibration',gps:'gps',battery_protection:'battery_protection',muted:null});
+  // Firmware owns availability, bounds and safe pins. Labels are presentation only.
+  const EXTENDED_FIELDS = Object.freeze([
+    ['notify_mode','sound','Каналы обычных уведомлений'],['important_notify_mode','sound','Каналы важных уведомлений'],
+    ['tone_pin','sound','Вывод звука'],['melody_dm','sound','Мелодия личных сообщений'],['melody_mention','sound','Мелодия упоминаний'],['melody_system','sound','Мелодия системы'],
+    ['tone_8bit','sound','Стиль звука 8-bit'],['high_drive','sound','Усиленный выход звука'],['resonance_hz','sound','Резонанс пьезоизлучателя, Гц'],['bridge','sound','Мостовой звук · два вывода'],
+    ['led_pin','lights','Вывод LED уведомлений'],['vibe_pin','lights','Вывод вибромотора'],['offline_dm_led','lights','LED личных сообщений без приложения'],['ble_dm_led','lights','LED личных сообщений с приложением'],
+    ['msg_popup','display','Всплывающий экран сообщения'],['ui_font','display','Шрифт'],['ui_theme','display','Оформление'],['ui_top_color','display','Верхний цвет'],['ui_bottom_color','display','Нижний цвет'],['backlight_timeout','display','Тайм-аут экрана'],
+    ['gps_source','gps','Источник координат'],['gps_interval','gps','Интервал GPS, секунд'],['advert_location','gps','Координаты в анонсе'],
+    ['profile','system','Профиль устройства'],['agc_reset','system','AGC-сброс · каждые 60 с'],['fem_lna','system','FEM · усилитель приёма'],['fem_pa','system','FEM · усилитель передачи']
+  ].map(([key,group,label])=>Object.freeze({key,group,label})));
+  const SETTING_KEYS=Object.freeze([...new Set([...Object.keys(SETTING_CAPS),...EXTENDED_FIELDS.map(f=>f.key)])]);
+  function parseSettingSchema(line,key,transport='settings') {
+    if(!['settings','ui'].includes(transport)||!SETTING_KEYS.includes(key)||typeof line!=='string'||line.length>156)return null;
+    const prefix='OK '+transport+' schema key='+key+' ';
+    if(!line.startsWith(prefix))return null;
+    const m=/^supported=([01]) min=(-?\d+) max=(-?\d+) step=(\d+) options=(-|(?:-?\d+)(?:,-?\d+)*)$/.exec(line.slice(prefix.length));
+    if(!m)return null;
+    const [supported,min,max,step]=m.slice(1,5).map(Number),options=m[5]==='-'?null:m[5].split(',').map(Number);
+    if(![min,max,step].every(Number.isSafeInteger)||min < -1||max>1000000||max<min||step<1||options&&(options.length>64||new Set(options).size!==options.length||options.some(v=>v<min||v>max)))return null;
+    return {key,supported:Boolean(supported),min,max,step,options};
+  }
+  function settingValueValid(schema,value){return Boolean(schema?.supported&&Number.isInteger(value)&&value>=schema.min&&value<=schema.max&&(schema.options?schema.options.includes(value):(value-schema.min)%schema.step===0));}
+  function settingOptions(field,schema,melodies=[]){
+    const values=schema.options||((schema.max-schema.min)/schema.step<=255?Array.from({length:Math.floor((schema.max-schema.min)/schema.step)+1},(_,i)=>schema.min+i*schema.step):null);
+    if(!values)return null;
+    const choices={backlight_timeout:['15 секунд','30 секунд','60 секунд'],gps_source:['GPS-модуль ноды','Координаты телефона'],profile:['Свой','Тихий','На улице','Ночной'],ui_top_color:['Белый','Зелёный','Жёлтый','Синий','Оранжевый','Красный'],ui_bottom_color:['Белый','Зелёный','Жёлтый','Синий','Оранжевый','Красный']};
+    return values.map(value=>[value,field.key.endsWith('_pin')?(value===-1?'Отключён':'Вывод '+value):field.key.startsWith('melody')?(value+' · '+(melodies[value]||'Мелодия '+value)):
+      field.key.endsWith('notify_mode')?(value===0?'Без уведомлений':[value&1?'LED':null,value&2?'Звук':null,value&4?'Вибро':null].filter(Boolean).join(' + ')):
+      choices[field.key]?.[value]||(schema.min===0&&schema.max===1?(value?'Включено':'Выключено'):String(value))]);
+  }
+  function parseSettingValue(line,key,transport='settings'){
+    const prefix='OK '+transport+' get key='+key+' value=';
+    if(typeof line!=='string'||!line.startsWith(prefix))return null;
+    const value=line.slice(prefix.length);return /^-?\d+(?:\.\d{1,6})?$/.test(value)&&Number.isFinite(Number(value))?Number(value):null;
+  }
+  function parseCoreSetting(line,kind,transport='settings'){
+    if(!['settings','ui'].includes(transport)||typeof line!=='string'||line.length>156)return null;
+    if(kind==='tx'){
+      const m=new RegExp('^OK '+transport+' tx value=(-?\\d+) min=(-?\\d+) max=(-?\\d+)$').exec(line);if(!m)return null;
+      const [value,min,max]=m.slice(1).map(Number);return min>=-30&&max<=50&&min<=value&&value<=max?{value,min,max}:null;
+    }
+    if(kind==='identity'){
+      const m=new RegExp('^OK '+transport+' identity name_hex=([a-fA-F0-9]+|-) max_name_bytes=(\\d+)$').exec(line);if(!m||Number(m[2])!==31||m[1].length>62||m[1]!=='-'&&m[1].length%2)return null;
+      try{const name=m[1]==='-'?'':new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(m[1].match(/../g),b=>parseInt(b,16)));if(/[\x00-\x1f\x7f]/.test(name))return null;return {name,max_name_bytes:31};}catch(_){return null;}
+    }
+    return null;
+  }
   function record(line, prefix, keys) {
     if (typeof line !== 'string' || line.length > 479 || !line.startsWith(prefix + ' ') || /[^\x20-\x7e]/.test(line)) return null;
     const result = Object.create(null), parts = line.slice(prefix.length + 1).split(' ');
@@ -235,7 +283,7 @@
   }
   function settingsError(line) {
     if (line === RX.readonly || line === 'ERR settings readonly') return 'READ_ONLY';
-    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
+    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',pin_conflict:'SETTINGS_PIN',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
     const match = /^ERR settings ([a-z_]+)$/.exec(line);
     if (match) return match[1] === 'usb_required' ? 'ADC_USB_REQUIRED' : errors[match[1]] || 'PROTOCOL';
     if (line.startsWith('ERR settings') || line === RX.unknown) return 'PROTOCOL';
@@ -250,7 +298,7 @@
       for (const key of Object.keys(DEFAULT_TIMEOUTS)) {
         if (Number.isFinite(timeouts[key]) && timeouts[key] > 0) this._timeouts[key] = timeouts[key];
       }
-      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null, deviceSettings:null, adcPreview:null, adcService:null,adcManualSupported:false };
+      this._state = { connected: false, busy: false, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false, settingsCaps:null,settingSchemas:null, deviceSettings:null, adcPreview:null, adcService:null,adcManualSupported:false };
       this._session = null;
       this._operation = null;
       this._closing = null;
@@ -263,6 +311,7 @@
       return { ...this._state, status: this._state.status ? { ...this._state.status } : null,
         replies: [...this._state.replies],
         settingsCaps: this._state.settingsCaps ? {...this._state.settingsCaps} : null,
+        settingSchemas:this._state.settingSchemas?Object.fromEntries(Object.entries(this._state.settingSchemas).map(([key,s])=>[key,{...s,options:s.options?[...s.options]:null}])):null,
         deviceSettings: this._state.deviceSettings ? {...this._state.deviceSettings} : null,
         adcPreview: this._state.adcPreview ? {...this._state.adcPreview} : null,
         adcService: this._state.adcService ? {...this._state.adcService} : null,
@@ -346,7 +395,7 @@
           // Native Web Serial's open defaults are sufficient for this console.
           session.reader = port.readable.getReader();
           session.writer = port.writable.getWriter();
-          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
+          this._stateChanged({ connected: true, verified: false, testPassed: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,settingSchemas:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
           session.readTask = this._readLoop(session);
           await this._resync(session);
           let helpSeen = false;
@@ -435,7 +484,7 @@
       if (this._session === session) this._session = null;
       this._clearCandidate();
       clearTimeout(this._adcTimer); this._adcTimer = null;
-      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
+      this._stateChanged({ connected: false, verified: false, status: null, info: null, quickRepliesSupported: false, replies: Array(9).fill(null), settingsSupported:false,settingsCaps:null,settingSchemas:null,deviceSettings:null,adcPreview:null,adcService:null,adcManualSupported:false });
       this._call('onStatus', null);
       const closing = (async () => {
         if (session.openTask) await this._bounded(session.openTask);
@@ -749,7 +798,21 @@
     async _loadDeviceSettings(session) {
       const caps = await this._settingsExchange(session, 'settings caps', parseSettingsCaps);
       const settings = await this._settingsExchange(session, 'settings get', line => parseDeviceSettings(line,caps));
-      this._stateChanged({settingsCaps:caps,deviceSettings:settings});
+      const schemaSupport=await this._exchange(session,'settings caps schema',line=>{
+        if(['ERR settings invalid','ERR settings unsupported',RX.unknown,RX.readonly].includes(line))return success(false);
+        if(line==='OK settings caps key=schema value=1')return success(true);
+        const error=settingsError(line);if(error)return rejected(error);
+        if(line.startsWith('OK settings'))return rejected('PROTOCOL');
+      });
+      const schemas=Object.create(null);
+      if(schemaSupport)for(const key of SETTING_KEYS){
+        const schema=await this._settingsExchange(session,'settings schema '+key,line=>parseSettingSchema(line,key));schemas[key]=schema;
+        if(schema.supported){
+          const value=await this._settingsExchange(session,'settings get '+key,line=>parseSettingValue(line,key));
+          if(!settingValueValid(schema,value))throw failure('PROTOCOL');settings[key]=value;
+        }
+      }
+      this._stateChanged({settingsCaps:caps,deviceSettings:settings,settingSchemas:schemas});
       if (caps.adc_service) await this._readAdcService(session);
       else this._stateChanged({adcService:null});
       const manual=caps.adc && !this._state.status?.readOnly ? await this._exchange(session,'settings adc manual',line=>{
@@ -826,7 +889,7 @@
       try {
         await this._settingsExchange(session,command,line => line === acknowledgement);
         acknowledged = true;
-        const settings = await this._settingsExchange(session,'settings get',line => parseDeviceSettings(line,this._state.settingsCaps));
+        const settings = await this._readSavedSettings(session);
         if (!verify(settings)) throw failure('PROTOCOL');
         this._stateChanged({deviceSettings:settings});
         if (this._state.settingsCaps.adc_service && /^settings adc (apply|reset|set)/.test(command)) await this._readAdcService(session);
@@ -841,13 +904,22 @@
       }
     }
     async saveDeviceSetting(key,value) {
-      if (!Object.hasOwn(SETTING_CAPS,key) || !Number.isInteger(value)) throw failure('SETTINGS_INVALID');
+      if (!SETTING_KEYS.includes(key) || !Number.isInteger(value)) throw failure('SETTINGS_INVALID');
       return this._operate(async session => {
-        this._requireSettings(SETTING_CAPS[key]);
-        const max = key === 'melody' ? this._state.settingsCaps.melody_max : key === 'volume' ? 10 : 1;
-        if (!integer(value,key === 'volume' ? 1 : 0,max)) throw failure('SETTINGS_INVALID');
+        const schema=this._state.settingSchemas?.[key];
+        this._requireSettings(schema?null:SETTING_CAPS[key]);
+        if(schema){if(!settingValueValid(schema,value))throw failure(schema.supported?'SETTINGS_INVALID':'SETTINGS_UNSUPPORTED');}
+        else{if(!Object.hasOwn(SETTING_CAPS,key))throw failure('SETTINGS_UNSUPPORTED');
+          const max = key === 'melody' ? this._state.settingsCaps.melody_max : key === 'volume' ? 10 : 1;
+          if (!integer(value,key === 'volume' ? 1 : 0,max)) throw failure('SETTINGS_INVALID');}
         return this._commitDeviceSettings(session,`settings set ${key} ${value}`,`OK settings set key=${key} value=${value}`,settings => settings[key] === value);
       },{mutate:true});
+    }
+    async _readSavedSettings(session){
+      // Pin assignments and profiles change availability and dependent values.
+      // Re-read the schema as well, never leave new hardware controls disabled.
+      if(Object.keys(this._state.settingSchemas||{}).length)return this._loadDeviceSettings(session);
+      return this._settingsExchange(session,'settings get',line=>parseDeviceSettings(line,this._state.settingsCaps));
     }
     async previewAdc(text) {
       const measured = measuredMilliVolts(text);
@@ -892,6 +964,27 @@
         if (!(caps.sound || caps.unread_led || caps.vibration)) throw failure('SETTINGS_UNSUPPORTED');
         await this._settingsExchange(session,'settings test',line => line === 'OK settings test');
         this._event('info','Команда теста принята. Используются сохранённые настройки; общая тишина может отключать звук и вибрацию.');
+      },{mutate:true});
+    }
+    async readCoreSetting(kind){
+      if(!['identity','tx'].includes(kind))throw failure('SETTINGS_INVALID');
+      return this._operate(session=>this._settingsExchange(session,'settings '+kind,line=>parseCoreSetting(line,kind)));
+    }
+    async saveCoreSetting(kind,value){
+      if(!['identity','tx'].includes(kind))throw failure('SETTINGS_INVALID');
+      const bytes=typeof value==='string'?new TextEncoder().encode(value):null;
+      if(kind==='identity'&&(!bytes||!bytes.length||bytes.length>31||/[\x00-\x1f\x7f]/.test(value)||new TextDecoder().decode(bytes)!==value))throw failure('SETTINGS_INVALID');
+      if(kind==='tx'&&!Number.isInteger(value))throw failure('SETTINGS_INVALID');
+      return this._operate(async session=>{
+        const before=await this._settingsExchange(session,'settings '+kind,line=>parseCoreSetting(line,kind));
+        if(kind==='tx'&&(value<before.min||value>before.max))throw failure('SETTINGS_RANGE');
+        const hex=bytes?Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join(''):null;
+        let acknowledged=false;
+        try{
+          await this._settingsExchange(session,kind==='identity'?'settings name '+hex:'settings tx set '+value,line=>kind==='identity'?line==='OK settings name name_hex='+hex:parseCoreSetting(line,'tx')?.value===value);acknowledged=true;
+          const after=await this._settingsExchange(session,'settings '+kind,line=>parseCoreSetting(line,kind));
+          if((kind==='identity'?after.name:after.value)!==value)throw failure('PROTOCOL');return after;
+        }catch(error){if(acknowledged||['TIMEOUT','SERIAL_ERROR','DISCONNECTED','PROTOCOL'].includes(error.code)){this._stateChanged({verified:false});throw failure('SETTINGS_UNCERTAIN');}throw error;}
       },{mutate:true});
     }
     async _readReply(session, slot) {
@@ -977,5 +1070,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS });
+  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, parseCoreSetting });
 }));

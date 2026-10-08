@@ -13,7 +13,7 @@ constexpr size_t MAX_TEXT = 156;
 // names and existing ui commands retain their full transport allowance.
 constexpr size_t MAX_FRIENDLY = 64;
 
-enum class Kind : uint8_t { NUMBER, BOOLEAN, ADC, READONLY };
+enum class Kind : uint8_t { NUMBER, BOOLEAN, ADC, READONLY, PIN };
 struct Key { const char* name; const char* backend; Kind kind; };
 const Key KEYS[] = {
     {"volume", "volume", Kind::NUMBER},
@@ -35,18 +35,42 @@ const Key KEYS[] = {
     {"battery", "battery_mv", Kind::READONLY},
     {"battery_mv", "battery_mv", Kind::READONLY},
     {"shutdown_mv", "shutdown_mv", Kind::READONLY},
+    {"notify_mode", "notify_mode", Kind::NUMBER},
+    {"important_notify_mode", "important_notify_mode", Kind::NUMBER},
+    {"led_pin", "led_pin", Kind::PIN},
+    {"tone_pin", "tone_pin", Kind::PIN},
+    {"vibe_pin", "vibe_pin", Kind::PIN},
+    {"melody_dm", "melody_dm", Kind::NUMBER},
+    {"melody_mention", "melody_mention", Kind::NUMBER},
+    {"melody_system", "melody_system", Kind::NUMBER},
+    {"tone_8bit", "tone_8bit", Kind::BOOLEAN},
+    {"high_drive", "high_drive", Kind::BOOLEAN},
+    {"resonance_hz", "resonance_hz", Kind::NUMBER},
+    {"offline_dm_led", "offline_dm_led", Kind::BOOLEAN},
+    {"ble_dm_led", "ble_dm_led", Kind::BOOLEAN},
+    {"msg_popup", "msg_popup", Kind::BOOLEAN},
+    {"ui_font", "ui_font", Kind::NUMBER},
+    {"ui_theme", "ui_theme", Kind::NUMBER},
+    {"ui_top_color", "ui_top_color", Kind::NUMBER},
+    {"ui_bottom_color", "ui_bottom_color", Kind::NUMBER},
+    {"backlight_timeout", "backlight_timeout", Kind::NUMBER},
+    {"gps_source", "gps_source", Kind::NUMBER},
+    {"gps_interval", "gps_interval", Kind::NUMBER},
+    {"advert_location", "advert_location", Kind::BOOLEAN},
+    {"profile", "profile", Kind::NUMBER},
 };
 const char* const CAPS[] = {
     "v", "adc", "sound", "board_led", "unread_led", "vibration", "gps",
     "battery_protection", "display", "melody_max", "adc_min", "adc_max",
-    "agc_reset", "fem_lna", "fem_pa", "bridge", "melody_names", "adc_service",
+    "agc_reset", "fem_lna", "fem_pa", "bridge", "melody_names", "adc_service", "schema",
 };
 
 struct Help { const char* topic; unsigned page; const char* text; };
 const Help HELP[] = {
-    {"", 1, "help TOPIC [PAGE]; sound 1-2; fem; adc 1-3; radio 1-2; connection 1-2; system; advert; led; gps. Commands lowercase; get reads, set saves."},
+    {"", 1, "help TOPIC [PAGE]: sound 1-3; fem; adc 1-3; radio 1-2; connection 1-2; system; advert; led; gps 1-2; display; pins; profile; replies. schema KEY."},
     {"sound", 1, "get/set volume 1..10; get/set vibration on|off; get/set melody N; melodies; melody N (name); test notification (play selected)."},
     {"sound", 2, "get/set sound_quiet on|off; get/set muted on|off; get/set sound.bridge on|off (supported piezo wiring only). caps sound; caps vibration."},
+    {"sound", 3, "get/set notify_mode; important_notify_mode; tone_8bit; high_drive; resonance_hz. schema KEY gives support, bounds and choices. 1=LED 2=sound 4=vibe."},
     {"fem", 1, "get/set fem.lna on|off; get/set fem.pa on|off; caps fem.lna; caps fem.pa. Only supported boards. Does not change TX power; get tx."},
     {"adc", 1, "get battery (mV); get adc.multiplier; get adc.default; set adc.multiplier DECIMAL; caps adc_min; caps adc_max. adc reset: factory value."},
     {"adc", 2, "adc preview MV (multimeter); adc apply TOKEN (save preview); adc manual (support). ProMicro preview needs a battery-only sample before USB."},
@@ -59,6 +83,11 @@ const Help HELP[] = {
     {"advert", 1, "get advert; set advert MIN: 0=off, 15,30,60,120,180. Saved schedule; not an immediate advert. Radio parameters stay unchanged."},
     {"led", 1, "get/set board_led on|off (board activity); get/set unread_led on|off (unread reminders); caps board_led; caps unread_led. Separate controls."},
     {"gps", 1, "get/set gps on|off; caps gps. Requires supported external/built-in GPS and correct wiring. Enabling GPS does not guarantee a position fix."},
+    {"gps", 2, "get/set gps_source: 0=hardware 1=phone; gps_interval: 0..86400 seconds; advert_location on|off. schema KEY checks board support."},
+    {"display", 1, "get/set ui_font; ui_theme; ui_top_color; ui_bottom_color; msg_popup; backlight_timeout: 0=15s 1=30s 2=60s. schema KEY for board limits."},
+    {"pins", 1, "get/set led_pin; tone_pin; vibe_pin. schema KEY lists safe Arduino pin numbers. vibe_pin -1 disables. No arbitrary GPIO; bridge reserves its pair."},
+    {"profile", 1, "get/set profile: 0=custom 1=quiet 2=outdoor 3=night. Changes notification, LEDs and timeout together. Individual changes select custom."},
+    {"replies", 1, "ui reply get N; ui reply set N HEX (UTF-8, '-' resets). Slots 1..9. Existing USB service: reply get/set. Helper handles text encoding."},
 };
 
 void respond(char* reply, size_t capacity, const char* value) {
@@ -286,7 +315,7 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
   }
   const bool owned = key || (getter && strcmp(key_name, "caps") == 0) ||
       ((getter || setter) && strcmp(key_name, "advert") == 0) ||
-      word(command, "help") || word(command, "caps") || word(command, "adc") ||
+      word(command, "help") || word(command, "caps") || word(command, "schema") || word(command, "adc") ||
       word(command, "melody") || word(command, "melodies") || word(command, "test");
   if (!owned) return false;
   if (reply == nullptr || capacity <= MAX_TEXT) { respond(reply, capacity, "Error: buffer"); return true; }
@@ -305,6 +334,14 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
     tokens[count++] = c + 1;
   }
   char mapped[MAX_FRIENDLY + 1];
+  if (strcmp(tokens[0], "schema") == 0) {
+    const Key* setting = count == 2 ? findKey(tokens[1]) : nullptr;
+    if (!setting || setting->kind == Kind::ADC || setting->kind == Kind::READONLY) {
+      respond(reply, capacity, "Error: invalid; use schema SETTING"); return true;
+    }
+    snprintf(mapped, sizeof(mapped), "ui schema %s", setting->backend);
+    return invoke(execute, mapped, reply, capacity);
+  }
   if (key != nullptr) {
     if (getter && count == 2) {
       snprintf(mapped, sizeof(mapped), "ui get %s", key->backend);
@@ -319,7 +356,8 @@ bool handleSmartUiConsoleCommand(const char* command, char* reply, size_t capaci
       else if (strcmp(value, "0") != 0 && strcmp(value, "1") != 0) {
         respond(reply, capacity, "Error: range"); return true;
       }
-    } else if (key->kind == Kind::ADC ? !decimal(value) : !unsignedNumber(value)) {
+    } else if (key->kind == Kind::ADC ? !decimal(value) :
+               !(unsignedNumber(value) || (key->kind == Kind::PIN && strcmp(value, "-1") == 0))) {
       respond(reply, capacity, "Error: invalid"); return true;
     }
     const int written = key->kind == Kind::ADC

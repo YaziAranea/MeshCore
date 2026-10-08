@@ -45,8 +45,8 @@ def integration():
     ):
         assert archived_runtime not in main_source, archived_runtime
     dispatch = scope(source, "void MyMesh::handleCmdFrame(")
-    dispatch = dispatch[:dispatch.index("\n  if (cmd_frame[0] == CMD_DEVICE_QUERY")]
-    dispatch += "\n  writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);\n}\n"
+    assert "handleStandardCmdFrame(len);" in dispatch
+    assert "CMD_DEVICE_QUERY" not in dispatch
     return r'''
 #include "SmartUiCli.h"
 #include "CompanionFrameValidation.h"
@@ -102,6 +102,7 @@ struct MyMesh {
   static bool executeLocalCli(void*, const char*, char*, size_t);
   void handleLocalCliFrame(size_t);
   void handleCmdFrame(size_t);
+  void handleStandardCmdFrame(size_t) { writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); }
   void writeErrFrame(uint8_t code) { const uint8_t frame[] = {1, code}; _serial->writeFrame(frame, 2); }
 };
 ''' + "\n".join((scope(source, "bool MyMesh::executeLocalCli("),
@@ -179,7 +180,11 @@ def main_dispatch_integration():
 #include <string>
 #include "AdcCalibrationService.h"
 #include "SmartUiConsoleCommands.h"
+#include "CoreSettingsCommands.h"
+#include "MeshCoreCli.h"
 #define SMARTUI_VERSION "0.14"
+#define MAX_LORA_TX_POWER 22
+static smartui::MeshCoreCli meshcore_cli;
 static smartui::AdcCalibrationService adc_calibration_service;
 static unsigned adc_stops = 0;
 void stopSmartUiAdcCalibrationService() { adc_calibration_service.stop(); ++adc_stops; }
@@ -200,6 +205,8 @@ struct Controller {
 } connection_controller;
 struct Mesh {
   bool pending = false;
+  struct Prefs { char node_name[32] = "Test"; } prefs;
+  Prefs* getNodePrefs() { return &prefs; }
   bool hasPendingWork() const { return pending; }
 } the_mesh;
 struct Radio {
@@ -399,8 +406,9 @@ def meshcore_hooks_integration():
     local = scope(mesh, "bool MyMesh::executeLocalCli(")
     assert "return executeMeshCoreCliCommand(command, reply, capacity);" in local
     assert local.index("executeSmartUiCliCommand") < local.index("executeMeshCoreCliCommand")
-    # Each upstream setter persists through the same rollback as its binary twin.
-    for setter in ("bool MyMesh::setLocalNodeName(", "bool MyMesh::setLocalBlePin(",
+    # The remaining legacy setters use the binary-command rollback. Name and
+    # TX have narrow rollback, exercised using their production bodies below.
+    for setter in ("bool MyMesh::setLocalBlePin(",
                    "bool MyMesh::setLocalTuning(", "bool MyMesh::setLocalMultiAcks(",
                    "bool MyMesh::setLocalPathHashMode(", "bool MyMesh::setLocalRxBoostedGain(",
                    "bool MyMesh::setLocalTimezoneMinutes("):
@@ -528,6 +536,77 @@ int main() {
 '''
 
 
+def local_setters_integration():
+    source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    methods = "\n".join(scope(source, signature) for signature in (
+        "bool MyMesh::setLocalNodeName(", "bool MyMesh::setLocalTxPower("))
+    assert "NodePrefs before" not in methods
+    assert "applyUiPrefsRuntime" not in methods
+    assert "commitPrefsOrRollback" not in methods
+    return r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#define MAX_LORA_TX_POWER 22
+struct NodePrefs {
+  char node_name[32]="Before";
+  double node_lat=1.25,node_lon=2.5;
+  int8_t tx_power_dbm=20;
+  unsigned unrelated=1234;
+};
+struct Radio { unsigned calls=0; int power=20; void setTxPower(int p){++calls;power=p;} } radio_driver;
+struct MyMesh {
+  NodePrefs _prefs,stored;
+  bool save_ok=true; unsigned saves=0;
+  bool savePrefs(){
+    ++saves;_prefs.node_lat=55.5;_prefs.node_lon=73.25;
+    if(save_ok)stored=_prefs;
+    return save_ok;
+  }
+  bool setLocalNodeName(const char*);
+  bool setLocalTxPower(int8_t);
+};
+''' + methods + r'''
+int main(){
+  unsigned checks=0;
+  #define CHECK(c) do{++checks;assert(c);}while(0)
+  MyMesh m;
+  CHECK(!m.setLocalNodeName(nullptr) && !m.setLocalNodeName(""));
+  char name[33];memset(name,'A',32);name[32]=0;
+  CHECK(!m.setLocalNodeName(name) && m.saves==0);
+  name[31]=0;CHECK(m.setLocalNodeName(name));
+  CHECK(!strcmp(m._prefs.node_name,name) && !strcmp(m.stored.node_name,name));
+  CHECK(m._prefs.node_lat==55.5 && m._prefs.node_lon==73.25);
+  CHECK(m.setLocalNodeName("Нода"));
+  m._prefs.node_lat=10.25;m._prefs.node_lon=20.75;
+  char before[32];memcpy(before,m._prefs.node_name,sizeof(before));
+  m.save_ok=false;
+  CHECK(!m.setLocalNodeName("New"));
+  CHECK(!memcmp(before,m._prefs.node_name,sizeof(before)));
+  CHECK(m._prefs.node_lat==10.25 && m._prefs.node_lon==20.75);
+  CHECK(!strcmp(m.stored.node_name,"Нода"));
+  CHECK(m._prefs.unrelated==1234 && m._prefs.tx_power_dbm==20 && radio_driver.calls==0);
+  CHECK(!m.setLocalTxPower(21));
+  CHECK(m._prefs.tx_power_dbm==20 && radio_driver.calls==0);
+  CHECK(m._prefs.node_lat==10.25 && m._prefs.node_lon==20.75);
+  CHECK(!memcmp(before,m._prefs.node_name,sizeof(before)) && m._prefs.unrelated==1234);
+  unsigned saves=m.saves;
+  CHECK(!m.setLocalTxPower(-10) && !m.setLocalTxPower(23) && m.saves==saves);
+  m.save_ok=true;CHECK(m.setLocalTxPower(21));
+  CHECK(m._prefs.tx_power_dbm==21 && m.stored.tx_power_dbm==21);
+  CHECK(m._prefs.node_lat==55.5 && m._prefs.node_lon==73.25);
+  CHECK(radio_driver.calls==1 && radio_driver.power==21);
+  CHECK(m.setLocalTxPower(-9) && m.setLocalTxPower(22));
+  CHECK(radio_driver.calls==3 && radio_driver.power==22);
+  CHECK(m.setLocalNodeName("After"));
+  CHECK(!strcmp(m._prefs.node_name,"After") && !strcmp(m.stored.node_name,"After"));
+  CHECK(radio_driver.calls==3 && m._prefs.tx_power_dbm==22 && m._prefs.unrelated==1234);
+  printf("PASS %u production local name/TX persistence, isolated rollback, radio side-effect checks\n",checks);
+}
+'''
+
+
 def queue_integration():
     source = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
     queue = scope(source, "bool MyMesh::addToOfflineQueue(")
@@ -616,7 +695,8 @@ def type3_integration():
                         for name in names)
     dispatch = scope(source, "void MyMesh::handleCmdFrame(")
     validation = dispatch[:dispatch.index("\n  // SmartUI 0.11")]
-    text_branch = scope(dispatch, "if (cmd_frame[0] == CMD_SEND_TXT_MSG && len >= 14)")
+    standard = scope(source, "void MyMesh::handleStandardCmdFrame(")
+    text_branch = scope(standard, "if (cmd_frame[0] == CMD_SEND_TXT_MSG && len >= 14)")
     dispatch = validation + "\n  " + text_branch + "\n}\n"
     methods = "\n".join(scope(base, signature) for signature in (
         "void BaseChatMesh::onPeerDataRecv(", "mesh::Packet* BaseChatMesh::composeMsgPacket(",
@@ -644,6 +724,8 @@ def main():
         radio_hooks.write_text(radio_hooks_integration(), encoding="utf-8")
         meshcore_hooks = Path(directory) / "meshcore_hooks.cpp"
         meshcore_hooks.write_text(meshcore_hooks_integration(), encoding="utf-8")
+        local_setters = Path(directory) / "local_setters.cpp"
+        local_setters.write_text(local_setters_integration(), encoding="utf-8")
         type3 = Path(directory) / "companion_cli_type3.cpp"
         type3.write_text(type3_integration(), encoding="utf-8")
         compiler = shutil.which("g++") or shutil.which("clang++")
@@ -653,7 +735,7 @@ def main():
         include = ROOT / "examples/companion_radio"
         for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue,
                       ROOT / "tools/radio_settings_test.cpp", radio_hooks,
-                      ROOT / "tools/meshcore_cli_test.cpp", meshcore_hooks, type3):
+                      ROOT / "tools/meshcore_cli_test.cpp", meshcore_hooks, local_setters, type3):
             paths = [suite, include / "SmartUiCli.cpp"]
             radio_suite = suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp")
             meshcore_suite = suite.name in ("meshcore_cli_test.cpp", "meshcore_hooks.cpp")
@@ -662,11 +744,13 @@ def main():
             if meshcore_suite:
                 paths += [include / "MeshCoreCli.cpp", include / "SmartUiConsoleCommands.cpp"]
             if suite.name == "cli_main_dispatch.cpp":
-                paths += [include / "SmartUiConsoleCommands.cpp"]
+                paths += [include / "SmartUiConsoleCommands.cpp", include / "CoreSettingsCommands.cpp", include / "MeshCoreCli.cpp"]
             # nRF52 builds use -Ofast; normal optimization alone misses the
             # reciprocal-conversion rounding that rejected valid presets, and
             # the upstream-name parser must reject NaN/infinity without isfinite().
-            for optimization in (("-O1", "-Ofast") if radio_suite or meshcore_suite else ("-O1",)):
+            optimizations = ("-O1", "-Os", "-Ofast") if suite == local_setters else (
+                ("-O1", "-Ofast") if radio_suite or meshcore_suite else ("-O1",))
+            for optimization in optimizations:
                 output = Path(directory) / (suite.stem + optimization)
                 if compiler:
                     build = [compiler, *flags, optimization, "-I" + str(include), "-I" + str(ROOT / "src"), *map(str, paths), "-o", str(output)]

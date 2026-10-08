@@ -67,6 +67,12 @@ static bool setToneBridge(bool enabled) {
   persisted = state;
   return true;
 }
+static bool pinAllowed(const char* key, int pin) {
+  return pin == 35 || pin == 36 || (strcmp(key, "vibe_pin") == 0 && pin == -1);
+}
+static void pinOptions(const char* key, char* out, size_t capacity) {
+  snprintf(out, capacity, "%s", strcmp(key, "vibe_pin") == 0 ? "-1,35,36" : "35,36");
+}
 static void adcCommitted() { ++adc_commits; adc_service_active = false; }
 static void adcService(const char* action, char* reply, size_t capacity, bool writable) {
   ++adc_service_calls;
@@ -106,6 +112,8 @@ static void fresh(float factory = 4.9f, bool names = true, bool bridge_hook = tr
   hooks.melodyName = names ? melodyName : nullptr;
   hooks.setToneBridge = bridge_hook ? setToneBridge : nullptr;
   hooks.adcCommitted = adcCommitted;
+  hooks.pinAllowed = pinAllowed;
+  hooks.pinOptions = pinOptions;
   service = DeviceSettings{};
   service.begin(hooks);
 }
@@ -152,7 +160,7 @@ static std::string applyToken(uint32_t token, bool allowed = true) {
 }
 
 int main() {
-  static_assert(sizeof(DeviceSettingsState) <= 32, "Keep nRF52 stack snapshot bounded");
+  static_assert(sizeof(DeviceSettingsState) <= 64, "Keep nRF52 stack snapshot bounded");
   fresh();
   CHECK(command("settings caps").find("display=0") != std::string::npos);
   CHECK(command("settings get").find("shutdown_mv=3200") != std::string::npos);
@@ -371,10 +379,11 @@ int main() {
         " agc_reset=1 fem_lna=1 fem_pa=1 bridge=0 melody_names=1");
   CHECK(command("api get", false) == "OK api " + legacy_get.substr(12) +
         " agc_reset=0 fem_lna=0 fem_pa=0 bridge=0");
-  CHECK(command("settings set agc_reset 1") == "ERR settings invalid");
-  CHECK(command("settings set fem_lna 1") == "ERR settings invalid");
-  CHECK(command("settings set fem_pa 1") == "ERR settings invalid");
-  CHECK(writes == 0 && saves == 0 && applies == 0);
+  CHECK(command("settings set agc_reset 1") == "OK settings set key=agc_reset value=1");
+  CHECK(command("settings set fem_lna 1") == "OK settings set key=fem_lna value=1");
+  CHECK(command("settings set fem_pa 1") == "OK settings set key=fem_pa value=1");
+  CHECK(writes == 3 && saves == 3 && applies == 3);
+  fresh();
   CHECK(!service.handle("apix get", reply, sizeof(reply), true));
   CHECK(!service.handle("ap", reply, sizeof(reply), true));
   CHECK(command("api") == "ERR api invalid");
@@ -470,7 +479,7 @@ int main() {
   // preferences writer/apply hooks. Invalid or idempotent calls do no work.
   fresh(); caps.bridge = true;
   CHECK(command("api caps").find("bridge=1") != std::string::npos);
-  CHECK(command("settings set bridge 1") == "ERR settings invalid");
+  CHECK(command("settings set bridge 1", false) == "ERR settings readonly");
   CHECK(command("api set bridge 1", false) == "ERR api readonly");
   CHECK(bridge_calls == 0);
   for (const char* value : {"2", "256", "4294967295", "4294967296", "-1", "+1", "1x", "1 0", "", " 1"}) {
@@ -597,6 +606,8 @@ int main() {
   const std::string maximum_cli_name(DeviceSettings::MELODY_NAME_MAX, 'A');
   melody_name = maximum_cli_name.c_str();
   CHECK(cliCommand("ui melody 1").size() == 155);
+  caps.melody_max = 255;
+  CHECK(cliCommand("ui melody 255") == "ERR ui internal");
   char short_reply[32];
   const auto before_short = state;
   CHECK(handleSmartUiSettingsCli(service, "ui set fem_lna 1", short_reply,
@@ -612,6 +623,64 @@ int main() {
   std::string non_ascii = "ui get battery_mv";
   non_ascii.push_back(static_cast<char>(0x80));
   CHECK(cliCommand(non_ascii.c_str()) == "ERR ui invalid");
+
+  // Extended per-key records keep both transports bounded instead of growing
+  // the legacy aggregate snapshot. Hardware ownership is checked before save.
+  fresh();
+  caps.notify_pins = caps.tone_8bit = caps.high_drive = caps.resonance = true;
+  caps.separate_melodies = caps.display = caps.colors = caps.phone_gps = caps.profiles = true;
+  caps.font_count = 5; caps.theme_count = 3; caps.notify_mask = 7;
+  CHECK(command("settings caps schema") == "OK settings caps key=schema value=1");
+  CHECK(cliCommand("ui caps schema") == "OK ui caps key=schema value=1");
+  CHECK(cliCommand("ui get led_pin") == "OK ui get key=led_pin value=-1");
+  CHECK(cliCommand("ui get tone_pin") == "OK ui get key=tone_pin value=-1");
+  CHECK(cliCommand("ui schema tone_pin") ==
+      "OK ui schema key=tone_pin supported=1 min=0 max=127 step=1 options=35,36");
+  CHECK(cliCommand("ui schema resonance_hz") ==
+      "OK ui schema key=resonance_hz supported=1 min=1800 max=4200 step=400 options=-");
+  CHECK(cliCommand("ui schema notify_mode").find("options=0,1,2,3,4,5,6,7") != std::string::npos);
+  for (const char* entry : {"notify_mode 3", "important_notify_mode 7", "led_pin 35",
+       "tone_pin 36", "vibe_pin -1", "melody_dm 3", "melody_mention 4", "melody_system 5",
+       "tone_8bit 1", "high_drive 1", "resonance_hz 4200", "offline_dm_led 0", "ble_dm_led 0",
+       "msg_popup 0", "ui_font 4", "ui_theme 2", "ui_top_color 5", "ui_bottom_color 0",
+       "backlight_timeout 2", "gps_source 1", "gps_interval 86400", "advert_location 1"}) {
+    std::string text(entry);
+    const auto split = text.find(' ');
+    const std::string key = text.substr(0, split), value = text.substr(split + 1);
+    CHECK(cliCommand(("ui set " + text).c_str()) == "OK ui set key=" + key + " value=" + value);
+    CHECK(cliCommand(("ui get " + key).c_str()) == "OK ui get key=" + key + " value=" + value);
+    CHECK(command(("settings get " + key).c_str()) == "OK settings get key=" + key + " value=" + value);
+  }
+  unsigned before_saves = saves;
+  const DeviceSettingsState before_extended = state;
+  for (const char* entry : {"led_pin 9", "tone_pin 9", "vibe_pin 9"})
+    CHECK(cliCommand((std::string("ui set ") + entry).c_str()) == "ERR ui pin_conflict");
+  for (const char* entry : {"resonance_hz 1801", "resonance_hz 4400", "ui_font 5", "ui_theme 3",
+       "ui_top_color 6", "backlight_timeout 3", "gps_interval 86401", "profile 4", "notify_mode 8"})
+    CHECK(cliCommand((std::string("ui set ") + entry).c_str()) == "ERR ui range");
+  CHECK(saves == before_saves && memcmp(&state, &before_extended, sizeof(state)) == 0);
+  CHECK(cliCommand("ui set led_pin 35", false) == "ERR ui readonly");
+  save_ok = false;
+  CHECK(cliCommand("ui set ui_theme 1") == "ERR ui storage");
+  CHECK(memcmp(&state, &before_extended, sizeof(state)) == 0);
+  save_ok = true;
+  CHECK(cliCommand("ui set profile 3") == "OK ui set key=profile value=3");
+  CHECK(state.profile == 3 && state.muted == 1 && state.board_led == 0 && state.backlight_timeout == 0);
+  CHECK(cliCommand("ui set profile 2") == "OK ui set key=profile value=2");
+  CHECK(state.profile == 2 && state.muted == 0 && state.notify_mode == 7 && state.board_led == 1);
+  caps.notify_mask = 3;
+  CHECK(cliCommand("ui get notify_mode") == "OK ui get key=notify_mode value=3");
+  CHECK(state.notify_mode == 7);  // Read is effective, never a persistence mutation.
+  CHECK(cliCommand("ui set notify_mode 4") == "ERR ui range");
+  caps.phone_gps = false;
+  CHECK(cliCommand("ui set gps_source 1") == "ERR ui range");
+  caps.separate_melodies = false;
+  CHECK(cliCommand("ui set melody_dm 2") == "ERR ui unsupported");
+  CHECK(cliCommand("ui set melody_system 2") == "OK ui set key=melody_system value=2");
+  CHECK(state.melody == 2 && state.melody_dm == 2 && state.melody_mention == 2 && state.melody_system == 2);
+  caps.display = false;
+  CHECK(cliCommand("ui set ui_font 1") == "ERR ui unsupported");
+  CHECK(cliCommand("ui schema ui_font").find("supported=0") != std::string::npos);
 
   // Worst-case numeric widths remain complete and within the 480-byte reply.
   fresh();

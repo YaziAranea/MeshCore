@@ -39,6 +39,7 @@ MultiSerialInterface interface_manager;
   #include "SmartUiCliSettings.h"
   #include "RadioSettings.h"
   #include "MeshCoreCli.h"
+  #include "CoreSettingsCommands.h"
   #include "SmartUiConsoleCommands.h"
   #include "SmartUiSync.h"
 #endif
@@ -143,6 +144,7 @@ static smartui::MeshCoreCli meshcore_cli;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
+  EFFECT_PRESENTATION = 64,
 };
 static uint8_t device_setting_effects = 0;
 
@@ -171,6 +173,25 @@ static smartui::DeviceSettingsState readDeviceSettings() {
   s.fem_lna = p.radio_fem_rxgain;
   s.fem_pa = p.radio_fem_txgain;
   s.bridge = p.notify_tone_bridge_enabled;
+  s.led_pin = p.notify_gpio_pin;
+  s.tone_pin = p.notify_tone_pin;
+  s.vibe_pin = p.notify_vibe_pin;
+  s.tone_8bit = p.notify_tone_8bit_enabled;
+  s.high_drive = p.notify_tone_high_drive_enabled;
+  s.resonance_hz = p.notify_tone_resonance_hz;
+  s.offline_dm_led = p.offline_dm_led_enabled;
+  s.ble_dm_led = p.ble_dm_led_enabled;
+  s.msg_popup = p.msg_popup_enabled;
+  s.ui_font = p.ui_font;
+  s.ui_theme = p.ui_theme;
+  s.ui_top_color = p.ui_top_color;
+  s.ui_bottom_color = p.ui_bottom_color;
+  s.backlight_timeout = p.backlight_timeout_idx;
+  s.gps_interval = p.gps_interval;
+  s.advert_location = p.advert_loc_policy;
+#ifdef DISPLAY_CLASS
+  s.ui_font = ui_task.getUiFontChoiceIndex();
+#endif
   return s;
 }
 
@@ -180,7 +201,8 @@ static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
   // these effects. Unrelated changes must not restart radio RX or AGC work.
   device_setting_effects = 0;
   if (p.adc_multiplier != s.adc_override) device_setting_effects |= EFFECT_ADC;
-  if (p.gps_enabled != s.gps || p.gps_source != s.gps_source) device_setting_effects |= EFFECT_GPS;
+  if (p.gps_enabled != s.gps || p.gps_source != s.gps_source || p.gps_interval != s.gps_interval)
+    device_setting_effects |= EFFECT_GPS;
   if (p.board_leds_enabled != s.board_led) device_setting_effects |= EFFECT_LED;
   if (p.radio_fem_rxgain != s.fem_lna) device_setting_effects |= EFFECT_LNA;
   if (p.radio_fem_txgain != s.fem_pa) device_setting_effects |= EFFECT_PA;
@@ -189,8 +211,19 @@ static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
       p.notify_tone_volume != s.volume || p.notify_tone_id != s.melody ||
       p.notify_tone_dm_id != s.melody_dm || p.notify_tone_mention_id != s.melody_mention ||
       p.notify_tone_system_id != s.melody_system || p.unread_led_enabled != s.unread_led ||
-      p.notifications_muted != s.muted || p.night_quiet_active != s.night_quiet)
+      p.notifications_muted != s.muted || p.night_quiet_active != s.night_quiet ||
+      p.notify_tone_8bit_enabled != s.tone_8bit || p.notify_tone_high_drive_enabled != s.high_drive ||
+      p.notify_tone_resonance_hz != s.resonance_hz || p.offline_dm_led_enabled != s.offline_dm_led ||
+      p.ble_dm_led_enabled != s.ble_dm_led)
     device_setting_effects |= EFFECT_NOTIFY;
+  uint8_t stored_font = s.ui_font;
+#ifdef DISPLAY_CLASS
+  stored_font = ui_task.storedUiFontChoice(s.ui_font);
+#endif
+  if (p.notify_gpio_pin != s.led_pin || p.notify_tone_pin != s.tone_pin || p.notify_vibe_pin != s.vibe_pin ||
+      p.ui_font != stored_font || p.ui_theme != s.ui_theme || p.ui_top_color != s.ui_top_color ||
+      p.ui_bottom_color != s.ui_bottom_color || p.backlight_timeout_idx != s.backlight_timeout ||
+      p.msg_popup_enabled != s.msg_popup) device_setting_effects |= EFFECT_PRESENTATION;
   p.adc_multiplier = s.adc_override;
   p.notify_mode = s.notify_mode;
   p.important_notify_mode = s.important_notify_mode;
@@ -212,6 +245,22 @@ static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
   p.agc_reset_enabled = s.agc_reset;
   p.radio_fem_rxgain = s.fem_lna;
   p.radio_fem_txgain = s.fem_pa;
+  p.notify_gpio_pin = s.led_pin;
+  p.notify_tone_pin = s.tone_pin;
+  p.notify_vibe_pin = s.vibe_pin;
+  p.notify_tone_8bit_enabled = s.tone_8bit;
+  p.notify_tone_high_drive_enabled = s.high_drive;
+  p.notify_tone_resonance_hz = s.resonance_hz;
+  p.offline_dm_led_enabled = s.offline_dm_led;
+  p.ble_dm_led_enabled = s.ble_dm_led;
+  p.msg_popup_enabled = s.msg_popup;
+  p.ui_font = stored_font;
+  p.ui_theme = s.ui_theme;
+  p.ui_top_color = s.ui_top_color;
+  p.ui_bottom_color = s.ui_bottom_color;
+  p.backlight_timeout_idx = s.backlight_timeout;
+  p.gps_interval = s.gps_interval;
+  p.advert_loc_policy = s.advert_location;
 }
 
 static smartui::DeviceSettingsCaps deviceSettingsCapabilities() {
@@ -236,6 +285,7 @@ static smartui::DeviceSettingsCaps deviceSettingsCapabilities() {
   c.effective_notify_mode = ui_task.getNotifyMode();
 #endif
   c.melody_max = ui_task.getNotifyToneCount() ? ui_task.getNotifyToneCount() - 1 : 0;
+  ui_task.describeDeviceSettings(c);
 #if defined(PIN_STATUS_LED) && PIN_STATUS_LED >= 0
   c.unread_led = true;
 #endif
@@ -271,6 +321,30 @@ static bool deviceBatteryCalibrationSample(uint16_t& millivolts, float& multipli
 }
 static float deviceAdcMultiplier() { return board.getAdcMultiplier(); }
 static uint32_t deviceSettingsMillis() { return static_cast<uint32_t>(millis()); }
+static bool deviceSettingsPinAllowed(const char* key, int pin) {
+#ifdef DISPLAY_CLASS
+  return ui_task.isDeviceSettingsPinAllowed(key, pin);
+#else
+  (void)key; (void)pin; return false;
+#endif
+}
+static void deviceSettingsPinOptions(const char* key, char* out, size_t capacity) {
+#ifdef DISPLAY_CLASS
+  ui_task.deviceSettingsPinOptions(key, out, capacity);
+#else
+  (void)key; snprintf(out, capacity, "-");
+#endif
+}
+static int deviceSettingsPinValue(const char* key) {
+#ifdef DISPLAY_CLASS
+  if (strcmp(key, "led_pin") == 0) return ui_task.getNotifyLedPin();
+  if (strcmp(key, "tone_pin") == 0) return ui_task.getNotifyTonePin();
+  if (strcmp(key, "vibe_pin") == 0) return ui_task.getNotifyVibePin();
+#else
+  (void)key;
+#endif
+  return -1;
+}
 
 static bool adcServiceUsbLinkPresent() {
 #if defined(NRF52_PLATFORM) && defined(ENABLE_USB_INTERFACE)
@@ -366,6 +440,7 @@ static void applyDeviceSettings(bool battery_changed) {
   if (effects & EFFECT_GPS) the_mesh.applyGpsPrefs();
 #endif
 #ifdef DISPLAY_CLASS
+  if (effects & EFFECT_PRESENTATION) ui_task.applyDeviceSettingsAppearanceAndPins();
   if (battery_changed || (effects & (EFFECT_NOTIFY | EFFECT_LED)))
     ui_task.applyDeviceSettingsRuntime(battery_changed);
 #else
@@ -379,7 +454,14 @@ static void testDeviceNotification() {
 }
 static bool handleCompanionDeviceSettings(const char* command, char* reply,
                                           size_t capacity, bool allow_mutation) {
+  if (smartui::handleCoreSettingsCommand(command, reply, capacity, allow_mutation,
+      meshcore_cli, the_mesh.getNodePrefs()->node_name, MAX_LORA_TX_POWER)) return true;
   if (radio_settings.handle(command, reply, capacity, allow_mutation)) return true;
+  if (strncmp(command, "settings set fem_", 17) == 0 &&
+      (the_mesh.hasPendingWork() || radio_driver.isReceiving() || !radio_driver.isInRecvMode())) {
+    snprintf(reply, capacity, "ERR settings busy");
+    return true;
+  }
   return device_settings.handle(command, reply, capacity, allow_mutation);
 }
 
@@ -529,6 +611,8 @@ bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity
 // protocol, inbox ownership and event pushes are not enabled in this release.
 bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
   const bool writable = connection_controller.deviceApiWritesAllowed();
+  if (smartui::handleCoreSettingsCommand(command, reply, capacity, writable,
+      meshcore_cli, the_mesh.getNodePrefs()->node_name, MAX_LORA_TX_POWER)) return true;
   if (strcmp(command, "ui hello") == 0) {
     snprintf(reply, capacity,
         "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1",
@@ -538,6 +622,7 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
   if (connection_controller.handleCliCommand(command, reply, capacity, writable)) return true;
   if (radio_settings.handle(command, reply, capacity, writable)) return true;
   const bool read = strncmp(command, "ui caps ", 8) == 0 ||
+                    strncmp(command, "ui schema ", 10) == 0 ||
                     strncmp(command, "ui get ", 7) == 0 ||
                     strncmp(command, "ui melody ", 10) == 0 ||
                     strcmp(command, "ui adc service") == 0 ||
@@ -929,6 +1014,9 @@ void setup() {
   settings_hooks.batteryCalibrationSample = deviceBatteryCalibrationSample;
   settings_hooks.adcMultiplier = deviceAdcMultiplier;
   settings_hooks.millis = deviceSettingsMillis;
+  settings_hooks.pinAllowed = deviceSettingsPinAllowed;
+  settings_hooks.pinOptions = deviceSettingsPinOptions;
+  settings_hooks.pinValue = deviceSettingsPinValue;
   settings_hooks.testNotification = testDeviceNotification;
   settings_hooks.adcService = consoleAdcService;
   settings_hooks.adcCommitted = stopSmartUiAdcCalibrationService;

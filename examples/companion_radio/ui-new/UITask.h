@@ -10,6 +10,7 @@
 #include <helpers/sensors/LPPDataHelpers.h>
 #include "BatteryShutdownPolicy.h"
 #include "BatteryDisplayCache.h"
+#include "../DeviceSettings.h"
 
 #ifndef LED_STATE_ON
   #define LED_STATE_ON 1
@@ -477,6 +478,11 @@ public:
   void cycleSmartProfile();
   void applyImportedPrefs() override;
   void applyDeviceSettingsRuntime(bool battery_changed);
+  void applyDeviceSettingsAppearanceAndPins();
+  void describeDeviceSettings(smartui::DeviceSettingsCaps& caps) const;
+  bool isDeviceSettingsPinAllowed(const char* key, int pin) const;
+  void deviceSettingsPinOptions(const char* key, char* out, size_t capacity) const;
+  uint8_t storedUiFontChoice(uint8_t choice) const;
   void setAdcCalibrationServiceActive(bool active);
   const char* getHardwareTestStepName(uint8_t step) const;
   void runHardwareTestStep(uint8_t step);

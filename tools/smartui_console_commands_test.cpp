@@ -116,7 +116,7 @@ int main() {
       "adc", "adc preview", "adc preview -1", "adc apply x", "adc service start now",
       "adc service maybe", "adc erase", "melody", "melody -1", "melody 4294967296",
       "melodies 1", "test", "test notification 1", "caps unknown", "caps", "get caps",
-      "get caps volume", "help sound 0", "help sound 3", "help sound 1 now", "help fake",
+      "get caps volume", "help sound 0", "help sound 4", "help sound 1 now", "help fake",
       "set advert", "get advert 1", "set advert -1"}) check(run(command).find("Error:") == 0);
   check(run(std::string("set volume ") + std::string(160, '1')) == "Error: invalid");
   check(run(std::string("set adc ") + std::string(58, '1')) == "Error: invalid");
@@ -188,12 +188,24 @@ int main() {
   const unsigned before_help = calls;
   for (const char* command : {"help", "help sound", "help sound 1", "help sound 2", "help fem",
       "help adc", "help adc 1", "help adc 2", "help adc 3", "help radio", "help radio 2",
-      "help connection", "help connection 2", "help system", "help advert", "help led", "help gps"}) {
+      "help connection", "help connection 2", "help system", "help advert", "help led", "help gps",
+      "help gps 2", "help sound 3", "help display", "help pins", "help profile", "help replies"}) {
     check(run(command).find("Error:") != 0);
   }
   check(calls == before_help);
   check(run("help radio").find("get/set tx") != std::string::npos);
   check(run("help connection 2").find("ui wifi password HEX") != std::string::npos);
+  for (const char* key : {"notify_mode", "important_notify_mode", "led_pin", "tone_pin", "vibe_pin",
+      "melody_dm", "melody_mention", "melody_system", "tone_8bit", "high_drive", "resonance_hz",
+      "offline_dm_led", "ble_dm_led", "msg_popup", "ui_font", "ui_theme", "ui_top_color",
+      "ui_bottom_color", "backlight_timeout", "gps_source", "gps_interval", "advert_location", "profile"}) {
+    maps((std::string("get ") + key).c_str(), (std::string("ui get ") + key).c_str(), "> 7");
+    maps((std::string("set ") + key + " 1").c_str(), (std::string("ui set ") + key + " 1").c_str(), "OK");
+    maps((std::string("schema ") + key).c_str(), (std::string("ui schema ") + key).c_str(), "OK set");
+  }
+  maps("set vibe_pin -1", "ui set vibe_pin -1", "OK");
+  maps("set tone_8bit on", "ui set tone_8bit 1", "OK");
+  maps("set high_drive off", "ui set high_drive 0", "OK");
 
   // Every proper prefix of a mutation must remain inert unless it is itself a
   // complete command (e.g. adc service). This catches accidental prefix writes.

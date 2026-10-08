@@ -460,6 +460,9 @@ private:
   bool send_unscoped;   // force un-scoped flood (instead of using send_scope)
   char cli_command[80];
   uint8_t app_target_ver;
+  // Called only after validation and local CLI dispatch. Do not inline its
+  // larger native-command snapshots back into the lightweight dispatcher.
+  void handleStandardCmdFrame(size_t length) __attribute__((noinline));
 #if SMARTUI_CONNECTION_SELECTOR
   uint32_t last_local_session_generation = 0;
   smartui::SmartUiCli _local_cli;

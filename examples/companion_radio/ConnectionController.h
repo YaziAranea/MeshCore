@@ -170,6 +170,8 @@ private:
   void printStorageLegacy();
   void printHelp();
   void handleQuickReplyCommand(const char* line);
+  bool handleCliQuickReply(const char* command, char* reply, size_t capacity,
+                           bool allow_mutation);
   void handleDeviceSettingsCommand(const char* line);
   void cancelWifiSetup(bool restore_selected_wifi);
   bool startWifiSetup();

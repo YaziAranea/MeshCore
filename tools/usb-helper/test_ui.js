@@ -12,12 +12,13 @@ const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { chromium } = require('playwright');
+const {fullSettingsFixture}=require('./test_full_settings_fixture');
 
 const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_1.9.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.0.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -37,7 +38,7 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc, schemas, extendedValues }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
@@ -48,7 +49,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0},advert:{interval_min:60},
     settingsCaps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125,...settingsCaps},
     settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0},
-    adcService:{supported:1,active:0,remaining_ms:0,external:1},
+    adcService:{supported:1,active:0,remaining_ms:0,external:1},identity:'Нода',tx:20,
     settingsRecord(kind,values){return 'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');},
     stage: 'idle', manualTest, readOnly, info, closed: false, ssid: null, password: null,
     emit(text) {
@@ -88,7 +89,13 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
       if ((this.readOnly || this.localRecovery) && command !== 'status' && !(this.settings && ['help','info','settings caps','settings get'].includes(command)) && !(this.localRecovery && command === 'wifi forget')) { this.emit('Connection settings are read-only during storage recovery.'); return; }
       if(this.settings && command.startsWith('settings ')) {
         if(command==='settings caps') this.emit(this.settingsRecord('caps',this.settingsCaps));
-        else if(command==='settings get') this.emit(this.settingsRecord('get',this.settingsState));
+        else if(command==='settings get') this.emit(this.settingsRecord('get',Object.fromEntries(['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted'].map(key=>[key,this.settingsState[key]]))));
+        else if(command==='settings caps schema')this.emit(schemas?'OK settings caps key=schema value=1':'ERR settings unsupported');
+        else if(command.startsWith('settings schema ')){const key=command.slice(16),s=schemas?.[key]||{supported:Number(Object.hasOwn(this.settingsState,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};this.emit('OK settings schema key='+key+' '+Object.entries(s).map(([k,v])=>k+'='+v).join(' '));}
+        else if(command.startsWith('settings get ')){const key=command.slice(13);this.emit('OK settings get key='+key+' value='+(this.settingsState[key]??extendedValues?.[key]));}
+        else if(command==='settings identity')this.emit('OK settings identity name_hex='+Array.from(new TextEncoder().encode(this.identity),b=>b.toString(16).padStart(2,'0')).join('')+' max_name_bytes=31');
+        else if(command.startsWith('settings name ')){const hex=command.slice(14);this.identity=new TextDecoder().decode(Uint8Array.from(hex.match(/../g),b=>parseInt(b,16)));this.emit('OK settings name name_hex='+hex);}
+        else if(command==='settings tx'||command.startsWith('settings tx set ')){if(command.startsWith('settings tx set '))this.tx=Number(command.slice(16));this.emit('OK settings tx value='+this.tx+' min=-9 max=22');}
         else if(command==='settings adc manual')this.emit(manualAdc===undefined?'ERR settings invalid':'OK settings adc_manual supported='+Number(manualAdc));
         else if(this.settingsFailure) this.emit('ERR settings '+this.settingsFailure);
         else if(command.startsWith('settings adc set ')){
@@ -187,7 +194,7 @@ async function fixture(options = {}) {
   if(options.clock)await page.clock.install({time:new Date('2026-01-01T12:00:00Z')});
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -505,7 +512,7 @@ test('firmware preflight stays offline without serial access and displays merged
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
 const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.15');
-test('0.08 through 0.15 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+test('0.08 through 0.16 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
@@ -515,7 +522,8 @@ test('0.08 through 0.15 retain verified melody names; unknown firmware or change
     {version:'0.13',maximum:30,named:true},
     {version:'0.14',maximum:30,named:true},
     {version:'0.15',maximum:30,named:true},
-    {version:'0.16',maximum:30,named:false},
+    {version:'0.16',maximum:30,named:true},
+    {version:'0.17',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},
@@ -535,6 +543,33 @@ test('0.08 through 0.15 retain verified melody names; unknown firmware or change
       assert.match(await f.page.locator('#saved-melody').textContent(),named?/4 · Канон · Прочитано/:/Мелодия 4 · Прочитано/);
     } finally {await f.close();}
   }
+});
+
+test('0.16 service mode exposes board pin schemas, filters and preserves other drafts',async()=>{
+  const full=fullSettingsFixture();
+  const f=await fixture({settings:true,radioFeature:true,manualAdc:true,info:RELEASE_DEVICE_INFO.replace('0.15','0.16').replace('ProMicro RA62','Heltec T096'),schemas:full.schemas,extendedValues:full.settings,settingsCaps:{display:1,gps:1,adc_service:1}});
+  try{const p=f.page;await connect(p);
+    await p.waitForFunction(()=>!document.getElementById('setting-tone_pin').disabled);
+    assert.deepEqual(await p.locator('#setting-tone_pin option').evaluateAll(o=>o.map(i=>i.value)),['29','31','33','34','35','36','37','39','43']);
+    for(const key of ['ui_theme','led_pin'])assert.equal(await p.locator('#setting-'+key).isEnabled(),true);
+    for(const key of ['profile','melody_dm','melody_mention'])assert.equal(await p.locator('#setting-'+key).isDisabled(),true);
+    assert.deepEqual(await p.locator('#setting-gps_source option').evaluateAll(nodes=>nodes.map(n=>n.value)),['0']);
+    assert.equal(await p.locator('#adc-manual-value').isEnabled(),true);
+    assert.doesNotMatch(await p.locator('#adc-manual-hint').textContent(),/не поддерживается/);
+    await p.locator('#setting-volume').selectOption('4');await p.locator('#setting-tone_pin').selectOption('33');
+    await p.locator('#save-tone_pin').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.settingsState.tone_pin===33&&!document.getElementById('setting-tone_pin').disabled);
+    assert.equal(await p.locator('#setting-volume').inputValue(),'4');
+    await p.locator('#settings-filter').fill('tone_pin');assert.equal(await p.locator('#row-tone_pin').isVisible(),true);assert.equal(await p.locator('#row-volume').isVisible(),false);
+    assert.equal(await p.locator('#device-fields .device-panel:visible').count(),1);
+    await p.locator('#settings-filter').fill('нет такого параметра');assert.equal(await p.locator('#device-fields .device-panel:visible').count(),0);
+    await p.locator('#settings-filter').fill('vibration');assert.equal(await p.locator('#lights-panel').isVisible(),false);
+    await p.locator('#settings-unavailable').check();assert.equal(await p.locator('#lights-panel').isVisible(),true);assert.equal(await p.locator('#setting-vibration').isDisabled(),true);
+    await p.locator('#settings-unavailable').uncheck();await p.locator('#settings-filter').fill('');
+    await p.locator('#node-tx').fill('16');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await p.waitForFunction(()=>__serialMock.tx===16&&!document.getElementById('node-tx').disabled);
+    await p.locator('#device-section').evaluate(section=>{const caption=document.createElement('p');caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
+    await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.0-service-desktop.png')});
+    await p.setViewportSize({width:390,height:844});assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);await p.locator('#device-section').screenshot({path:path.join(output,'helper-2.0-service-mobile.png')});
+  }finally{await f.close();}
 });
 
 test('headless settings save explicit fields with readback; ADC calculation and reset require confirmation',async()=>{

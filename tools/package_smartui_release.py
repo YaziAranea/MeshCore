@@ -28,10 +28,10 @@ import package_smartui_developer_kit as developer_kit
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.15"
-TAG = "smartui-0.15"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.15_RU.md"
-ARCHIVE_NAME = "SmartUI_0.15_all-boards.zip"
+VERSION = "0.16"
+TAG = "smartui-0.16"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.16_RU.md"
+ARCHIVE_NAME = "SmartUI_0.16_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 ASSET_COUNT = 19
 DISTRIBUTION = "public"

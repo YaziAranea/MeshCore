@@ -1,24 +1,24 @@
-# SmartUI 0.15: локальные команды настройки
+# SmartUI 0.16: локальные команды настройки
 
 Обычному пользователю: [полная русская справка консоли с примерами](CONSOLE_COMMANDS_RU.md).
-С 0.15 короткие `get/set` охватывают звук, вибро, FEM, ADC, LED, GPS, AGC и автоанонс.
+С 0.16 короткие `get/set` охватывают звук, вибро, FEM, ADC, LED, GPS, AGC и автоанонс.
 `help` и `help TOPIC [PAGE]` дают встроенную справку. Расширение обнаруживается по
 `console=1`; ответы коротких команд — `> VALUE`, `OK` или `Error: REASON`.
 ADC сохраняет поля токена; `melody N` возвращает читаемое имя UTF-8. Прежние `ui`
 сохраняют свой машинный формат. Устаревшую прошивку нельзя распознавать только
 по `ver`: сначала проверяйте объявленные возможности.
 
-SmartUI 0.15 использует локальные companion-команды MeshCore: CMD66 и RESP29.
+SmartUI 0.16 использует локальные companion-команды MeshCore: CMD66 и RESP29.
 Номер companion-протокола — 14, как у оригинального MeshCore с этими командами.
 Удалённое выполнение команд чужой нодой через LoRa не поддерживается: такая команда
 (текст типа 3) передаётся приложению, как оригинал делает для контакта без права на CLI.
 
-1. Для обычной настройки есть USB Helper 1.9. В режиме «Настройки (USB-компаньон)»
+1. Для обычной настройки есть USB Helper 2.0. В режиме «Настройки (USB-компаньон)»
    он работает через один USB-порт и не забирает сообщения.
 2. Для приложения используйте уже выбранное локальное подключение BLE, USB или
    Wi-Fi/TCP и его общую очередь команд. Не открывайте второй читатель транспорта.
 3. Поддержка определяется через discovery и hello, а не по номеру прошивки.
-4. API 0.11 с opcode 201, sync, событиями и отметками прочтения в 0.14 **не поддерживается**.
+4. API 0.11 с opcode 201, sync, событиями и отметками прочтения в 0.16 **не поддерживается**.
    Его описание и Helper 1.4 остаются в [архиве 0.11](https://github.com/YaziAranea/MeshCore/tree/smartui-0.11/tools/smartui-api).
    Обычные команды сообщений MeshCore сохраняются; локальный CLI не заменяет их.
 
@@ -28,6 +28,51 @@ JavaScript-реализацию из Helper. Автоматические про
 
 ## Обнаружение и транспорт
 
+### Добавления 0.16: схема параметров, имя, TX и фразы
+
+Скалярные расширения обнаруживаются отдельно: `ui caps schema` возвращает
+`OK ui caps key=schema value=1`. Не предполагайте, что `console=1` автоматически
+означает их наличие: этот маркер появился ещё в 0.15.
+
+```text
+ui schema tone_pin
+OK ui schema key=tone_pin supported=1 min=0 max=127 step=1 options=...
+ui get tone_pin
+OK ui get key=tone_pin value=...
+ui set tone_pin N
+OK ui set key=tone_pin value=N
+```
+
+`options` — разрешённый набор в текущем состоянии платы, либо `-` для
+диапазона `min/max/step`. Перед изменением пинов запрашивайте схему заново:
+GPS, мостовой звук и остальные выходы могут менять доступные варианты.
+`supported=0` надо показывать как неподдерживаемую функцию, не как отказ транспорта.
+Новые чтения идут по одному ключу; старые bulk-записи `settings get/caps` не
+раздуваются и остаются совместимыми. Список ключей и смысл значений описаны
+в [пользовательской справке](CONSOLE_COMMANDS_RU.md).
+
+| Запрос | Успешный ответ |
+| --- | --- |
+| `ui identity` | `OK ui identity name_hex=HEX max_name_bytes=31` |
+| `ui name HEX` | `OK ui name name_hex=HEX` |
+| `ui tx` | `OK ui tx value=N min=-9 max=N` |
+| `ui tx set N` | Та же запись с подтверждённой мощностью |
+| `ui reply get N` | `OK ui reply slot=N hex=HEX` или `hex=-` |
+| `ui reply set N HEX` | `OK ui reply_saved slot=N` |
+
+Имя — UTF-8 в lowercase HEX, 1–31 байт после декодирования, с теми же
+ограничениями символов, что в штатном CLI. Фразы — слоты 1–9, 0–64 байта UTF-8;
+`-` возвращает встроенную фразу. Ошибки `ERR ui invalid/range/pin_conflict`,
+`readonly`, `busy`, `storage`, `unsupported` не должны считаться успешной записью.
+Не повторяйте изменение автоматически после тайм-аута.
+
+Для текстовой сервисной консоли параметры, схема, identity/name/tx используют
+`settings ...` и префикс `OK/ERR settings`. Фразы сохраняют исторический формат
+`reply get N` / `reply set N HEX`, а не новый ответ `OK ui ...`.
+
+Ответы укладываются в прежние 156 байт. Разрешение записи, состояние хранилища,
+радио-busy и аппаратные проверки применяются сервером, не только интерфейсом.
+
 После штатного handshake запросите custom variables: CMD40, ответ RESP21.
 В CSV должна быть ровно одна запись `smartui_cli:1`. Отсутствие или другая версия —
 неподдерживаемый интерфейс. Маркер `smartui_api:1` не подходит. Затем:
@@ -36,7 +81,7 @@ JavaScript-реализацию из Helper. Автоматические про
 
 Ответ:
 
-`OK ui hello version=1 firmware=0.15 max_command=156 max_reply=156 write=1 sync=0 events=0 meshcore=1 console=1`
+`OK ui hello version=1 firmware=0.16 max_command=156 max_reply=156 write=1 sync=0 events=0 meshcore=1 console=1`
 
 `meshcore=1` означает, что на том же CMD66 работают и команды оригинального
 MeshCore (раздел «Команды оригинального MeshCore» ниже).
@@ -106,7 +151,7 @@ upstream PR #3298 и следующие): `OK`, `> значение`, `Error, �
 
 1. Один запрос в работе. Сначала сопоставьте RESP29 и точный префикс, затем
    завершайте соответствующий запрос общей очереди приложения.
-2. Штатные push-пакеты и чужой префикс не завершают запрос CLI. В 0.14 нет
+2. Штатные push-пакеты и чужой префикс не завершают запрос CLI. В 0.16 нет
    CLI-push, событий API, автоопроса inbox и подтверждения прочтения.
 3. Известный отказ `ERR ui REASON`, `Unknown command`, `Error: ...`, `Error, ...`
    или `ERROR: ...` завершает
@@ -132,7 +177,7 @@ upstream PR #3298 и следующие): `OK`, `> значение`, `Error, �
 
 `ui caps KEY` → `OK ui caps key=KEY value=NUMBER`.
 
-Ключи возможностей:
+Базовые ключи возможностей (расширение 0.16 описано ниже):
 
 `v adc adc_service sound board_led unread_led vibration gps battery_protection display melody_max adc_min adc_max agc_reset fem_lna fem_pa bridge melody_names`
 
@@ -167,13 +212,13 @@ OK ui adc_service supported=1 active=1 remaining_ms=119500 external=1
 
 `ui get KEY` → `OK ui get key=KEY value=NUMBER`.
 
-Ключи текущего состояния:
+Базовые ключи текущего состояния:
 
 `battery_mv adc_multiplier adc_default sound_quiet volume melody board_led unread_led vibration gps battery_protection shutdown_mv muted agc_reset fem_lna fem_pa bridge`
 
-`ui set KEY UINT` → `OK ui set key=KEY value=UINT`.
+`ui set KEY INT` → `OK ui set key=KEY value=INT`.
 
-Изменяемые ключи:
+Базовые изменяемые ключи; дополнительные ключи 0.16 перечислены ниже:
 
 `sound_quiet volume melody board_led unread_led vibration gps battery_protection muted agc_reset fem_lna fem_pa bridge`
 

@@ -1,4 +1,4 @@
-"""Guard SmartUI 0.15 assets; prune only known replaced Helper 1.8 hotfix files."""
+"""Guard SmartUI 0.16 assets; prune only known replaced Helper 1.8 hotfix files."""
 import hashlib
 import json
 import os
@@ -8,9 +8,9 @@ import subprocess
 import sys
 
 REPO = "YaziAranea/MeshCore"
-TAG = "smartui-0.15"
+TAG = "smartui-0.16"
 OLD_NAMES = {"SmartUI_USB_Helper_1.8.html", "SmartUI_USB_Helper_1.8.zip"}
-NEW_NAMES = {"SmartUI_USB_Helper_1.9.html", "SmartUI_USB_Helper_1.9.zip"}
+NEW_NAMES = {"SmartUI_USB_Helper_2.0.html", "SmartUI_USB_Helper_2.0.zip"}
 
 
 def cleanup_plan(release, bundle, expected_commit):

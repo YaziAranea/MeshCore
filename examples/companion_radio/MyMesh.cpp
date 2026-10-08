@@ -1776,11 +1776,21 @@ bool MyMesh::localRadioSettingsBusy() {
 // CMD_SET_RADIO_TX_POWER, CMD_SET_TUNING_PARAMS, CMD_SET_OTHER_PARAMS
 // (multi-acks), CMD_SET_PATH_HASH_MODE and CMD_REBOOT.
 bool MyMesh::setLocalNodeName(const char* name) {
+  if (!name) return false;
   const size_t length = strlen(name);
   if (length == 0 || length >= sizeof(_prefs.node_name)) return false;
-  const NodePrefs before = _prefs;
+  // Saving a name must not retune the radio or reapply unrelated UI state on
+  // failure. Keep only the fields touched here and by savePrefs().
+  char before[sizeof(_prefs.node_name)];
+  memcpy(before, _prefs.node_name, sizeof(before));
+  const double before_lat = _prefs.node_lat;
+  const double before_lon = _prefs.node_lon;
   memcpy(_prefs.node_name, name, length + 1);
-  return commitPrefsOrRollback(before);
+  if (savePrefs()) return true;
+  memcpy(_prefs.node_name, before, sizeof(before));
+  _prefs.node_lat = before_lat;
+  _prefs.node_lon = before_lon;
+  return false;
 }
 
 bool MyMesh::setLocalBlePin(uint32_t pin) {
@@ -1793,9 +1803,13 @@ bool MyMesh::setLocalBlePin(uint32_t pin) {
 bool MyMesh::setLocalTxPower(int8_t dbm) {
   if (dbm < -9 || dbm > MAX_LORA_TX_POWER) return false;
   const int8_t old_power = _prefs.tx_power_dbm;
+  const double before_lat = _prefs.node_lat;
+  const double before_lon = _prefs.node_lon;
   _prefs.tx_power_dbm = dbm;
   if (!savePrefs()) {
     _prefs.tx_power_dbm = old_power;
+    _prefs.node_lat = before_lat;
+    _prefs.node_lon = before_lon;
     return false;
   }
   radio_driver.setTxPower(_prefs.tx_power_dbm);
@@ -2074,6 +2088,13 @@ void MyMesh::handleCmdFrame(size_t len) {
   }
 #endif
 
+  handleStandardCmdFrame(len);
+}
+
+// Keep native command snapshots out of the local CLI call chain. Merely
+// returning early above did not help: ARM GCC reserved this handler's 1 KiB
+// stack frame before dispatching CMD66, on a 4 KiB nRF52 loop-task stack.
+void MyMesh::handleStandardCmdFrame(size_t len) {
   if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
     app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
 
@@ -3662,10 +3683,19 @@ const char* MyMesh::getQuickReplyOverride(uint8_t slot) const {
 bool MyMesh::setQuickReplyOverride(uint8_t slot, const char* text) {
   if (slot >= SMARTUI_QUICK_REPLY_COUNT || !smartui::validQuickReply(text) ||
       storage_recovery_required || _cli_rescue) return false;
-  const NodePrefs before = _prefs;
+  // This setter also runs inside CMD66: avoid a full NodePrefs stack copy.
+  // savePrefs() refreshes coordinates, so roll those back too on failure.
+  char before[sizeof(_prefs.quick_replies[slot])];
+  memcpy(before, _prefs.quick_replies[slot], sizeof(before));
+  const double before_lat = _prefs.node_lat;
+  const double before_lon = _prefs.node_lon;
   memset(_prefs.quick_replies[slot], 0, sizeof(_prefs.quick_replies[slot]));
   memcpy(_prefs.quick_replies[slot], text, strlen(text));
-  return commitPrefsOrRollback(before);
+  if (savePrefs()) return true;
+  memcpy(_prefs.quick_replies[slot], before, sizeof(before));
+  _prefs.node_lat = before_lat;
+  _prefs.node_lon = before_lon;
+  return false;
 }
 
 bool MyMesh::sendQuickReply(const char* text) {

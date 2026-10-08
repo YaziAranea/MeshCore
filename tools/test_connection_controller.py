@@ -1574,6 +1574,46 @@ static std::string cli(ConnectionController& controller, const char* command, bo
   return reply;
 }
 
+static void testCliQuickReplies() {
+  quarantined = cli_rescue = reply_save_fail = false;
+  RecoveryFixture f;
+  f.boot();
+  quick_replies[0].clear();
+  assert(cli(f.controller, "ui reply get 1", false) == "OK ui reply slot=1 hex=-");
+  assert(cli(f.controller, "ui reply set 1 d094d0b0") == "OK ui reply_saved slot=1");
+  assert(cli(f.controller, "ui reply get 1") == "OK ui reply slot=1 hex=d094d0b0");
+  const std::string before = quick_replies[0];
+  for (const char* command : {"ui reply", "ui reply get", "ui reply set", "ui reply set 1", "ui reply set 1 ",
+      "ui reply get 0", "ui reply get 10", "ui reply get 1 junk", "ui reply set 1 00", "ui reply set 1 0a",
+      "ui reply set 1 c080", "ui reply set 1 eda080", "ui reply set 1 f4908080", "ui reply set 1 zz", "ui reply set 1 6"}) {
+    assert(cli(f.controller, command) == "ERR ui invalid");
+    assert(quick_replies[0] == before);
+  }
+  assert(cli(f.controller, "ui reply set 1 61", false) == "ERR ui readonly");
+  quarantined = true;
+  assert(cli(f.controller, "ui reply set 1 61") == "ERR ui readonly");
+  assert(cli(f.controller, "ui reply get 1", false) == "OK ui reply slot=1 hex=d094d0b0");
+  quarantined = false;
+  reply_save_fail = true;
+  assert(cli(f.controller, "ui reply set 1 61") == "ERR ui storage");
+  reply_save_fail = false;
+  assert(quick_replies[0] == before);
+  for (size_t capacity = 0; capacity < 157; ++capacity) {
+    char guarded[159]; memset(guarded, 0x5a, sizeof(guarded));
+    assert(f.controller.handleCliCommand("ui reply set 1 61", guarded + 1, capacity, true));
+    assert(guarded[0] == 0x5a && guarded[158] == 0x5a && quick_replies[0] == before);
+  }
+  const std::string max = "ui reply set 9 " + std::string(128, '6');
+  assert(cli(f.controller, max.c_str()) == "OK ui reply_saved slot=9");
+  assert(cli(f.controller, "ui reply get 9") == "OK ui reply slot=9 hex=" + std::string(128, '6'));
+  assert(cli(f.controller, (max + "66").c_str()) == "ERR ui invalid");
+  assert(cli(f.controller, "ui reply set 1 -") == "OK ui reply_saved slot=1");
+  assert(quick_replies[0].empty());
+  assert(cli(f.controller, "ui mode usb") == "OK ui mode target=usb state=pending");
+  assert(cli(f.controller, "ui reply set 1 61") == "ERR ui busy");
+  assert(quick_replies[0].empty());
+}
+
 static void testCliConnectionControl() {
   quarantined = cli_rescue = false;
 #if defined(ESP32)
@@ -2209,6 +2249,7 @@ int main() {
   testDeviceSettingsConsole();
   testPhysicalUsbServiceEntry();
   testApiConnectionControl();
+  testCliQuickReplies();
   testCliConnectionControl();
   return 0;
 }

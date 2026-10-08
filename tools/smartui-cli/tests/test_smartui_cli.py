@@ -4,7 +4,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from smartui_cli import CliClient, CliError, decode_reply, discover, encode_command, matches, record, is_friendly, mutates
+from smartui_cli import CliClient, CliError, decode_reply, discover, encode_command, matches, record, is_friendly, mutates, EXTENDED_KEYS
 from transports import FrameDecoder, StreamTransport
 
 UPSTREAM_WRITES = ("set name Дача", "set pin 654321", "set tx 20", "set af 2.5", "set dutycycle 10",
@@ -24,6 +24,20 @@ FRIENDLY_WRITES = ("set volume 5", "set vibration on", "set vibration off", "set
                    "set gps 0", "set battery_protection on", "set agc_reset 1", "set fem.lna on", "set fem.pa off",
                    "set sound.bridge on", "set adc 4.9", "set adc.multiplier 4.900000", "set advert 120",
                    "test notification", "adc preview 3800", "adc apply 7", "adc reset", "adc service start")
+
+class ExtendedCommands(unittest.TestCase):
+    def test_all_extended_keys_are_bounded_and_classified(self):
+        for key in EXTENDED_KEYS.split('|'):
+            for cmd in ('get '+key, 'set '+key+' 1'):
+                self.assertTrue(is_friendly(cmd))
+                self.assertTrue(encode_command('AA',cmd).startswith(b'B'))
+            self.assertTrue(mutates('set '+key+' 1'))
+        for cmd in ('ui name 6162','ui tx set 20','ui reply set 1 6162'):
+            self.assertTrue(mutates(cmd))
+        self.assertTrue(is_friendly('set vibe_pin -1'))
+        with self.assertRaises(CliError):
+            encode_command('AA','set tone_pin 2\nreboot')
+
 
 class Board:
     def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None):

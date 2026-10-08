@@ -1,8 +1,8 @@
 # Прошивка готового UF2 или BIN
 
-Эта ветка описывает единый `SmartUI 0.15` для семи плат. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех четырёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает одиннадцать прошивок с общим исходным commit.
+Эта ветка описывает единый `SmartUI 0.16` для семи плат. Контрольные суммы: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для всех четырёх ESP32-S3. Один `RELEASE-MANIFEST.json` связывает одиннадцать прошивок с общим исходным commit.
 
-[Изменения 0.15](../RELEASE_NOTES_SmartUI_0.15_RU.md); [исторические границы исправлений аудита 0.06](AUDIT_FIXES_0.06_RU.md). Сообщение о чёрном экране/бутлупе V4.3 после app-only update не объявляется исправленным: нужны загрузочный лог и точный файл с SHA256. Не используйте Erase или merged как диагностический эксперимент.
+[Изменения 0.16](../RELEASE_NOTES_SmartUI_0.16_RU.md); [исторические границы исправлений аудита 0.06](AUDIT_FIXES_0.06_RU.md). Сообщение о чёрном экране/бутлупе V4.3 после app-only update не объявляется исправленным: нужны загрузочный лог и точный файл с SHA256. Не используйте Erase или merged как диагностический эксперимент.
 
 > [!WARNING]
 > **Любой ESP32 `merged.bin` — только чистая установка со сбросом данных.**
@@ -28,18 +28,18 @@
 
 | Плата | UF2 |
 |---|---|
-| Heltec T096 FEM ON | `T096_UI_0.15.uf2` |
-| Heltec T114 с TFT | `T114_UI_0.15.uf2` |
-| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_0.15.uf2` |
+| Heltec T096 FEM ON | `T096_UI_0.16.uf2` |
+| Heltec T114 с TFT | `T114_UI_0.16.uf2` |
+| ProMicro nRF52840 + Heltec RA62 | `ProMicro_RA62_UI_0.16.uf2` |
 
 Для ближайшего отката скачивайте файл своей платы и манифест из [SmartUI 0.11](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.11). Более старые выпуски также сохранены.
 
 | ESP32-S3 цель | Чистая установка / Web Flasher | Обновление приложения |
 |---|---|---|
-| Heltec V3 OLED | `Heltec_V3_UI_0.15-merged.bin` | `Heltec_V3_UI_0.15-update.bin` |
-| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_0.15-merged.bin` | `Heltec_V4.3_UI_0.15-update.bin` |
-| Wireless Paper FULL | `Paper_UI_0.15-merged.bin` | `Paper_UI_0.15-update.bin` |
-| Heltec V4 R8 OLED FEM ON | `Heltec_V4_R8_UI_0.15-merged.bin` | `Heltec_V4_R8_UI_0.15-update.bin` |
+| Heltec V3 OLED | `Heltec_V3_UI_0.16-merged.bin` | `Heltec_V3_UI_0.16-update.bin` |
+| Heltec V4.3 OLED FEM ON | `Heltec_V4.3_UI_0.16-merged.bin` | `Heltec_V4.3_UI_0.16-update.bin` |
+| Wireless Paper FULL | `Paper_UI_0.16-merged.bin` | `Paper_UI_0.16-update.bin` |
+| Heltec V4 R8 OLED FEM ON | `Heltec_V4_R8_UI_0.16-merged.bin` | `Heltec_V4_R8_UI_0.16-update.bin` |
 
 Не используйте файл ProMicro RA62 для FakeTec/HT-RA62.
 
@@ -65,7 +65,7 @@ SHA-256 и запишите приложение по `0x10000` **без Erase F
 
 **V3 уже очищена, после Erase появился `STORAGE ERROR`:**
 
-1. Заново скачайте `Heltec_V3_UI_0.15-merged.bin`
+1. Заново скачайте `Heltec_V3_UI_0.16-merged.bin`
    и актуальный `SHA256SUMS-ESP32.txt` из того же выпуска.
 2. Проверьте контрольную сумму. В общем `RELEASE-MANIFEST.json` запись V3
    должна содержать `storage.v3_fs2_recovery: true`; внутри прошивки сохранён маркер `FS2`.
@@ -150,7 +150,7 @@ Wireless Paper не выводит PIN самопроизвольно: запу�
 
 ## Что проверить после запуска
 
-- Заставка показывает `MeshCore` и короткое `0.15`. В `Настройки → Сервис → О прошивке` доступны SmartUI, Core и идентификатор исходников; USB-команда `info` сообщает также плату и подключения. Встроенные маркеры проверяются валидатором публикации.
+- Заставка показывает `MeshCore` и короткое `0.16`. В `Настройки → Сервис → О прошивке` доступны SmartUI, Core и идентификатор исходников; USB-команда `info` сообщает также плату и подключения. Встроенные маркеры проверяются валидатором публикации.
 - Дисплей соответствует ориентации и размеру платы.
 - Один щелчок листает вперёд, двойной — назад, длинный — выбирает.
 - BLE подключается и синхронизирует время/контакты.

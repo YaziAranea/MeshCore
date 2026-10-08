@@ -8,7 +8,7 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.15"
+VERSION = "0.16"
 ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}.zip"
 DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
@@ -21,6 +21,7 @@ SOURCES = (
     "tools/smartui-cli/transports.py",
     "tools/smartui-cli/tests/test_smartui_cli.py",
     "tools/usb-helper/api.js",
+    "tools/usb-helper/core.js",
     "tools/usb-helper/test_api.js",
     "tools/usb-helper/test_api_fixture.js",
     "tools/usb-helper/presets.js",
@@ -69,7 +70,7 @@ def package(output, commit, *, root=ROOT, development=False):
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 1.9"
+    helper = "USB Helper 2.0"
     payloads["README.md"] = (
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "

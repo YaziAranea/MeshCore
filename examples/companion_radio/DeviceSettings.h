@@ -30,6 +30,22 @@ struct DeviceSettingsState {
   uint8_t fem_lna = 0;
   uint8_t fem_pa = 0;
   uint8_t bridge = 0;
+  int8_t led_pin = -1;
+  int8_t tone_pin = -1;
+  int8_t vibe_pin = -1;
+  uint8_t tone_8bit = 0;
+  uint8_t high_drive = 0;
+  uint16_t resonance_hz = 3000;
+  uint8_t offline_dm_led = 1;
+  uint8_t ble_dm_led = 1;
+  uint8_t msg_popup = 1;
+  uint8_t ui_font = 0;
+  uint8_t ui_theme = 0;
+  uint8_t ui_top_color = 1;
+  uint8_t ui_bottom_color = 0;
+  uint8_t backlight_timeout = 0;
+  uint8_t advert_location = 0;
+  uint32_t gps_interval = 0;
 };
 
 struct DeviceSettingsCaps {
@@ -51,6 +67,18 @@ struct DeviceSettingsCaps {
   bool fem_pa = false;
   bool bridge = false;
   bool adc_service = false;
+  bool notify_pins = false;
+  bool tone_8bit = false;
+  bool high_drive = false;
+  bool resonance = false;
+  bool separate_melodies = false;
+  bool phone_gps = false;
+  bool colors = false;
+  bool profiles = false;
+  bool night_theme = false;
+  uint8_t font_count = 0;
+  uint8_t theme_count = 0;
+  uint8_t notify_mask = 0;
 };
 
 struct DeviceSettingsHooks {
@@ -75,6 +103,11 @@ struct DeviceSettingsHooks {
   void (*adcService)(const char* action, char* reply, size_t capacity,
                      bool allow_mutation) = nullptr;
   void (*adcCommitted)() = nullptr;
+  // Board-owned allowlist; options are actual Arduino pin numbers, not GPIO
+  // arithmetic. Current peripheral/bridge ownership is checked on every write.
+  bool (*pinAllowed)(const char* key, int pin) = nullptr;
+  void (*pinOptions)(const char* key, char* out, size_t capacity) = nullptr;
+  int (*pinValue)(const char* key) = nullptr;
 };
 
 class DeviceSettings {
@@ -101,6 +134,8 @@ private:
   bool commit(const DeviceSettingsState& before, const DeviceSettingsState& after,
               bool battery_changed);
   bool handleApi(const char* command, char* reply, size_t capacity, bool allow_mutation);
+  bool handleSettings(const char* command, char* reply, size_t capacity, bool allow_mutation);
+  bool handleExtended(const char* command, char* reply, size_t capacity, bool allow_mutation);
 };
 
 }  // namespace smartui

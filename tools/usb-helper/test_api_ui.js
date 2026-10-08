@@ -3,8 +3,9 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:url'),{chromium}=require('playwright');
 const {installApiMock}=require('./test_api_fixture');
+const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_1.9.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.0.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -30,6 +31,39 @@ async function geometry(page){
     return result;
   });assert.deepEqual(problems,[]);
 }
+
+test('0.16 full controls use firmware schemas; safe pin consent, drafts, name/TX and phrases work',async()=>{
+  const f=await fixture({console:1,meshcore:1,firmware:'0.16',manualAdc:true,...fullSettingsFixture()});
+  try{const p=f.page;await connect(p);
+    assert.deepEqual(await p.locator('#api-setting-tone_pin option').evaluateAll(nodes=>nodes.map(n=>n.value)),['29','31','33','34','35','36','37','39','43']);
+    for(const key of ['ui_theme','led_pin'])assert.equal(await p.locator('#api-setting-'+key).isEnabled(),true);
+    for(const key of ['profile','melody_dm','melody_mention'])assert.equal(await p.locator('#api-setting-'+key).isDisabled(),true);
+    assert.deepEqual(await p.locator('#api-setting-gps_source option').evaluateAll(nodes=>nodes.map(n=>n.value)),['0']);
+    assert.equal(await p.locator('#api-setting-vibration').isDisabled(),true);
+    await p.locator('#api-settings-filter').fill('tone_pin');
+    assert.equal(await p.locator('#api-settings-fields .device-panel:visible').count(),1);
+    await p.locator('#api-settings-filter').fill('');
+    await p.locator('#api-adc summary').click();assert.equal(await p.locator('#api-adc-manual-value').isEnabled(),true);
+    await p.locator('#api-setting-volume').selectOption('5');await p.locator('#api-setting-tone_pin').selectOption('33');
+    await p.getByRole('button',{name:'Сохранить CLI: Вывод звука',exact:true}).click();await p.locator('#confirm-no').click();assert.equal(await p.evaluate(()=>__apiMock.settings.tone_pin),31);
+    await p.getByRole('button',{name:'Сохранить CLI: Вывод звука',exact:true}).click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.equal(await p.evaluate(()=>__apiMock.settings.tone_pin),33);assert.equal(await p.locator('#api-setting-volume').inputValue(),'5');
+    await p.locator('#node-name').fill('Моя нода');await p.locator('#node-name-save').click();await p.locator('#confirm-yes').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.meshcore.name),'Моя нода');
+    await p.locator('#node-tx').fill('17');await p.locator('#node-tx-save').click();await p.locator('#confirm-yes').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.meshcore.tx),'17');
+    await p.locator('#api-phrases-load').click();await ready(p);await p.locator('#api-phrase-1').fill('Уже еду');await p.locator('#api-phrase-save-1').click();await ready(p);assert.equal(await p.evaluate(()=>__apiMock.phrases[0]),'Уже еду');
+    await p.locator('#api-settings').evaluate(section=>{const caption=document.createElement('p');caption.className='hint';caption.textContent='Симуляция T096 · SmartUI 0.16. Физическая плата не подключена.';section.prepend(caption);});
+    await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.0-settings-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-settings').screenshot({path:path.join(output,'helper-2.0-settings-mobile.png')});
+  }finally{await f.close();}
+});
+
+test('companion mode change needs consent and is confirmed only through mode status and readback',async()=>{
+  const f=await fixture({wifi:false});try{const p=f.page;await connect(p);assert.equal(await p.locator('#api-mode-wifi').isDisabled(),true);
+    await p.locator('#api-mode-ble').click();await p.locator('#confirm-no').click();assert.equal(await p.evaluate(()=>__apiMock.mode),'usb');
+    await p.locator('#api-mode-ble').click();await p.locator('#confirm-yes').click();await ready(p);
+    assert.equal(await p.evaluate(()=>__apiMock.mode),'ble');assert.match(await p.locator('#api-mode-result').textContent(),/подтверждён нодой/);
+  }finally{await f.close();}
+});
 
 test('ADC service CLI explicit start, source expiry, save and disconnect with one writer',async()=>{
   const f=await fixture({caps:{adc_service:1}});try{const p=f.page;await connect(p);
@@ -266,8 +300,8 @@ test('0.15 console help presets never send themselves and TX setter confirms wit
     await p.locator('#api-command').fill('melody 1');await p.locator('#api-command-send').click();await ready(p);
     assert.match(await p.locator('#api-command-result').textContent(),/1: Трель/);
     assert.doesNotMatch(await p.locator('#api-log').textContent(),/set tx|Трель|help sound/);
-    await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-1.9-console-desktop.png')});
-    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-1.9-console-mobile.png')});
+    await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.0-console-desktop.png')});
+    await p.setViewportSize({width:390,height:844});await geometry(p);await p.locator('#api-developer').screenshot({path:path.join(output,'helper-2.0-console-mobile.png')});
   }finally{await f.close();}
 });
 

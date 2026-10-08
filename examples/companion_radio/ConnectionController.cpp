@@ -1038,6 +1038,8 @@ const char* ConnectionController::wifiStageName() const {
 bool ConnectionController::handleCliCommand(const char* command, char* reply,
                                             size_t capacity, bool allow_mutation) {
   if (!command) return false;
+  if (strcmp(command, "ui reply") == 0 || strncmp(command, "ui reply ", 9) == 0)
+    return handleCliQuickReply(command, reply, capacity, allow_mutation);
   const bool connection = strcmp(command, "ui connection") == 0;
   const bool wifi = strcmp(command, "ui wifi") == 0 || strncmp(command, "ui wifi ", 8) == 0;
   const bool mode = strcmp(command, "ui mode") == 0 || strncmp(command, "ui mode ", 8) == 0;
@@ -1346,6 +1348,67 @@ void ConnectionController::handleDeviceSettingsCommand(const char* line) {
     printConsole("\r\n");
   }
   secureZero(_settings_response, sizeof(_settings_response));
+}
+
+bool ConnectionController::handleCliQuickReply(const char* command, char* reply,
+                                                size_t capacity, bool allow_mutation) {
+  if (!reply || !capacity) return true;
+  auto respond = [&](const char* text) { snprintf(reply, capacity, "%s", text); };
+  if (capacity < 157) { respond("ERR ui buffer"); return true; }
+  size_t length = 0;
+  while (length <= 156 && command[length]) {
+    const uint8_t c = static_cast<uint8_t>(command[length++]);
+    if (c < 0x20 || c > 0x7e) { respond("ERR ui invalid"); return true; }
+  }
+  if (length > 156) { respond("ERR ui invalid"); return true; }
+  const bool get = strncmp(command, "ui reply get ", 13) == 0;
+  const bool set = strncmp(command, "ui reply set ", 13) == 0;
+  if ((!get && !set) || length < 14) { respond("ERR ui invalid"); return true; }
+  const char* value = command + 13;
+  if (value[0] < '1' || value[0] > '9' ||
+      (get ? value[1] != 0 : value[1] != ' ')) {
+    respond("ERR ui invalid"); return true;
+  }
+  if (!_hooks.getQuickReply || !_hooks.setQuickReply) {
+    respond("ERR ui unsupported"); return true;
+  }
+  const uint8_t slot = static_cast<uint8_t>(value[0] - '1');
+  if (get) {
+    const char* text = _hooks.getQuickReply(slot);
+    if (!smartui::validQuickReply(text)) { respond("ERR ui internal"); return true; }
+    size_t used = static_cast<size_t>(snprintf(reply, capacity, "OK ui reply slot=%u hex=", slot + 1));
+    static const char digits[] = "0123456789abcdef";
+    if (!text[0]) reply[used++] = '-';
+    for (size_t i = 0; text[i]; ++i) {
+      const uint8_t byte = static_cast<uint8_t>(text[i]);
+      reply[used++] = digits[byte >> 4];
+      reply[used++] = digits[byte & 15];
+    }
+    reply[used] = 0;
+    return true;
+  }
+  if (!allow_mutation || !deviceApiWritesAllowed()) { respond("ERR ui readonly"); return true; }
+  if (deviceApiBusy()) { respond("ERR ui busy"); return true; }
+  const char* hex = value + 2;
+  const size_t size = strcmp(hex, "-") == 0 ? 0 : strlen(hex);
+  char text[SMARTUI_QUICK_REPLY_MAX_BYTES + 1] = {};
+  bool valid = size <= SMARTUI_QUICK_REPLY_MAX_BYTES * 2 && size % 2 == 0 && hex[0];
+  for (size_t i = 0; valid && i < size; i += 2) {
+    uint8_t byte = 0;
+    for (unsigned half = 0; half < 2; ++half) {
+      const char c = hex[i + half];
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) { valid = false; break; }
+      byte = static_cast<uint8_t>((byte << 4) | (c <= '9' ? c - '0' : c - 'a' + 10));
+    }
+    if (!byte) valid = false;
+    text[i / 2] = static_cast<char>(byte);
+  }
+  valid = valid && smartui::validQuickReply(text);
+  if (!valid) respond("ERR ui invalid");
+  else if (!_hooks.setQuickReply(slot, text)) respond("ERR ui storage");
+  else snprintf(reply, capacity, "OK ui reply_saved slot=%u", slot + 1);
+  secureZero(text, sizeof(text));
+  return true;
 }
 
 void ConnectionController::handleQuickReplyCommand(const char* line) {
