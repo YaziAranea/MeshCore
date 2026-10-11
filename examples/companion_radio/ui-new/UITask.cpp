@@ -7,6 +7,7 @@
 #include "QuickTargetUi.h"
 #include "SettingUndo.h"
 #include "CheckedUiSnapshot.h"
+#include "OptionalTonePins.h"
 #if SMARTUI_CONNECTION_SELECTOR
   #include "ConnectionUiPolicy.h"
   #include "../ConnectionController.h"
@@ -4504,7 +4505,12 @@ class HomeScreen : public UIScreen {
 #endif
     switch (group) {
       case 0: return "Уведомления";
-      case 1: return "Звук и вибро";
+      case 1:
+#if UI_OPTIONAL_NOTIFY_TONE && !UI_NOTIFY_GPIO_SELECT
+        return "Звук";
+#else
+        return "Звук и вибро";
+#endif
       case 2: return "Экран";
       case 3:
 #if ENV_INCLUDE_GPS == 1 || UI_PHONE_GPS == 1
@@ -5554,6 +5560,16 @@ class HomeScreen : public UIScreen {
     } else
 #endif
     {
+#if UI_OPTIONAL_NOTIFY_TONE
+      if (page == HomePage::ALERT_TONE_PIN) {
+        _notify_picker.add(-1);
+        for (int8_t pin : smartui::optional_tone_gpio_pins) {
+          if (pin >= 0 && _task->isDeviceSettingsPinAllowed("tone_pin", pin))
+            _notify_picker.add(pin);
+        }
+      } else
+#endif
+      {
 #if UI_NOTIFY_GPIO_SELECT
 #if defined(PIN_MSG_TONE) && UI_TONE_BRIDGE_PAGE == 1
       if (page == HomePage::ALERT_TONE_PIN && _task->isNotifyToneBridgeEnabled()) {
@@ -5564,6 +5580,10 @@ class HomeScreen : public UIScreen {
       for (size_t i = 0; i < sizeof(notify_gpio_pins) / sizeof(notify_gpio_pins[0]); i++) {
         int pin = notify_gpio_pins[i];
         if (isNotifyGpioPinBlockedByBuild(pin)) continue;
+#if UI_OPTIONAL_NOTIFY_TONE
+        const char* role = page == HomePage::ALERT_LED ? "led_pin" : "vibe_pin";
+        if (!_task->isDeviceSettingsPinAllowed(role, pin)) continue;
+#endif
 #if UI_TONE_BRIDGE_PAGE == 1
         if (_task->isNotifyToneBridgeEnabled() &&
             (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) continue;
@@ -5574,6 +5594,7 @@ class HomeScreen : public UIScreen {
       _task->showAlert("Вывод фиксирован", 900);
       return;
 #endif
+      }
     }
     _notify_picker.begin(notifyPickerActiveValue());
     _page = HomePage::NOTIFY_PICKER;
@@ -5619,7 +5640,8 @@ class HomeScreen : public UIScreen {
         if (_notify_picker_page == HomePage::ALERT_TONE_RESONANCE) format = "%d Гц";
 #endif
 #endif
-        snprintf(label, sizeof(label), format, value);
+        if (value < 0) snprintf(label, sizeof(label), "ВЫКЛ");
+        else snprintf(label, sizeof(label), format, value);
       } else {
         snprintf(label, sizeof(label), "Отмена");
       }
@@ -6500,7 +6522,13 @@ class HomeScreen : public UIScreen {
       return true;
     }
 #endif
-    if (page == HomePage::ALERT_VIBE_PIN) return true;
+    if (page == HomePage::ALERT_VIBE_PIN) {
+#if UI_OPTIONAL_NOTIFY_TONE && !UI_NOTIFY_GPIO_SELECT
+      return false;
+#else
+      return true;
+#endif
+    }
     if (page == HomePage::RADIO) return true;
 #if UI_CLIENT_REPEAT_PAGE == 1
     if (page == HomePage::CLIENT_REPEAT) return true;
@@ -11168,18 +11196,6 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 #ifdef PIN_MSG_TONE
   configureMsgTonePin(_node_prefs ? _node_prefs->notify_tone_pin : PIN_MSG_TONE);
-  int tone_pin = getMsgTonePin();
-  pinMode(tone_pin, OUTPUT);
-  noTone(tone_pin);
-#ifdef PIN_MSG_ALERT
-  if (tone_pin == getMsgAlertPin()) {
-    digitalWrite(getMsgAlertPin(), PIN_MSG_ALERT_INACTIVE);
-  } else {
-    digitalWrite(tone_pin, LOW);
-  }
-#else
-  digitalWrite(tone_pin, LOW);
-#endif
   _msg_tone_active = false;
   _msg_tone_step = 0;
   _msg_tone_fx_remaining = 0;
@@ -11210,7 +11226,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 }
 
 bool UITask::attachDisplay(DisplayDriver* display) {
-  if (display == NULL) return false;
+  if (display == NULL || shouldDeferPaperDisplay()) return false;
   display->turnOn();
   if (!display->isOn()) return false;
 
@@ -11479,7 +11495,20 @@ void UITask::toggleBoardLeds() {
   showAlert(areBoardLedsEnabled() ? "LED платы: ВКЛ" : "LED платы: ВЫКЛ", 900);
 }
 
+bool UITask::shouldDeferPaperDisplay() const {
+#if defined(HELTEC_WIRELESS_PAPER) && UI_OPTIONAL_NOTIFY_TONE && defined(PIN_MSG_TONE)
+  // E213 refresh/recovery blocks loopTask. Keep the whole frame pending until
+  // the tone scheduler has lowered the output, including inter-note pauses.
+  return _msg_tone_active;
+#else
+  return false;
+#endif
+}
+
 bool UITask::shouldHoldLightSleepLock() const {
+#if UI_OPTIONAL_NOTIFY_TONE && defined(PIN_MSG_TONE)
+  if (_msg_tone_active) return true;
+#endif
   if (hasActiveComposeSession()) return true;
 #if !UI_IMPORTANT_NOTIFY_HOLD_SLEEP_LOCK
   if (false) {}
@@ -11954,6 +11983,7 @@ uint8_t UITask::storedUiFontChoice(uint8_t choice) const {
 
 void UITask::describeDeviceSettings(smartui::DeviceSettingsCaps& c) const {
   c.notify_pins = UI_NOTIFY_GPIO_SELECT != 0;
+  c.tone_pin_selectable = UI_OPTIONAL_NOTIFY_TONE != 0;
   c.tone_8bit = UI_TONE_8BIT_PAGE == 1;
   c.high_drive = UI_TONE_HIGH_DRIVE_PAGE == 1;
   c.resonance = UI_TONE_RESONANCE_PAGE == 1;
@@ -11971,6 +12001,14 @@ void UITask::describeDeviceSettings(smartui::DeviceSettingsCaps& c) const {
 }
 
 bool UITask::isDeviceSettingsPinAllowed(const char* key, int pin) const {
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (strcmp(key, "tone_pin") == 0) {
+    if (!smartui::isOptionalTonePinAllowed(pin)) return false;
+    if (pin == -1) return true;
+    return !isNotifyGpioBlocked(pin) && pin != getNotifyLedPin() &&
+           pin != getNotifyVibePin();
+  }
+#endif
 #if UI_NOTIFY_GPIO_SELECT
   const bool led = strcmp(key, "led_pin") == 0;
   const bool tone = strcmp(key, "tone_pin") == 0;
@@ -12005,6 +12043,22 @@ bool UITask::isDeviceSettingsPinAllowed(const char* key, int pin) const {
 void UITask::deviceSettingsPinOptions(const char* key, char* out, size_t capacity) const {
   if (!out || !capacity) return;
   snprintf(out, capacity, "-");
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (strcmp(key, "tone_pin") == 0) {
+    const int initial = snprintf(out, capacity, "-1");
+    if (initial < 0 || static_cast<size_t>(initial) >= capacity) return;
+    size_t used = initial;
+    for (int8_t pin : smartui::optional_tone_gpio_pins) {
+      if (pin < 0 || !isDeviceSettingsPinAllowed(key, pin)) continue;
+      const int count = snprintf(out + used, capacity - used, ",%d", pin);
+      if (count < 0 || static_cast<size_t>(count) >= capacity - used) {
+        snprintf(out, capacity, "-"); return;
+      }
+      used += count;
+    }
+    return;
+  }
+#endif
 #if UI_NOTIFY_GPIO_SELECT
   size_t used = 0;
   if (strcmp(key, "vibe_pin") == 0) {
@@ -12213,7 +12267,7 @@ uint8_t UITask::getSupportedNotifyMode() const {
   }
 #endif
 #ifdef PIN_MSG_TONE
-  if (!isNotifyGpioBlocked(getMsgTonePin())) {
+  if (getMsgTonePin() >= 0 && !isNotifyGpioBlocked(getMsgTonePin())) {
     mode |= NOTIFY_MODE_TONE;
   }
 #endif
@@ -12522,7 +12576,17 @@ void UITask::cycleNotifyLedPin() {
 
 void UITask::cycleNotifyTonePin() {
 #ifdef PIN_MSG_TONE
-#if UI_NOTIFY_GPIO_SELECT
+#if UI_OPTIONAL_NOTIFY_TONE
+  const int current = getMsgTonePin();
+  int next = -1;
+  bool after_current = current < 0;
+  for (int8_t pin : smartui::optional_tone_gpio_pins) {
+    if (pin < 0) continue;
+    if (after_current && isDeviceSettingsPinAllowed("tone_pin", pin)) { next = pin; break; }
+    if (pin == current) after_current = true;
+  }
+  setNotifyTonePin(next);
+#elif UI_NOTIFY_GPIO_SELECT
 #if UI_TONE_BRIDGE_PAGE == 1
   if (isNotifyToneBridgeEnabled()) {
     char fixed_alert[40];
@@ -12561,6 +12625,9 @@ void UITask::cycleNotifyVibePin() {
 void UITask::setNotifyLedPin(int pin) {
 #if defined(PIN_MSG_ALERT) && UI_NOTIFY_GPIO_SELECT
   if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (!isDeviceSettingsPinAllowed("led_pin", pin)) return;
+#endif
 #if UI_TONE_BRIDGE_PAGE == 1
   if (isNotifyToneBridgeEnabled() &&
       (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
@@ -12586,8 +12653,12 @@ void UITask::setNotifyLedPin(int pin) {
 }
 
 void UITask::setNotifyTonePin(int pin) {
-#if defined(PIN_MSG_TONE) && UI_NOTIFY_GPIO_SELECT
+#if defined(PIN_MSG_TONE) && (UI_NOTIFY_GPIO_SELECT || UI_OPTIONAL_NOTIFY_TONE)
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (!_node_prefs || !isDeviceSettingsPinAllowed("tone_pin", pin)) return;
+#else
   if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+#endif
   if (isNotifyToneBridgeEnabled() || getMsgTonePin() == pin) return;
   const NodePrefs before = *_node_prefs;
   configureMsgTonePin(pin);
@@ -12600,7 +12671,8 @@ void UITask::setNotifyTonePin(int pin) {
     return;
   }
   char alert[32];
-  snprintf(alert, sizeof(alert), "Зумер: D%d", pin);
+  if (pin < 0) snprintf(alert, sizeof(alert), "Зумер: ВЫКЛ");
+  else snprintf(alert, sizeof(alert), "Зумер: D%d", pin);
   showAlert(alert, 900);
   startMsgTone();
 #else
@@ -12611,6 +12683,9 @@ void UITask::setNotifyTonePin(int pin) {
 void UITask::setNotifyVibePin(int pin) {
 #if UI_NOTIFY_GPIO_SELECT
   if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (!isDeviceSettingsPinAllowed("vibe_pin", pin)) return;
+#endif
 #if UI_TONE_BRIDGE_PAGE == 1
   if (isNotifyToneBridgeEnabled() &&
       (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
@@ -12984,7 +13059,9 @@ int UITask::getMsgTonePin() const {
 #if UI_TONE_BRIDGE_PAGE == 1
   if (isNotifyToneBridgeEnabled()) pin = DEFAULT_NOTIFY_TONE_PIN;
 #endif
-#if UI_NOTIFY_GPIO_SELECT
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (!smartui::isOptionalTonePinAllowed(pin) || isNotifyGpioBlocked(pin)) return -1;
+#elif UI_NOTIFY_GPIO_SELECT
   if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyTonePin();
 #endif
   return pin;
@@ -12995,7 +13072,15 @@ void UITask::configureMsgTonePin(int pin) {
   uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
   if (isNotifyToneBridgeEnabled()) pin = DEFAULT_NOTIFY_TONE_PIN;
 #endif
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (!smartui::isOptionalTonePinAllowed(pin) || isNotifyGpioBlocked(pin) ||
+      (pin >= 0 && (pin == getNotifyLedPin() || pin == getNotifyVibePin()))) pin = -1;
 #if UI_NOTIFY_GPIO_SELECT
+  // Vibration is configured after tone at boot/apply. Check the incoming
+  // assignment too, so stale/corrupt preferences cannot drive its hardware.
+  if (pin >= 0 && _node_prefs && pin == _node_prefs->notify_vibe_pin) pin = -1;
+#endif
+#elif UI_NOTIFY_GPIO_SELECT
   if (!isNotifyGpioPinAllowed(pin) || isNotifyGpioBlocked(pin)) pin = getDefaultNotifyTonePin();
 #else
   pin = PIN_MSG_TONE;
@@ -13013,8 +13098,9 @@ void UITask::configureMsgTonePin(int pin) {
   }
 
   _msg_tone_pin = pin;
-  pinMode(_msg_tone_pin, OUTPUT);
-  noTone(_msg_tone_pin);
+  if (_msg_tone_pin >= 0) {
+    pinMode(_msg_tone_pin, OUTPUT);
+    noTone(_msg_tone_pin);
 #ifdef PIN_MSG_ALERT
   if (_msg_tone_pin == getMsgAlertPin()) {
     digitalWrite(getMsgAlertPin(), PIN_MSG_ALERT_INACTIVE);
@@ -13024,11 +13110,16 @@ void UITask::configureMsgTonePin(int pin) {
 #else
   digitalWrite(_msg_tone_pin, LOW);
 #endif
+  }
   _msg_tone_active = false;
   _msg_tone_step = 0;
+  _msg_tone_repeat_left = 0;
   _msg_tone_fx_remaining = 0;
+  _msg_tone_test_frequency = 0;
+  _msg_tone_test_duration = 700;
   _msg_tone_fx_phase = 0;
   _msg_tone_next = 0;
+  _msg_tone_off = 0;
 
   if (_node_prefs != NULL) {
     _node_prefs->notify_tone_pin = _msg_tone_pin;
@@ -13854,6 +13945,7 @@ void UITask::messageAlertHandler() {
 
 #ifdef PIN_MSG_TONE
 void UITask::silenceMsgTonePin(int tone_pin) {
+  if (tone_pin < 0) return;
 #if UI_TONE_BRIDGE_PAGE == 1
   uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
 #endif
@@ -13883,7 +13975,7 @@ uint16_t UITask::getMsgToneOnMillis(uint16_t duration, uint16_t freq) const {
 }
 
 void UITask::startMsgTone(uint8_t tone_id) {
-  if (areNotificationsMuted()) return;
+  if (getMsgTonePin() < 0 || areNotificationsMuted()) return;
   if (notify_tone_count == 0) return;
   if (tone_id == 0xFF) {
     tone_id = _node_prefs ? _node_prefs->notify_tone_system_id : 0;
@@ -13915,7 +14007,7 @@ void UITask::startMsgTone(uint8_t tone_id) {
 }
 
 void UITask::startNotifyToneTest(uint16_t frequency, uint16_t duration) {
-  if (areNotificationsMuted() || frequency < 20 || frequency > 6000) return;
+  if (getMsgTonePin() < 0 || areNotificationsMuted() || frequency < 20 || frequency > 6000) return;
   stopNotifyOutputs();
   _msg_tone_test_frequency = frequency;
   _msg_tone_test_duration = constrain(duration, 40, 2000);
@@ -13932,7 +14024,7 @@ void UITask::startNotifyToneTest(uint16_t frequency, uint16_t duration) {
 void UITask::messageToneHandler() {
   if (!_msg_tone_active) return;
   int tone_pin = getMsgTonePin();
-  if (areNotificationsMuted() || (!areBoardLedsEnabled() && isBoardLedPin(tone_pin))) {
+  if (tone_pin < 0 || areNotificationsMuted() || (!areBoardLedsEnabled() && isBoardLedPin(tone_pin))) {
     silenceMsgTonePin(tone_pin);
     _msg_tone_active = false;
     _msg_tone_step = 0;
@@ -14496,6 +14588,7 @@ bool UITask::handleRawButtonWakeWhenDark() {
   if (!user_btn.isPressed()) return false;
 
   unsigned long now = millis();
+  if (shouldDeferPaperDisplay()) stopNotifyOutputs();
   if (curr != msg_preview) dismissCurrentMessageNotifications();
   _display->turnOn();
   bool reset_to_clock =
@@ -14563,6 +14656,7 @@ void UITask::handleButtonWakeLatch() {
   }
 
   if (_display != NULL && !_display->isOn()) {
+    if (shouldDeferPaperDisplay()) stopNotifyOutputs();
 #if UI_WAKE_DEBUG_LOG
     Serial.printf("[DBG UI] buttonWakeLatch turnOn begin now=%lu\r\n", now);
 #endif
@@ -14605,6 +14699,7 @@ void UITask::handleButtonWakeLatch() {
 }
 
 void UITask::displayRecoverHandler() {
+  if (shouldDeferPaperDisplay()) return;
 #if UI_DISPLAY_RECOVER_WINDOW_MS > 0
   if (_display == NULL || _display->isOn() || _display_recover_until == 0) return;
   unsigned long now = millis();
@@ -14670,6 +14765,7 @@ void UITask::connectionApprovalHandler() {
 
 void UITask::handlePendingPopupWake() {
   if (!_popup_pending || _storage_recovery_active) return;
+  if (shouldDeferPaperDisplay()) return;
   if (!areMsgPopupsEnabled()) {
     _popup_pending = false;
     return;
@@ -14758,6 +14854,12 @@ void UITask::shutdown(bool restart, bool preserve_eink_frame, bool emergency) {
     _next_refresh = 0;
     return;
   }
+
+#if defined(HELTEC_WIRELESS_PAPER) && UI_OPTIONAL_NOTIFY_TONE
+  // Safety/user power transitions outrank a melody; lower the pin before any
+  // synchronous retained e-paper frame or peripheral shutdown.
+  stopNotifyOutputs();
+#endif
 
 #if SMARTUI_CONNECTION_SELECTOR
   // Stop every companion transport during the final shutdown window. Never
@@ -15055,7 +15157,7 @@ void UITask::loop() {
   }
 #endif
 
-  if (_display != NULL && _display->isOn()) {
+  if (_display != NULL && _display->isOn() && !shouldDeferPaperDisplay()) {
 #if UI_DISPLAY_RECOVER_ON_RENDER
     if (smartui::deadlineDueOrImmediate((uint32_t)millis(),
                                         (uint32_t)_next_refresh) && curr) {
@@ -15135,6 +15237,9 @@ void UITask::loop() {
 
     if (_low_batt_strikes >= LOW_BATTERY_SHUTDOWN_CONFIRM_COUNT) {
 
+#if defined(HELTEC_WIRELESS_PAPER) && UI_OPTIONAL_NOTIFY_TONE
+      stopNotifyOutputs();
+#endif
       // show low battery shutdown alert
       // we should only do this for eink displays, which will persist after power loss
       #if defined(THINKNODE_M1) || defined(LILYGO_TECHO) || defined(HELTEC_WIRELESS_PAPER)
@@ -15214,6 +15319,7 @@ void UITask::storageRecoveryRequired(StorageRecoveryReason reason) {
 
 char UITask::checkDisplayOn(char c) {
   if (_display != NULL) {
+    if (!_display->isOn() && shouldDeferPaperDisplay()) stopNotifyOutputs();
     bool checked_display = false;
 #if UI_DISPLAY_VALIDATE_ON_INPUT
     if (_display->isOn()) {

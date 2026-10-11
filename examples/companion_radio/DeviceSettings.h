@@ -76,6 +76,9 @@ struct DeviceSettingsCaps {
   bool bridge = false;
   bool adc_service = false;
   bool notify_pins = false;
+  // Optional external tone output can be selected while sound is disabled.
+  // Separate from notify_pins: Paper exposes tone selection only.
+  bool tone_pin_selectable = false;
   bool tone_8bit = false;
   bool high_drive = false;
   bool resonance = false;

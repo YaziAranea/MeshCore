@@ -4,8 +4,8 @@ function installApiMock(options={}) {
   const enc=new TextEncoder(),hex=text=>Array.from(enc.encode(text),b=>b.toString(16).padStart(2,'0')).join('');
   const mock={
     commands:[],packets:[],requests:0,openCount:0,maxOpen:0,closed:true,readerCount:0,readCalls:0,drop:false,wrong:false,errorNext:null,phrases:Array(9).fill(''),mode:'usb',
-    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...(options.control===1?{night_quiet:1}:{}),...options.caps},
-    settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...(options.control===1?{night_quiet:0}:{}),...options.settings},
+    caps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:2,adc_min:options.adcMin??3.675,adc_max:options.adcMax??6.125,agc_reset:1,fem_lna:1,fem_pa:0,bridge:1,melody_names:1,...(options.soundPreview?{sound_preview:1}:{}),...(options.optionalTone?{schema:1}:{}),...(options.control===1?{night_quiet:1}:{}),...options.caps},
+    settings:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:7,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,agc_reset:0,fem_lna:0,fem_pa:0,bridge:0,...(options.optionalTone?{tone_pin:-1}:{}),...(options.control===1?{night_quiet:0}:{}),...options.settings},
     settingsReadErrors:{...options.settingsReadErrors},
     adcReference:options.adcReference??null,adcSourceMissing:false,wifi:'idle',adcService:{supported:1,active:0,remaining_ms:0,external:1},adcServiceDeadline:0,
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:2,tx_dbm:20,repeat:0,...options.radio},advert:{interval_min:60},
@@ -14,6 +14,7 @@ function installApiMock(options={}) {
       if(options.fragment===false)this.controller.enqueue(bytes);else{this.controller.enqueue(bytes.slice(0,2));this.controller.enqueue(bytes.slice(2,7));this.controller.enqueue(bytes.slice(7));}},
     reply(tag,text){this.emit(Uint8Array.from([29,...enc.encode((this.wrong?'ZZ':tag)+'|'+text)]));},
     handle(request){
+      if(options.optionalTone){const enabled=Number(this.settings.tone_pin>=0);Object.assign(this.caps,{sound:enabled,sound_preview:enabled,melody_max:enabled?2:0});}
       this.packets.push(Array.from(request));
       if(request[0]===22){this.emit(Uint8Array.of(13,options.meshcore?14:13));return;}
       if(request[0]===40){this.emit(Uint8Array.from([21,...enc.encode(options.discovery??(options.oldFirmware?'smartui_api:1':'smartui_cli:1'))]));return;}
@@ -62,7 +63,8 @@ function installApiMock(options={}) {
         else{if(action==='set'){const keys=kind==='radio'?['freq_khz','bw_hz','sf','cr','path_bytes']:['interval_min'];keys.forEach((key,i)=>this[kind][key]=Number(values[i]));}text='OK ui '+kind+' '+Object.entries(this[kind]).map(([k,v])=>k+'='+v).join(' ');}
       }
       else if(cmd.startsWith('ui schema ')){
-        const key=cmd.slice(10),schema=options.schemas?.[key]||{supported:Number(Object.hasOwn(this.settings,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?this.caps.melody_max:key==='volume'?10:1,step:1,options:'-'};
+        const key=cmd.slice(10),schema={...(options.schemas?.[key]||{supported:Number(Object.hasOwn(this.settings,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?this.caps.melody_max:key==='volume'?10:1,step:1,options:'-'})};
+        if(options.optionalTone&&['sound_quiet','volume','melody'].includes(key))schema.supported=this.caps.sound;
         text='OK ui schema key='+key+' '+Object.entries(schema).map(([k,v])=>k+'='+v).join(' ');
       }
       else if(cmd==='ui identity')text='OK ui identity name_hex='+hex(this.meshcore.name)+' max_name_bytes=31';

@@ -8,7 +8,7 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.17"
+VERSION = "0.18"
 ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}.zip"
 DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
@@ -16,6 +16,7 @@ SOURCES = (
     "docs/SMARTUI_CLI_RU.md",
     "docs/CONSOLE_COMMANDS_RU.md",
     "docs/CLI_BOARD_MATRIX_RU.md",
+    "docs/EXTERNAL_BUZZER_RU.md",
     "tools/smartui-cli/README.md",
     "tools/smartui-cli/inspect_device.py",
     "tools/smartui-cli/smartui_cli.py",
@@ -71,12 +72,13 @@ def package(output, commit, *, root=ROOT, development=False):
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 2.4"
+    helper = "USB Helper 2.5"
     payloads["README.md"] = (
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "
         "[Справочник команд](docs/CONSOLE_COMMANDS_RU.md) · "
         "[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md) · "
+        "[Внешний зуммер](docs/EXTERNAL_BUZZER_RU.md) · "
         "[Python и JavaScript SDK](tools/smartui-cli/README.md)\n\n"
         "Это исходники SDK, документация и тесты, не прошивка устройства. "
         f"Для обычной настройки используйте {helper}. "

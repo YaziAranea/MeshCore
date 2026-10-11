@@ -49,6 +49,11 @@ static void apply(bool battery_changed) {
 static DeviceSettingsCaps capabilities() {
   DeviceSettingsCaps resolved = caps;
   resolved.effective_notify_mode = state.important_notify_mode;
+  if (caps.tone_pin_selectable) {
+    resolved.sound = state.tone_pin >= 0;
+    resolved.notify_mask = (caps.notify_mask & ~2U) | (resolved.sound ? 2U : 0U);
+    resolved.effective_notify_mode &= resolved.notify_mask;
+  }
   return resolved;
 }
 static uint16_t readBattery() { return battery; }
@@ -81,10 +86,14 @@ static NightQuietResult setNightQuiet(bool enabled) {
   return NightQuietResult::OK;
 }
 static bool pinAllowed(const char* key, int pin) {
-  return pin == 35 || pin == 36 || (strcmp(key, "vibe_pin") == 0 && pin == -1);
+  return pin == 35 || pin == 36 || (pin == -1 &&
+      (strcmp(key, "vibe_pin") == 0 ||
+       (strcmp(key, "tone_pin") == 0 && caps.tone_pin_selectable)));
 }
 static void pinOptions(const char* key, char* out, size_t capacity) {
-  snprintf(out, capacity, "%s", strcmp(key, "vibe_pin") == 0 ? "-1,35,36" : "35,36");
+  const bool disabled_choice = strcmp(key, "vibe_pin") == 0 ||
+      (strcmp(key, "tone_pin") == 0 && caps.tone_pin_selectable);
+  snprintf(out, capacity, "%s", disabled_choice ? "-1,35,36" : "35,36");
 }
 static void adcCommitted() { ++adc_commits; adc_service_active = false; }
 static void adcService(const char* action, char* reply, size_t capacity, bool writable) {
@@ -769,6 +778,62 @@ int main() {
   caps.display = false;
   CHECK(cliCommand("ui set ui_font 1") == "ERR ui unsupported");
   CHECK(cliCommand("ui schema ui_font").find("supported=0") != std::string::npos);
+
+  // An optional external output remains selectable before sound exists. Paper
+  // exposes only this role; it must not accidentally gain LED/vibration setup.
+  fresh();
+  caps.sound = caps.notify_pins = false;
+  caps.tone_pin_selectable = true;
+  caps.notify_mask = 1;
+  CHECK(cliCommand("ui schema tone_pin") ==
+      "OK ui schema key=tone_pin supported=1 min=-1 max=127 step=1 options=-1,35,36");
+  CHECK(cliCommand("ui schema volume").find("supported=0") != std::string::npos);
+  CHECK(command("settings caps").find("sound=0") != std::string::npos);
+  CHECK(cliCommand("ui set vibe_pin 35") == "ERR ui unsupported");
+  CHECK(cliCommand("ui set led_pin 35") == "ERR ui unsupported");
+  CHECK(cliCommand("ui set tone_pin 35", false) == "ERR ui readonly");
+  CHECK(cliCommand("ui set tone_pin 9") == "ERR ui pin_conflict");
+  CHECK(cliCommand("ui set tone_pin 128") == "ERR ui range");
+  CHECK(cliCommand("ui set tone_pin -2") == "ERR ui invalid");
+  CHECK(saves == 0 && applies == 0 && state.tone_pin == -1);
+  CHECK(cliCommand("ui get important_notify_mode") == "OK ui get key=important_notify_mode value=1");
+  CHECK(command("settings set tone_pin 35") == "OK settings set key=tone_pin value=35");
+  CHECK(state.tone_pin == 35 && persisted.tone_pin == 35 && saves == 1 && applies == 1);
+  CHECK(state.notify_mode == 7 && state.important_notify_mode == 7 && state.muted == 0);
+  CHECK(command("settings caps").find("sound=1") != std::string::npos);
+  CHECK(cliCommand("ui schema volume").find("supported=1") != std::string::npos);
+  CHECK(cliCommand("ui get important_notify_mode") == "OK ui get key=important_notify_mode value=3");
+  state = DeviceSettingsState{};
+  state = persisted;  // Successful selection survives a preferences reload.
+  CHECK(cliCommand("ui get tone_pin") == "OK ui get key=tone_pin value=35");
+  const auto enabled_tone = state;
+  const unsigned enabled_applies = applies;
+  save_ok = false;
+  CHECK(cliCommand("ui set tone_pin -1") == "ERR ui storage");
+  CHECK(memcmp(&state, &enabled_tone, sizeof(state)) == 0 && persisted.tone_pin == 35);
+  CHECK(applies == enabled_applies && capabilities().sound);
+  save_ok = true;
+  CHECK(cliCommand("ui set tone_pin -1") == "OK ui set key=tone_pin value=-1");
+  CHECK(persisted.tone_pin == -1 && applies == enabled_applies + 1);
+  state = DeviceSettingsState{};
+  state = persisted;
+  CHECK(cliCommand("ui get tone_pin") == "OK ui get key=tone_pin value=-1");
+  CHECK(command("settings caps").find("sound=0") != std::string::npos);
+  CHECK(cliCommand("ui schema tone_pin").find("supported=1 min=-1") != std::string::npos);
+  CHECK(cliCommand("ui set volume 5") == "ERR ui unsupported");
+  CHECK(state.notify_mode == 7 && state.important_notify_mode == 7 && state.muted == 0);
+  CHECK(cliCommand("ui set tone_pin 36") == "OK ui set key=tone_pin value=36");
+  CHECK(capabilities().sound && persisted.tone_pin == 36);
+
+  // Fixed-pin nRF and unsupported profiles retain their previous contracts.
+  fresh();
+  caps.notify_pins = true;
+  CHECK(cliCommand("ui schema tone_pin").find("supported=1 min=0") != std::string::npos);
+  CHECK(cliCommand("ui set tone_pin -1") == "ERR ui invalid");
+  caps.sound = false;
+  CHECK(cliCommand("ui schema tone_pin").find("supported=0 min=0") != std::string::npos);
+  CHECK(cliCommand("ui set tone_pin 35") == "ERR ui unsupported");
+  CHECK(saves == 0 && applies == 0);
 
   // Worst-case numeric widths remain complete and within the 480-byte reply.
   fresh();

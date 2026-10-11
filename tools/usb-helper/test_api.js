@@ -123,6 +123,25 @@ test('0.16 SDK classifies all extended settings and never sends new writes durin
   }finally{await f.client.disconnect();}
 });
 
+test('optional tone uses existing SDK commands and keeps signed disable behind the write gate',async()=>{
+  const schemas={tone_pin:{supported:1,min:-1,max:48,step:1,options:'-1,13,14'}};
+  const f=await connected({console:1,optionalTone:true,schemas});try{
+    assert.equal(await f.client.execute('caps sound'),'> 0');
+    assert.equal(api.record(await f.client.execute('ui schema tone_pin'),'OK ui schema').supported,'1');
+    for(const command of ['set tone_pin 13','set tone_pin -1','ui set tone_pin 14','ui set tone_pin -1']){
+      assert.equal(api.developerCommand(command).warning,'pin');
+      assert.match(await f.client.execute(command),/^OK/);
+    }
+    assert.equal(await f.client.execute('get tone_pin'),'> -1');
+    assert.equal(await f.client.execute('caps sound'),'> 0');
+  }finally{await f.client.disconnect();}
+  const ro=await connected({console:1,optionalTone:true,schemas,readonly:true});try{
+    const before=ro.port.commands.length;
+    for(const command of ['set tone_pin 13','set tone_pin -1','ui set tone_pin 13','ui set tone_pin -1'])await assert.rejects(ro.client.execute(command,{mutate:false}),{code:'DENIED'});
+    assert.equal(ro.port.commands.length,before);
+  }finally{await ro.client.disconnect();}
+});
+
 test('0.14 or malformed console marker never receives new commands; upstream still works',async()=>{
   for(const console of [undefined,0,2]){
     const f=await connected({console,meshcore:1});try{const before=f.port.commands.length;

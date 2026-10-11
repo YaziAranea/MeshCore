@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_2.4.html"
-ZIP_NAME = "SmartUI_USB_Helper_2.4.zip"
+HTML_NAME = "SmartUI_USB_Helper_2.5.html"
+ZIP_NAME = "SmartUI_USB_Helper_2.5.zip"
 
 
 def digest(data):
@@ -43,6 +43,7 @@ def package(output):
         "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "docs/CONSOLE_COMMANDS_RU.md": (ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes(),
         "docs/CLI_BOARD_MATRIX_RU.md": (ROOT / "docs/CLI_BOARD_MATRIX_RU.md").read_bytes(),
+        "docs/EXTERNAL_BUZZER_RU.md": (ROOT / "docs/EXTERNAL_BUZZER_RU.md").read_bytes(),
         "docs/SMARTUI_CLI_RU.md": (ROOT / "docs/SMARTUI_CLI_RU.md").read_bytes(),
         "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
         "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),

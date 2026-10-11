@@ -88,7 +88,7 @@ bool supported(const ScalarSetting& item, const DeviceSettingsCaps& c) {
     case Support::BRIDGE: return c.bridge;
     case Support::NOTIFY: return c.notify_mask != 0;
     case Support::PIN_LED: return c.notify_pins && c.unread_led;
-    case Support::PIN_TONE: return c.notify_pins && c.sound;
+    case Support::PIN_TONE: return c.tone_pin_selectable || (c.notify_pins && c.sound);
     case Support::PIN_VIBE: return c.notify_pins;
     case Support::TONE_8BIT: return c.tone_8bit && c.sound;
     case Support::DRIVE: return c.high_drive && c.sound;
@@ -103,6 +103,10 @@ bool supported(const ScalarSetting& item, const DeviceSettingsCaps& c) {
     case Support::NIGHT: return c.night_quiet;
   }
   return false;
+}
+int32_t minimum(const ScalarSetting& item, const DeviceSettingsCaps& c) {
+  if (item.support == Support::PIN_TONE && c.tone_pin_selectable) return -1;
+  return item.minimum;
 }
 int32_t maximum(const ScalarSetting& item, const DeviceSettingsCaps& c) {
   if (strncmp(item.key, "melody", 6) == 0) return c.melody_max;
@@ -536,7 +540,7 @@ bool DeviceSettings::handleExtended(const char* command, char* reply, size_t cap
     }
     const int count = snprintf(reply, capacity,
         "OK settings schema key=%s supported=%u min=%ld max=%ld step=%u options=%s",
-        key, supported(*item, caps) ? 1U : 0U, static_cast<long>(item->minimum),
+        key, supported(*item, caps) ? 1U : 0U, static_cast<long>(minimum(*item, caps)),
         static_cast<long>(maximum(*item, caps)), item->step, options);
     if (count < 0 || static_cast<size_t>(count) >= capacity || count > 156)
       response(reply, capacity, "ERR settings internal");
@@ -566,14 +570,15 @@ bool DeviceSettings::handleExtended(const char* command, char* reply, size_t cap
   }
   if (!allow_mutation) { response(reply, capacity, "ERR settings readonly"); return true; }
   if (!supported(*item, caps)) { response(reply, capacity, "ERR settings unsupported"); return true; }
+  const int32_t lower = minimum(*item, caps);
   int32_t value = 0;
   uint32_t number = 0;
-  if (space && strcmp(space + 1, "-1") == 0 && item->minimum == -1) value = -1;
+  if (space && strcmp(space + 1, "-1") == 0 && lower == -1) value = -1;
   else if (!space || !unsignedNumber(space + 1, number) || number > INT32_MAX) {
     response(reply, capacity, "ERR settings invalid"); return true;
   } else value = number;
-  if (value < item->minimum || value > maximum(*item, caps) ||
-      (value - item->minimum) % item->step != 0 ||
+  if (value < lower || value > maximum(*item, caps) ||
+      (value - lower) % item->step != 0 ||
       (item->support == Support::NOTIFY && (value & ~caps.notify_mask)) ||
       (item->support == Support::GPS_SOURCE && ((value == 0 && !caps.gps) || (value == 1 && !caps.phone_gps)))) {
     response(reply, capacity, "ERR settings range"); return true;

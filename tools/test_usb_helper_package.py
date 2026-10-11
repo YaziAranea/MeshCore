@@ -30,8 +30,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("navigator.serial.requestPort()", html)
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
-        self.assertIn("Помощник 2.4", html)
-        self.assertIn("Помощник 2.4 · MeshCore", html)
+        self.assertIn("Помощник 2.5", html)
+        self.assertIn("Помощник 2.5 · MeshCore", html)
         self.assertIn("SmartUiPresets", html)
         self.assertIn('id="preset-city"', html)
         self.assertIn('id="advert-interval"', html)
@@ -39,8 +39,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)
         self.assertIn("120 секунд", html)
-        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.4.html")
-        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.4.zip")
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.5.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.5.zip")
         self.assertIn("class CliClient", html)
         self.assertIn('id="helper-mode"', html)
         self.assertNotIn('id="api-inbox"', html)
@@ -64,6 +64,7 @@ class HelperPackageTests(unittest.TestCase):
                     helper.HTML_NAME, "README_RU.md", "PRESETS_SOURCE_RU.md", "LICENSE", "SHA256SUMS.txt",
                     "docs/CONSOLE_COMMANDS_RU.md",
                     "docs/CLI_BOARD_MATRIX_RU.md",
+                    "docs/EXTERNAL_BUZZER_RU.md",
                     "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
                     "tools/usb-helper/PRESETS_SOURCE_RU.md",
                     "screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
@@ -75,6 +76,7 @@ class HelperPackageTests(unittest.TestCase):
                 self.assertEqual(archive.read("docs/CONSOLE_COMMANDS_RU.md"),
                                  (helper.ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes())
                 for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
+                             "docs/EXTERNAL_BUZZER_RU.md",
                              "tools/smartui-cli/README.md"):
                     self.assertEqual(archive.read(name), (helper.ROOT / name).read_bytes())
                     for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):

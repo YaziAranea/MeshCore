@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.4.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.5.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -38,7 +38,7 @@ test.before(async () => {
 });
 test.after(async () => { if (browser) await browser.close(); });
 
-function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc, schemas, extendedValues, soundPreview }) {
+function installSerialMock({ supported, readOnly, manualTest, info, replies, localRecovery, settings, settingsCaps, radioFeature, manualAdc, schemas, extendedValues, soundPreview, optionalTone }) {
   if (!supported) {
     Object.defineProperty(Navigator.prototype, 'serial', { configurable: true, get: () => undefined });
     return;
@@ -48,7 +48,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
     replies, localRecovery, quickReplies: Array(9).fill(''), settings, settingsReadErrors:{},
     radio:{freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0},advert:{interval_min:60},
     settingsCaps:{v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125,...settingsCaps},
-    settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0},
+    settingsState:{battery_mv:3800,adc_multiplier:4.9,adc_default:4.9,sound_quiet:0,volume:10,melody:0,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,shutdown_mv:3200,muted:0,...(optionalTone?{tone_pin:-1}:{})},
     adcService:{supported:1,active:0,remaining_ms:0,external:1},identity:'Нода',tx:20,
     settingsRecord(kind,values){return 'OK settings '+kind+' '+Object.entries(values).map(([key,value])=>key+'='+value).join(' ');},
     stage: 'idle', manualTest, readOnly, info, closed: false, ssid: null, password: null,
@@ -64,6 +64,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
       this.emit(passed ? "WiFi test passed. Type 'wifi save' to store it." : 'WiFi test failed; credentials were not saved.');
     },
     command(raw) {
+      if(optionalTone){const enabled=Number(this.settingsState.tone_pin>=0);Object.assign(this.settingsCaps,{sound:enabled,melody_max:enabled?30:0});soundPreview=Boolean(enabled);}
       this.commands.push(raw);
       if (this.stage === 'ssid' || this.stage === 'password') {
         if (raw === 'cancel') { this.stage = 'idle'; this.emit('WiFi setup cancelled.'); return; }
@@ -93,7 +94,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
         else if(command==='settings caps schema')this.emit(schemas?'OK settings caps key=schema value=1':'ERR settings unsupported');
         else if(command==='settings caps sound_preview')this.emit(soundPreview?'OK settings caps key=sound_preview value=1':'ERR settings unsupported');
         else if(command==='settings sound preview')this.emit(''+(!soundPreview?'ERR settings unsupported':this.settingsState.muted?'ERR settings muted':'OK settings sound_preview'));
-        else if(command.startsWith('settings schema ')){const key=command.slice(16),s=schemas?.[key]||{supported:Number(Object.hasOwn(this.settingsState,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'};this.emit('OK settings schema key='+key+' '+Object.entries(s).map(([k,v])=>k+'='+v).join(' '));}
+        else if(command.startsWith('settings schema ')){const key=command.slice(16),s={...(schemas?.[key]||{supported:Number(Object.hasOwn(this.settingsState,key)&&!['vibration','gps'].includes(key)),min:key==='volume'?1:0,max:key==='melody'?30:key==='volume'?10:1,step:1,options:'-'})};if(optionalTone&&['sound_quiet','volume','melody'].includes(key))s.supported=this.settingsCaps.sound;this.emit('OK settings schema key='+key+' '+Object.entries(s).map(([k,v])=>k+'='+v).join(' '));}
         else if(command.startsWith('settings get ')){const key=command.slice(13);this.emit(this.settingsReadErrors[key]?'ERR settings '+this.settingsReadErrors[key]:'OK settings get key='+key+' value='+(this.settingsState[key]??extendedValues?.[key]));}
         else if(command==='settings identity')this.emit('OK settings identity name_hex='+Array.from(new TextEncoder().encode(this.identity),b=>b.toString(16).padStart(2,'0')).join('')+' max_name_bytes=31');
         else if(command.startsWith('settings name ')){const hex=command.slice(14);this.identity=new TextDecoder().decode(Uint8Array.from(hex.match(/../g),b=>parseInt(b,16)));this.emit('OK settings name name_hex='+hex);}
@@ -196,7 +197,7 @@ async function fixture(options = {}) {
   if(options.clock)await page.clock.install({time:new Date('2026-01-01T12:00:00Z')});
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
-  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues,soundPreview:Boolean(options.soundPreview) });
+  await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues,soundPreview:Boolean(options.soundPreview),optionalTone:Boolean(options.optionalTone) });
   await page.goto(pathToFileURL(artifact).href);
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
@@ -223,6 +224,30 @@ async function tab(page, name) {
   assert.equal(await page.locator('[data-page-target="' + name + '"]').getAttribute('aria-selected'), 'true');
 }
 async function ready(page) { await page.waitForFunction(() => !document.getElementById('test').disabled); }
+
+test('console optional buzzer stays selectable when sound is off and refreshes capabilities after each pin save',async()=>{
+  const schemas={tone_pin:{supported:1,min:-1,max:48,step:1,options:'-1,13,14'}};
+  const f=await fixture({settings:true,optionalTone:true,schemas});
+  try{const p=f.page;await connect(p);await tab(p,'sound');await p.waitForFunction(()=>!document.getElementById('setting-tone_pin').disabled);
+    assert.equal(await p.locator('#setting-tone_pin').isVisible(),true);
+    assert.equal(await p.locator('#setting-tone_pin option:checked').textContent(),'Отключён');
+    assert.match(await p.locator('#settings-notify-state').textContent(),/Внешний зуммер отключён/);
+    assert.equal(await p.locator('#setting-volume').isEnabled(),false);
+    assert.equal(await p.locator('#sound-preview').isEnabled(),false);
+    assert.deepEqual(await p.locator('#setting-tone_pin option').evaluateAll(nodes=>nodes.map(n=>n.value)),['-1','13','14']);
+    for(const pin of ['13','-1']){
+      const before=await p.evaluate(()=>__serialMock.commands.length);
+      await p.locator('#setting-tone_pin').selectOption(pin);await confirm(p,'#save-tone_pin',true);
+      await p.waitForFunction(value=>!document.getElementById('setting-tone_pin').disabled&&document.getElementById('setting-tone_pin').value===value&&__serialMock.settingsState.tone_pin===Number(value),pin);
+      assert.equal(await p.locator('#setting-volume').isEnabled(),pin!=='-1');
+      assert.equal(await p.locator('#sound-preview').isEnabled(),pin!=='-1');
+      const commands=await p.evaluate(n=>__serialMock.commands.slice(n),before);
+      assert.deepEqual(commands.filter(c=>/^settings (set|sound preview|test)\b/.test(c)),['settings set tone_pin '+pin]);
+      assert.ok(commands.includes('settings caps'));assert.ok(commands.includes('settings schema tone_pin'));assert.ok(commands.includes('settings schema volume'));
+    }
+    assert.match(await p.locator('#sound-output-state').textContent(),/Вывод звука: отключён/);
+  }finally{await f.close();}
+});
 test('console city presets and auto advert use same controls with confirmation/readback',async()=>{
   const f=await fixture({radioFeature:true,settings:true,info:'SmartUI=0.13 core=1.17.1 build=1234abcd upstream=a27e78e4 capabilities=BLE,USB board=Heltec T114'});
   try{const p=f.page;await connect(p);await tab(p,'radio');await p.waitForFunction(()=>!document.getElementById('radio-refresh').disabled);
@@ -636,7 +661,7 @@ test('firmware preflight stays offline without serial access and displays merged
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
 const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.15');
-test('0.08 through 0.17 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+test('0.08 through 0.18 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
@@ -648,7 +673,8 @@ test('0.08 through 0.17 retain verified melody names; unknown firmware or change
     {version:'0.15',maximum:30,named:true},
     {version:'0.16',maximum:30,named:true},
     {version:'0.17',maximum:30,named:true},
-    {version:'0.18',maximum:30,named:false},
+    {version:'0.18',maximum:30,named:true},
+    {version:'0.19',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},

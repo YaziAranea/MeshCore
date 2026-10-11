@@ -10,6 +10,46 @@ from test_sound_preview_runtime import main as test_sound_preview_runtime
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def tone_boot_source():
+    """Execute actual MyMesh tone initialization/load repair in both profiles."""
+    mesh = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
+    start = mesh.index("#if defined(UI_OPTIONAL_NOTIFY_TONE) && UI_OPTIONAL_NOTIFY_TONE")
+    repair = mesh[start:mesh.index("  if (_prefs.notify_vibe_pin < -1)", start)]
+    initialize = next(line for line in mesh.splitlines()
+                      if "_prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;" in line
+                      and line.strip().startswith("_prefs."))
+    code = '#include <cassert>\n#include <cstdint>\n#include <cstdio>\n'
+    code += 'struct NodePrefs { int8_t notify_tone_pin = -1; };\n'
+    for name, optional, pin in (("optionalTone", 1, -1), ("fixedTone", 0, 13)):
+        code += f'''#define UI_OPTIONAL_NOTIFY_TONE {optional}
+#define PIN_MSG_TONE {pin}
+#define DEFAULT_NOTIFY_TONE_PIN {pin}
+static int {name}(int pin, bool fresh = false) {{
+  NodePrefs _prefs;
+  _prefs.notify_tone_pin = pin;
+  if (fresh) {{ {initialize} }}
+{repair}
+  return _prefs.notify_tone_pin;
+}}
+#undef UI_OPTIONAL_NOTIFY_TONE
+#undef PIN_MSG_TONE
+#undef DEFAULT_NOTIFY_TONE_PIN
+'''
+    return code + r'''
+int main() {
+  assert(optionalTone(35, true) == -1);
+  assert(optionalTone(-1) == -1);
+  assert(optionalTone(35) == 35);
+  assert(optionalTone(-128) == -1);
+  assert(fixedTone(-1, true) == 13);
+  assert(fixedTone(-1) == 13);
+  assert(fixedTone(-128) == 13);
+  assert(fixedTone(35) == 35);
+  puts("PASS production tone boot: optional off/selection/corrupt repair, fixed-pin defaults preserved");
+}
+'''
+
+
 def main():
     test_sound_preview_runtime()
     with tempfile.TemporaryDirectory(prefix="smartui-settings-") as directory:
@@ -44,6 +84,11 @@ def main():
         original = str(paths[0]) if compiler else linux(paths[0])
         runtime_build[runtime_build.index(original.replace("device_settings_test.cpp", "device_settings_runtime.cpp"))] = (
             str(runtime) if compiler else linux(runtime))
+        subprocess.run(runtime_build, check=True)
+        subprocess.run(execute, check=True)
+        # A persisted -1 must remain disabled at boot, while fixed-pin nRF
+        # profiles keep their previous negative-value repair/default behavior.
+        runtime.write_text(tone_boot_source(), encoding="utf-8")
         subprocess.run(runtime_build, check=True)
         subprocess.run(execute, check=True)
         # Exercise the strict fixed-point manual parser under the nRF52

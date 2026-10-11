@@ -95,7 +95,8 @@ bool keyAndUnsigned(const char* command, const char* prefix, char* key,
   memcpy(key, key_start, key_length);
   key[key_length] = 0;
   value = separator + 1;
-  return isUnsigned(value) || (strcmp(key, "vibe_pin") == 0 && strcmp(value, "-1") == 0);
+  return isUnsigned(value) || ((strcmp(key, "vibe_pin") == 0 || strcmp(key, "tone_pin") == 0) &&
+      strcmp(value, "-1") == 0);
 }
 
 bool validBackendReply(const char* reply, size_t limit = SMARTUI_CLI_TEXT_MAX + 1) {

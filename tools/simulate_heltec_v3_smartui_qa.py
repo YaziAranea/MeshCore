@@ -3,7 +3,7 @@
 
 The original five-board release assets stay immutable. V3 adds its own
 128x64 fixtures using the same checked-in glyph tables/geometry helpers,
-but with the actual V3 capability flags: no GPS/FEM or sound group.
+but with the actual V3 capability flags: no GPS/FEM, optional external sound.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from simulate_smartui_ps17_qa import (
 )
 from simulate_v4_3_oled_qa import clock_scene, ble_pin_scene
 from simulate_oled_128x64 import STYLES
-from simulate_dev2_settings import root_menu, auxiliary, help_labels
+from simulate_dev2_settings import root_menu, auxiliary, help_labels, validate_optional_sound
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = "env:Heltec_v3_companion_radio_ble_smartui"
@@ -64,13 +64,15 @@ def source_contract() -> dict:
               "UI_COMPACT_SETTINGS_MENU":"1","UI_SMART_B11_EXTRAS":"1",
               "UI_UNREAD_DIRECT_ONLY":"1","UI_ADC_MULTIPLIER_PAGE":"1",
               "UI_BLE_PIN_PAGE":"1","BLE_PIN_PERSIST_RANDOM":"1",
-              "UI_SOUND_SETTINGS_GROUP":"0","UI_PHONE_GPS":"0",
+              "UI_SOUND_SETTINGS_GROUP":"1","UI_PHONE_GPS":"0",
+              "UI_OPTIONAL_NOTIFY_TONE":"1","PIN_MSG_TONE":"-1",
+              "DEFAULT_NOTIFY_TONE_PIN":"-1",
               "UI_TONE_FALLBACK_TO_ALERT":"0","PIN_USER_BTN":"0"}
     for name,value in expected.items():
         assert macros.get(name)==value, f"V3 {name}: {macros.get(name)} != {value}"
     assert ("D","ENV_INCLUDE_GPS","1") in removed and macros.get("ENV_INCLUDE_GPS")=="0"
     assert not any(name in macros for name in ("PIN_GPS_RX","PIN_GPS_TX","PIN_GPS_EN","BLE_DEBUG_LOGGING"))
-    assert not any(name in macros for name in ("PIN_MSG_TONE","PIN_BUZZER","PIN_VIBRATION","RADIO_FEM_RXGAIN"))
+    assert not any(name in macros for name in ("PIN_BUZZER","PIN_VIBRATION","RADIO_FEM_RXGAIN"))
     header=(ROOT/"src/helpers/ui/SSD1306Display.h").read_text(encoding="utf-8")
     driver=(ROOT/"src/helpers/ui/SSD1306Display.cpp").read_text(encoding="utf-8")
     assert "defined(HELTEC_LORA_V3)" in header and "DisplayDriver(128, 64)" in header
@@ -78,7 +80,7 @@ def source_contract() -> dict:
     for name,advance,bold in STYLES:
         assert f'"{name} {advance}x8"' in driver
     return {"environment":ENV,"dimensions":[128,64],"styles":[s[0] for s in STYLES],
-            "gps":False,"fem":False,"buzzer":False,
+            "gps":False,"fem":False,"buzzer":False,"external_buzzer_optional":True,
             "configuration_sha256":hashlib.sha256(source.encode()).hexdigest(),
             "scope":"V3-local flag interpolation + explicit UI overrides; not a full PlatformIO/C++ preprocessor"}
 
@@ -149,7 +151,10 @@ def run(out: Path, docs: Path | None = None) -> dict:
                 record(profile,f"confirm {target_id} send={selected}",frame)
         for cursor in range(7): record(profile,f"root cursor={cursor}",root_menu(profile,cursor))
     failures=[f"{r['style']}/{r['case']}: {e}" for r in records for e in r["failures"]]
+    sound_checks, sound_failures = validate_optional_sound("Heltec V3", out)
+    failures.extend(sound_failures)
     report={"source_contract":contract,"checks":len(records),"failed":len(failures),
+            "optional_sound_checks":sound_checks,
             "failures":failures,"records":records,
             "limits":"Source-bound UI geometry, real bitmap glyphs and required-value assertions; not whole UITask execution, button timing, electrical or radio testing. Favourites screenshot is an illustrative subset of valid functions."}
     (out/"REPORT.json").write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
@@ -165,7 +170,7 @@ def run(out: Path, docs: Path | None = None) -> dict:
         if docs:
             docs.mkdir(parents=True,exist_ok=True)
             frame.image.resize((512,256),Image.Resampling.NEAREST).save(docs/f"heltec-v3-{name}.png")
-    print(f"Heltec V3 addon source-bound UI QA: {len(records)} passed, 0 failed")
+    print(f"Heltec V3 addon source-bound UI QA: {len(records)+sound_checks} passed, 0 failed")
     return report
 
 

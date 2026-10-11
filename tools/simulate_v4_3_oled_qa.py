@@ -336,6 +336,10 @@ def main() -> int:
     state_checks, state_failures = validate_clock_states()
     failures.extend(state_failures)
     checks = len(STYLES) * len(SCENES) + sweep_checks + state_checks
+    from simulate_dev2_settings import validate_optional_sound
+    sound_checks, sound_failures = validate_optional_sound("V4 R8" if args.board == "r8" else "V4.3", args.out_dir)
+    checks += sound_checks
+    failures.extend(sound_failures)
     if failures:
         for failure in failures:
             print(f"[FAIL] {failure}")

@@ -5,6 +5,8 @@ from contextlib import redirect_stderr, redirect_stdout
 import hashlib
 import io
 import json
+import posixpath
+import re
 import shutil
 import subprocess
 import sys
@@ -58,11 +60,13 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertNotIn("base_source_commit", manifest)
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
-            self.assertIn("SmartUI 0.17", readme)
-            self.assertIn("USB Helper 2.4", readme)
+            self.assertIn("SmartUI 0.18", readme)
+            self.assertIn("USB Helper 2.5", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
             self.assertIn("[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md)", readme)
             self.assertIn("docs/CLI_BOARD_MATRIX_RU.md", kit.SOURCES)
+            self.assertIn("[Внешний зуммер](docs/EXTERNAL_BUZZER_RU.md)", readme)
+            self.assertIn("docs/EXTERNAL_BUZZER_RU.md", kit.SOURCES)
             self.assertNotIn("LOCAL DEVELOPMENT", readme)
             self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md"})
             for entry in manifest["files"]:
@@ -70,6 +74,13 @@ class DeveloperKitTests(unittest.TestCase):
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
             for name in ("docs/SMARTUI_CLI_RU.md",):
                 self.assertIn("../../" + name, archive.read("tools/smartui-cli/README.md").decode())
+            for name in ("README.md", "docs/SMARTUI_CLI_RU.md", "docs/CONSOLE_COMMANDS_RU.md",
+                         "docs/CLI_BOARD_MATRIX_RU.md", "docs/EXTERNAL_BUZZER_RU.md", "tools/smartui-cli/README.md"):
+                for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):
+                    if "://" in link or link.startswith("#"):
+                        continue
+                    linked = posixpath.normpath(posixpath.join(posixpath.dirname(name), link.split("#", 1)[0]))
+                    self.assertIn(linked, archive.namelist(), f"Broken offline documentation link: {name} -> {link}")
 
     def test_deterministic_bytes_and_exact_source_identity(self):
         first = kit.package(self.root / "one", COMMIT, root=self.source).read_bytes()
@@ -79,9 +90,9 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertNotEqual(first, other)
 
     def test_current_release_and_optional_development_names(self):
-        self.assertEqual(kit.VERSION, "0.17")
-        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.17.zip")
-        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.17-development.zip")
+        self.assertEqual(kit.VERSION, "0.18")
+        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.18.zip")
+        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.18-development.zip")
 
     def test_local_secrets_caches_and_unlisted_files_are_excluded(self):
         for name in ("tools/smartui-cli/.env", "tools/smartui-cli/node_modules/test.js",
@@ -136,7 +147,7 @@ class DeveloperKitTests(unittest.TestCase):
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 2.4", readme)
+            self.assertIn("USB Helper 2.5", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))

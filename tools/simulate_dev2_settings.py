@@ -33,7 +33,7 @@ HEADER_TITLES = ("", "Настройки", "Система", "Выход зву�
                  "Резонанс", "Громкость", "Управление", "Сброс ADC", "Избранное 1",
                  "Шрифт", "Тема", "Мелодия", "Часовой пояс", "Дополнительно",
                  "Радио и GPS", "Уведомления", "Защита АКБ", "Подключение",
-                 "Смена режима", "Wi-Fi клиент", "Режим", "Звук и вибро")
+                 "Смена режима", "Wi-Fi клиент", "Режим", "Звук и вибро", "Звук")
 HEADER_ACTIONS = ("", "Открыть", "Закрыть", "Назад", "Изменить", "Выполн.",
                   "Выбрать", "Отмена", "Сбросить", "Подтв.")
 _HEADER_LAYOUTS = {}
@@ -41,7 +41,7 @@ _HEADER_META = {}
 
 
 def header_profile_key(profile):
-    board = "OLED" if profile.board in ("V4.3", "Heltec V3") else profile.board
+    board = "OLED" if profile.board in ("V4.3", "V4 R8", "Heltec V3") else profile.board
     return board, profile.profile
 
 
@@ -385,10 +385,9 @@ def help_labels():
 
 
 def root_menu(profile,cursor=0):
-    labels=["Уведомления","Звук и вибро","Экран",
-            "Радио" if profile.board in ("V4.3","Wireless Paper","Heltec V3") else "Радио и GPS",
+    labels=["Уведомления",sound_group_name(profile),"Экран",
+            "Радио" if profile.board in ("Wireless Paper","Heltec V3") else "Радио и GPS",
             "Система","Дополнительно","Закрыть"]
-    if profile.board in ("Wireless Paper","V4.3","Heltec V3"): labels.remove("Звук и вибро")
     frame=SettingsFrame(profile,"Настройки",True)
     cursor=min(cursor,len(labels)-1)
     heading(frame,"Настройки","Закрыть" if cursor==len(labels)-1 else "Открыть")
@@ -481,13 +480,57 @@ def agc_settings(profile, enabled):
 
 def sound_rows_for(profile):
     # The OLED profile here represents ProMicro, without optional tone style /
-    # resonance / bridge pages. ESP boards omit this entire group.
+    # resonance / bridge pages. Optional ESP outputs start disabled.
+    if profile.board in ("V4.3", "V4 R8", "Heltec V3", "Wireless Paper"):
+        # Example saved melody 0, not a factory-default claim.
+        rows = [("Мелодия", "Пульс"), ("Громкость", "10/10"), ("Выход звука", "ВЫКЛ")]
+        if profile.board != "Wireless Paper":
+            rows.append(("Вибрация", "ВЫКЛ"))
+        return rows
     if profile.board == "OLED":
         return [("Мелодия", "Классика"), ("Громкость", "10/10"),
                 ("Выход звука", "ШТАТН."), ("Вибрация", "ВЫКЛ")]
     return [("Мелодия", "Классика"), ("Громкость", "МАКС"), ("Стиль звука", "ОБЫЧН"),
             ("Резонанс", "3000 Гц"), ("Выход звука", "ШТАТН."),
             ("Тип зуммера", "ОБЫЧН"), ("Вибрация", "ВЫКЛ")]
+
+
+def sound_group_name(profile):
+    return "Звук" if profile.board == "Wireless Paper" else "Звук и вибро"
+
+
+def validate_optional_sound(board, out):
+    """Source-bound menu/picker geometry; pin policy is executed by its C++ test."""
+    from test_optional_tone_pins import configuration, PROFILES as BOARD_PINS
+    configuration()  # Assert actual inherited defaults/gates before rendering.
+    source_contract()
+    assert 'smartui::optional_tone_gpio_pins' in UI
+    assert '_notify_picker.add(-1);' in UI
+    key = {"Heltec V3": "V3", "V4.3": "V43", "V4 R8": "R8", "Wireless Paper": "Paper"}[board]
+    allowed = next(allowed for name, _env, _headless, allowed, _reserved in BOARD_PINS if name == key)
+    labels = ["ВЫКЛ", *[f"GPIO{pin}" for pin in sorted(allowed)]]
+    base_board = "Wireless Paper" if board == "Wireless Paper" else "OLED"
+    checks, failures, preview = 0, [], []
+    for base in [p for p in profiles() if p.board == base_board]:
+        profile = replace(base, board=board)
+        rows = sound_rows_for(profile)
+        assert next(value for label, value in rows if label == "Выход звука") == "ВЫКЛ"
+        assert any(label == "Вибрация" for label, _value in rows) == (board != "Wireless Paper")
+        frames = [("sound group visible", root_menu(profile, 1))]
+        frames += [(f"sound row {cursor}", setting_group(profile, sound_group_name(profile), rows, cursor))
+                   for cursor in range(len(rows) + 1)]
+        for cursor in range(len(labels) + 1):
+            for active in {0, min(cursor, len(labels) - 1)}:
+                frames.append((f"GPIO cursor={cursor} active={active}",
+                               picker(profile, "Выход звука", labels, cursor, active)))
+        for label, frame in frames:
+            checks += 1
+            failures.extend(f"{board}/{profile.profile}/{label}: {error}" for error in frame.violations)
+        if not preview:
+            preview = frames
+    out.mkdir(parents=True, exist_ok=True)
+    make_matrix(preview, out / "optional-external-buzzer.png", columns=3)
+    return checks, failures
 
 
 def docs_previews(configurations):
@@ -573,8 +616,7 @@ def main(no_docs=False):
             checks+=1
             failures.extend(f"{profile.board}/{profile.profile}/ADC reset: {x}" for x in frame.violations)
         groups = [("Система", system_rows)]
-        if profile.board not in ("Wireless Paper", "V4.3", "Heltec V3"):
-            groups.append(("Звук и вибро", sound_rows_for(profile)))
+        groups.append((sound_group_name(profile), sound_rows_for(profile)))
         for title, rows in groups:
             for cursor in range(len(rows)+1):
                 frame=setting_group(profile,title,rows,cursor)
@@ -608,14 +650,13 @@ def main(no_docs=False):
                     ("Управление: LED",auxiliary(profile,"Управление",help_labels(),7,"Назад")),
                     ("Управление: LED выключен",auxiliary(profile,"Управление",help_labels(),8,"Назад"))]
         docs_sheet(aux_scenes, OUT / f"experimental-{board.lower().replace(' ','-')}-settings.png")
-        if board not in ("V4.3", "Wireless Paper", "Heltec V3"):
-            sound_rows = sound_rows_for(profile)
-            sound_scenes = [(f"Звук и вибро: пункт {cursor+1}", setting_group(profile,"Звук и вибро",sound_rows,cursor))
-                            for cursor in sorted({0, min(3,len(sound_rows)-1), len(sound_rows)-1, len(sound_rows)})]
-            sound_name = f"menu-cleanup-{board.lower()}-sound.png"
-            docs_sheet(sound_scenes, OUT / sound_name)
-            if not no_docs:
-                docs_sheet(sound_scenes, ROOT / "docs/assets/ui" / sound_name)
+        sound_rows = sound_rows_for(profile)
+        sound_scenes = [(f"{sound_group_name(profile)}: пункт {cursor+1}", setting_group(profile,sound_group_name(profile),sound_rows,cursor))
+                        for cursor in sorted({0, min(3,len(sound_rows)-1), len(sound_rows)-1, len(sound_rows)})]
+        sound_name = f"menu-cleanup-{board.lower()}-sound.png"
+        docs_sheet(sound_scenes, OUT / sound_name)
+        if not no_docs:
+            docs_sheet(sound_scenes, ROOT / "docs/assets/ui" / sound_name)
         if not no_docs:
             docs_sheet(aux_scenes,ROOT/"docs/assets/ui"/f"experimental-{board.lower().replace(' ','-')}-settings.png")
             docs_sheet([("Настройки: группы", root_menu(profile))],

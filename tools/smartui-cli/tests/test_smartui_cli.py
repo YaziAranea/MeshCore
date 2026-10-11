@@ -40,7 +40,10 @@ class ExtendedCommands(unittest.TestCase):
             self.assertTrue(mutates('set '+key+' 1'))
         for cmd in ('ui name 6162','ui tx set 20','ui reply set 1 6162'):
             self.assertTrue(mutates(cmd))
-        self.assertTrue(is_friendly('set vibe_pin -1'))
+        for command in ('set vibe_pin -1', 'set tone_pin -1'):
+            self.assertTrue(is_friendly(command))
+            self.assertTrue(mutates(command))
+            self.assertEqual(encode_command('AA', command)[4:].decode(), command)
         with self.assertRaises(CliError):
             encode_command('AA','set tone_pin 2\nreboot')
 
@@ -115,6 +118,22 @@ class CliTests(unittest.TestCase):
         client.connect()
         self.addCleanup(client.close)
         return client, board
+
+    def test_optional_tone_signed_disable_uses_existing_commands_and_write_gate(self):
+        client, board = self.connected(console=1)
+        for command in ('set tone_pin 13', 'set tone_pin -1', 'ui set tone_pin 13', 'ui set tone_pin -1'):
+            board.error = 'OK' if command.startswith('set ') else 'OK ui set key=tone_pin value=' + command.split()[-1]
+            self.assertTrue(client.execute(command).startswith('OK'))
+            self.assertEqual(board.requests[-1][4:].decode(), command)
+        board.error = 'OK ui schema key=tone_pin supported=1 min=-1 max=48 step=1 options=-1,13,14'
+        self.assertEqual(record(client.execute('ui schema tone_pin'), 'OK ui schema')['min'], '-1')
+        readonly, transport = self.connected(console=1, readonly=True)
+        before = len(transport.requests)
+        for command in ('set tone_pin 13', 'set tone_pin -1', 'ui set tone_pin 13', 'ui set tone_pin -1'):
+            with self.assertRaises(CliError) as error:
+                readonly.execute(command)
+            self.assertEqual(error.exception.code, 'readonly')
+        self.assertEqual(len(transport.requests), before)
 
     def test_control_marker_gates_new_commands_before_io_and_preserves_old(self):
         for marker in (None, 0, 2):

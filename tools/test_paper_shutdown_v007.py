@@ -94,6 +94,8 @@ struct UITask {
   unsigned _next_refresh = 99;
   int alerts = 0;
   bool button_pressed = false;
+  bool tone_active = true;
+  void stopNotifyOutputs() { tone_active = false; events.push_back("stop"); }
   bool isButtonPressed() const { return button_pressed; }
   void showAlert(const char* message, int duration) {
     assert(!strcmp(message, "Не выключено: память") && duration == 1600);
@@ -121,7 +123,8 @@ int main(int argc, char** argv) {
     display.frames = display.icons = 0; display.labels.clear();
     Board board; Manager manager; UITask task{&board, &display, &manager};
     events.clear(); task.shutdown();
-    assert((events == std::vector<std::string>{"flush", "disable", "frame", "poweroff"}));
+    assert((events == std::vector<std::string>{"flush", "stop", "disable", "frame", "poweroff"}));
+    assert(!task.tone_active);
     assert(board.powered_off == 1 && board.rebooted == 0);
     assert(display.frames == 1 && display.icons == 1);
     assert((display.labels == std::vector<std::string>{"Выключено"}));
@@ -147,7 +150,7 @@ int main(int argc, char** argv) {
     Board board; Manager manager; UITask task{&board, &display, &manager};
     const int updates = stub_update_attempts;
     events.clear(); task.shutdown(false, true, true);
-    assert((events == std::vector<std::string>{"flush", "disable", "poweroff"}));
+    assert((events == std::vector<std::string>{"flush", "stop", "disable", "poweroff"}));
     assert(display.frames == 0 && stub_update_attempts == updates);
     for (auto& row : panel_pixels) for (auto px : row) assert(px == 0x55);
     assert(board.powered_off == 1); ++cases;
@@ -185,7 +188,12 @@ int main(int argc, char** argv) {
     RecordingDisplay display; assert(display.begin());
     Board board; Manager manager; UITask task{&board, &display, &manager};
     events.clear(); task.shutdown(true);
+#if defined(HELTEC_WIRELESS_PAPER)
+    assert((events == std::vector<std::string>{"flush", "stop", "disable", "reboot"}));
+    assert(!task.tone_active);
+#else
     assert((events == std::vector<std::string>{"flush", "disable", "reboot"}));
+#endif
     assert(board.rebooted == 1 && board.powered_off == 0 && display.frames == 0); ++cases;
   }
   {
@@ -194,6 +202,7 @@ int main(int argc, char** argv) {
     Board board; Manager manager; UITask task{&board, &display, &manager};
     the_mesh.flush_ok = false; events.clear(); task.shutdown();
     assert((events == std::vector<std::string>{"flush", "alert"}));
+    assert(task.tone_active); // A rejected shutdown does not cancel sound.
     assert(task.alerts == 1 && task._next_refresh == 0);
     assert(board.powered_off == 0 && board.rebooted == 0 && display.frames == 0);
     task.shutdown(false, true, true);
@@ -250,6 +259,7 @@ def run_host(work: Path, out: Path, paper: bool) -> str:
     ]
     if paper:
         definitions.append("HELTEC_WIRELESS_PAPER=1")
+        definitions.append("UI_OPTIONAL_NOTIFY_TONE=1")
     subprocess.run(prefix + [cxx, "-std=c++17", "-O1", "-Wall", "-Wextra",
         "-I", path(work / "stubs"), "-I", path(work),
         *[f"-D{value}" for value in definitions], path(work / "shutdown.cpp"),

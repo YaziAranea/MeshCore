@@ -283,8 +283,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and public release marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.17" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.17 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.18" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.18 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -377,18 +377,20 @@ for name in target_sections:
     )
 
 check(
-    "V4.3 profile is OLED, FEM-on and never invents a buzzer",
+    "V4.3 profile is OLED, FEM-on with optional sound disabled by default",
     has_all(
         effective["V4.3 OLED"],
         (
             "UI_V4_3_OLED_PROFILE=1",
             "RADIO_FEM_RXGAIN=1",
             "UI_TONE_FALLBACK_TO_ALERT=0",
-            "UI_SOUND_SETTINGS_GROUP=0",
+            "UI_SOUND_SETTINGS_GROUP=1",
+            "UI_OPTIONAL_NOTIFY_TONE=1",
+            "PIN_MSG_TONE=-1",
+            "DEFAULT_NOTIFY_TONE_PIN=-1",
         ),
-    )
-    and "PIN_MSG_TONE" not in effective["V4.3 OLED"],
-    "the requested target is the 128x64 OLED V4.3 with LNA/FEM, not TFT and not a fake tone pin",
+    ),
+    "the 128x64 OLED V4.3 keeps LNA/FEM and no active tone GPIO until explicitly selected",
 )
 
 for name in ("Wireless Paper FULL",):
@@ -396,7 +398,9 @@ for name in ("Wireless Paper FULL",):
         f"{name}: shared e-paper/LoRa rail is protected",
         has_all(
             effective[name],
-            ("AUTO_OFF_MILLIS=0", "MESHCORE_E213_PROFILE_FONTS=1", "UI_SOUND_SETTINGS_GROUP=0"),
+            ("AUTO_OFF_MILLIS=0", "MESHCORE_E213_PROFILE_FONTS=1", "E213_KEEP_SHARED_VEXT_ON=1",
+             "UI_SOUND_SETTINGS_GROUP=1", "UI_OPTIONAL_NOTIFY_TONE=1", "PIN_MSG_TONE=-1",
+             "DEFAULT_NOTIFY_TONE_PIN=-1", "UI_NOTIFY_GPIO_SELECT=0"),
         ),
         "GPIO45/VEXT powers both display and radio; auto-off would kill LoRa",
     )
@@ -487,7 +491,7 @@ check(
 
 check(
     "Notification pages and favorite fallbacks follow board capabilities",
-    "UI_NOTIFICATION_SETTINGS=0" in effective["Wireless Paper FULL"]
+    has_all(effective["Wireless Paper FULL"], ("UI_NOTIFICATION_SETTINGS=1", "UI_OPTIONAL_NOTIFY_TONE=1"))
     and has_all(
         uitask,
         (
@@ -498,7 +502,7 @@ check(
             'snprintf(out, out_len, "ЭКРАН");',
         ),
     ),
-    "boards without any alert/tone output must not expose dead pages or fall back to ALERTS",
+    "Paper exposes optional tone settings while builds without outputs keep their dead-page and favorite guards",
 )
 
 check(
@@ -1526,16 +1530,17 @@ check(
     "V3 enables the shared UI in the six-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.17")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.18")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(
-    "V3 addon is GPS-less OLED with no invented FEM or buzzer",
-    has_all(v3_addon, ("-DENV_INCLUDE_GPS=1", "-D ENV_INCLUDE_GPS=0", "UI_PHONE_GPS=0", "UI_SOUND_SETTINGS_GROUP=0",
-                       "UI_TONE_FALLBACK_TO_ALERT=0"))
-    and "-D RADIO_FEM_RXGAIN" not in v3_addon and "-D PIN_MSG_TONE" not in v3_addon
+    "V3 addon is GPS-less OLED without FEM and with optional tone disabled by default",
+    has_all(v3_addon, ("-DENV_INCLUDE_GPS=1", "-D ENV_INCLUDE_GPS=0", "UI_PHONE_GPS=0", "UI_SOUND_SETTINGS_GROUP=1",
+                       "UI_TONE_FALLBACK_TO_ALERT=0", "UI_OPTIONAL_NOTIFY_TONE=1", "PIN_MSG_TONE=-1",
+                       "DEFAULT_NOTIFY_TONE_PIN=-1"))
+    and "-D RADIO_FEM_RXGAIN" not in v3_addon
     and "defined(HELTEC_LORA_V3)" in read("src/helpers/ui/SSD1306Display.h"),
-    "the compact five-style 128x64 renderer must not show nonexistent GPS/sound hardware",
+    "the compact five-style 128x64 renderer keeps GPS/FEM absent and external tone disconnected by default",
 )
 check(
     "V3 addon retains manual stable BLE PIN, real ADC and the established protection thresholds",
@@ -1556,7 +1561,7 @@ check(
 
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"SmartUI 0.17 six-board contract audit: {passed} passed, {failed} failed")
+print(f"SmartUI 0.18 six-board contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:

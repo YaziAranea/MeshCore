@@ -432,7 +432,7 @@ def render_settings_8(profile: str = "Стандарт") -> Canvas:
     c.text(2, 14, "Настройки", profile=profile, layer="title")
     c.right(W - 2, 14, "Открыть", profile=profile, layer="hint")
     rows = [
-        ("Избранное", ""), ("Уведомления", ""),
+        ("Уведомления", ""), ("Звук", ""),
         ("Экран", ""), ("Радио", ""),
         ("Система", ""), ("Дополнительно", ""),
         ("Закрыть", ""),
@@ -686,6 +686,10 @@ def main() -> None:
         if stat["name"] in ("idle_clock_final", "main_clock") and stat["layout_checks"] <= 0:
             failures.append(f"{label}: no clock chrome layout assertions executed")
 
+    from simulate_dev2_settings import validate_optional_sound
+    sound_checks, sound_failures = validate_optional_sound("Wireless Paper", out)
+    checks_total += sound_checks
+    failures.extend(sound_failures)
     report = {
         "display": [W, H],
         "renderer": "E213 profile fonts / Utf8Cyrillic5x7.h",
@@ -694,6 +698,7 @@ def main() -> None:
         "profile_matrix": profile_matrix,
         "uptime_matrix": uptime_matrix,
         "temporal_cpp": temporal,
+        "optional_sound_checks": sound_checks,
         "interaction_review_sequence": [
             "clock", "keyboard: type", "target: choose companion",
             "unread: incoming DM", "return to clock", "24th changed operation stream: full refresh",

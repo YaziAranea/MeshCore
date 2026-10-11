@@ -93,6 +93,9 @@ struct UIHourlyStatsSnapshot {
 #ifndef UI_SMART_B12_TONE_LIST
   #define UI_SMART_B12_TONE_LIST 0
 #endif
+#ifndef UI_OPTIONAL_NOTIFY_TONE
+  #define UI_OPTIONAL_NOTIFY_TONE 0
+#endif
 
 #ifndef PIN_MSG_TONE
   #ifdef PIN_BUZZER
@@ -439,6 +442,7 @@ public:
   void toggleBoardLeds();
   void applyBoardLedsState();
   bool shouldHoldLightSleepLock() const;
+  bool shouldDeferPaperDisplay() const;
   bool areMsgPopupsEnabled() const;
   void toggleMsgPopups();
   bool isUnreadLedEnabled() const;

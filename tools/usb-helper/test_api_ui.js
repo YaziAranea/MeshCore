@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.4.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.5.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -23,6 +23,31 @@ async function connect(page){await page.locator('#connect').click();await page.w
 async function tab(page,name){await page.locator('[data-page-target="'+name+'"]').click();assert.equal(await page.locator('[data-page-target="'+name+'"]').getAttribute('aria-selected'),'true');}
 
 async function ready(page){await page.waitForFunction(()=>!document.getElementById('api-settings-load').disabled);}
+
+test('CLI optional buzzer enables and disables through firmware pin schema while refreshing dependent caps',async()=>{
+  const schemas={tone_pin:{supported:1,min:-1,max:48,step:1,options:'-1,13,14'}};
+  const f=await fixture({console:1,firmware:'0.18',optionalTone:true,schemas});
+  try{const p=f.page;await connect(p);await tab(p,'sound');
+    assert.equal(await p.locator('#api-setting-tone_pin').isEnabled(),true);
+    assert.equal(await p.locator('#api-setting-tone_pin option:checked').textContent(),'Отключён');
+    assert.match(await p.locator('#api-notify-state').textContent(),/Внешний зуммер отключён/);
+    assert.equal(await p.locator('#api-setting-volume').isEnabled(),false);
+    assert.equal(await p.locator('#api-sound-preview').isEnabled(),false);
+    assert.deepEqual(await p.locator('#api-setting-tone_pin option').evaluateAll(nodes=>nodes.map(n=>n.value)),['-1','13','14']);
+    for(const pin of ['13','-1']){
+      const before=await p.evaluate(()=>__apiMock.commands.length);
+      await p.locator('#api-setting-tone_pin').selectOption(pin);
+      await p.getByRole('button',{name:'Сохранить CLI: Вывод звука',exact:true}).click();await p.locator('#confirm-yes').click();await ready(p);
+      assert.equal(await p.locator('#api-setting-tone_pin').inputValue(),pin);
+      assert.equal(await p.locator('#api-setting-volume').isEnabled(),pin!=='-1');
+      assert.equal(await p.locator('#api-sound-preview').isEnabled(),pin!=='-1');
+      const commands=await p.evaluate(n=>__apiMock.commands.slice(n),before);
+      assert.deepEqual(commands.filter(c=>/^ui (set|sound preview|test)\b/.test(c)),['ui set tone_pin '+pin]);
+      assert.ok(commands.includes('ui caps sound'));assert.ok(commands.includes('ui schema tone_pin'));assert.ok(commands.includes('ui schema volume'));
+    }
+    assert.match(await p.locator('#api-sound-output-state').textContent(),/Вывод звука: отключён/);
+  }finally{await f.close();}
+});
 async function geometry(page){
   const problems=await page.evaluate(()=>{
     const result=[],visible=e=>e.getClientRects().length&&!e.closest('[hidden]');

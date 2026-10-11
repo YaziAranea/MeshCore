@@ -1,5 +1,13 @@
 # История изменений
 
+## [Smart UI 0.18](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.18) — 2026-10-11
+
+Внешний зуммер на V3/V4.3/V4 R8/Paper без пересборки: выбираемый `tone_pin`,
+`-1` для отключения, отдельные списки GPIO и проверки конфликтов выходов.
+Активный излучатель использует «Пульс», пассивный — мелодии. Helper 2.5
+показывает выбор GPIO до включения звука. Прежние звуковые профили nRF52 сохранены.
+[Инструкция](docs/EXTERNAL_BUZZER_RU.md) · [Примечания к выпуску](RELEASE_NOTES_SmartUI_0.18_RU.md).
+
 ## [Smart UI 0.17](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.17) — 2026-10-09
 
 Дополнение документации в этом же выпуске: [матрица команд по платам](docs/CLI_BOARD_MATRIX_RU.md),

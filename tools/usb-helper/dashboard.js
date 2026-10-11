@@ -120,8 +120,8 @@
     for(const id of ['api-settings-load','api-sound-read','api-command-send'])$(id).disabled=!available();
     $('api-notify-test').disabled=!writable()||!settings||!['sound','vibration','board_led','unread_led'].some(key=>caps?.[key]==='1');
     soundPreview.disabled=!writable()||!settings||caps?.sound_preview!=='1'||caps?.sound!=='1';
-    previewHint.textContent=!settings?'Сначала считайте настройки звука.':caps?.sound_preview!=='1'?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
-    notifyState.textContent=SmartUiConsole.notificationStatus(settings,caps);
+    previewHint.textContent=!settings?'Сначала считайте настройки звука.':schemas?.tone_pin?.supported&&Number(settings.tone_pin)===-1?'Для прослушивания выберите и сохраните разрешённый вывод внешнего зуммера.':caps?.sound_preview!=='1'?'Для отдельного прослушивания нужен обновлённый UF2/BIN 0.16. Старый тест уведомления не играет мелодию при выключенном звуке.':'Прослушивание: сохранённая мелодия один раз, без включения уведомлений. «Общая тишина» должна быть выключена.';
+    notifyState.textContent=SmartUiConsole.notificationStatus(settings,caps,schemas);
     soundOutput.textContent=SmartUiConsole.soundOutputStatus(settings,schemas,caps);
     if(!binaryState.connected){soundAction.textContent='Подключите ноду и считайте звук и пины.';delete soundAction.dataset.action;}
     else if(settings&&!soundAction.dataset.action)soundAction.textContent='Показаны настройки, прочитанные с ноды. «Считать звук и пины» обновит их.';
@@ -430,7 +430,7 @@
     if(SmartUiConsole.SOUND_SETTING_KEYS.some(key=>settingEdits.has(key))&&!await legacy.confirmAction('Считать звук и пины с ноды? Несохранённые поля звука и индикации будут заменены фактическими значениями. Остальные поля сохранятся.'))return;
     await run(async()=>{soundNote('Считываем фактические настройки звука и пинов…');try{
       await loadSettings();for(const key of SmartUiConsole.SOUND_SETTING_KEYS){settingEdits.delete(key);const field=$('api-setting-'+key);if(field&&field.dataset.supported==='true'&&settings[key]!==undefined){field.value=String(settings[key]);field.onchange();}}
-      soundNote('Прочитано с ноды в '+new Date().toLocaleTimeString('ru-RU')+'. '+SmartUiConsole.notificationStatus(settings,caps));
+      soundNote('Прочитано с ноды в '+new Date().toLocaleTimeString('ru-RU')+'. '+SmartUiConsole.notificationStatus(settings,caps,schemas));
     }catch(error){soundNote(error.safe?error.message:'Не удалось прочитать звук и пины. Старые значения не подтверждены.','error');throw error;}});
   };
   soundPreview.onclick=async()=>{
@@ -448,7 +448,7 @@
   $('api-notify-test').onclick=async()=>{const session=client.session;if(settingEdits.size&&!await legacy.confirmAction('Есть несохранённые поля. Проверить уведомление с прежними настройками, уже сохранёнными на ноде?'))return;if(session!==client.session)return;await run(async()=>{try{
     soundNote('Читаем настройки перед проверкой уведомления…');await loadSettings();
     if(Number(settings?.muted)===1){soundNote('Общая тишина включена: уведомление подавлено. Выключите её и сохраните, если хотите проверить уведомление.','warning');return;}
-    if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');soundNote('Запрос уведомления принят. '+SmartUiConsole.notificationStatus(settings,caps));
+    if(await client.execute('ui test',{mutate:true})!=='OK ui test')throw new api.CliError('PROTOCOL');soundNote('Запрос уведомления принят. '+SmartUiConsole.notificationStatus(settings,caps,schemas));
   }catch(error){soundNote(error.safe?error.message:'Тест не подтверждён.','error');throw error;}});};
 
   const adcNote=(text,kind='info',id='api-adc-result')=>{$(id).textContent=text;$(id).classList.add('adc-feedback');$(id).dataset.kind=kind;};

@@ -11,7 +11,7 @@ from test_ui_sessions_v006 import function, run_cpp
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def main():
+def integration():
     source = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
     code = r'''
 #include <cassert>
@@ -81,11 +81,12 @@ struct Controller {
 struct DisplayDriver {
   enum { RED, DARK };
   static int calls;
+  int frames_started=0, frames_ended=0;
   bool isOn() { ++calls; return true; }
   void turnOn() { ++calls; }
   void turnOff() { ++calls; }
-  void startFrame() { ++calls; }
-  void endFrame() { ++calls; }
+  void startFrame() { ++calls; ++frames_started; }
+  void endFrame() { ++calls; ++frames_ended; }
   void setTextSize(int) { ++calls; }
   void setColor(int) { ++calls; }
   int getTextLineHeight() { ++calls; return 10; }
@@ -175,6 +176,7 @@ public:
   void closeNightPrompt(bool,bool) { _night_prompt_active=false; }
   void markDisplayWake(bool) {}
   bool hasToneAlert() const { return true; }
+  bool shouldDeferPaperDisplay() const;
   void startNotifyToneTest(unsigned,unsigned) { ++tone_tests; }
   void connectionApprovalHandler() {}
   void handleButtonWakeLatch() {}
@@ -205,7 +207,7 @@ public:
   uint16_t getLowBatteryShutdownThreshold() { return threshold; }
   smartui::BatteryReading readSafetyBattery() { return smartui::batteryReading(mv); }
   void shutdown(bool=false,bool=false,bool emergency=true) { assert(emergency); ++shutdowns; }
-  void stopNotifyOutputs() { ++stopped; }
+  void stopNotifyOutputs() { ++stopped; _msg_tone_active=false; }
   void applyBoardLedsState() { ++board_applies; }
   void invalidateBatteryCache() { ++cache_invalidations; }
   bool areNotificationsMuted() const { return prefs.notifications_muted; }
@@ -230,6 +232,7 @@ public:
         value = re.search(r"#define\s+" + name + r"\s+([^\r\n]+)", source).group(1)
         code = re.sub(r"(?m)^#define " + name + r" .+$", "#define " + name + " " + value, code)
     for signature in ("void UITask::loop()", "void UITask::applyDeviceSettingsRuntime(",
+                      "bool UITask::shouldDeferPaperDisplay() const",
                       "void UITask::setAdcCalibrationServiceActive(",
                       "void UITask::previewNotifyMode()", "void UITask::notify(UIEventType",
                       "uint8_t UITask::getNotifyToneVolume() const", "char UITask::handleLongPress(char c)",
@@ -446,6 +449,12 @@ int main() {
   printf("PASS %d actual UITask null-display loop, notification and protection checks\n",checks);
 }
 '''
+    return code
+
+
+def main():
+    source = (ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
+    code = integration()
     with tempfile.TemporaryDirectory(prefix="smartui-headless-") as directory:
         print(run_cpp(code, Path(directory), "headless_runtime"), end="")
     main_source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")

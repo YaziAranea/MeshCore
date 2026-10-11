@@ -1579,7 +1579,11 @@ bool MyMesh::begin(bool has_display) {
 #else
   _prefs.notify_gpio_pin = -1;
 #endif
-#if defined(PIN_BUZZER) || defined(PIN_MSG_TONE) || defined(PIN_MSG_ALERT)
+#if defined(UI_OPTIONAL_NOTIFY_TONE) && UI_OPTIONAL_NOTIFY_TONE
+  // -1 is an intentional disconnected external output, including after reboot.
+  // Keep the existing fixed-pin repair policy on the nRF profiles.
+  if (_prefs.notify_tone_pin < -1) _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+#elif defined(PIN_BUZZER) || defined(PIN_MSG_TONE) || defined(PIN_MSG_ALERT)
   if (_prefs.notify_tone_pin < 0) _prefs.notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
 #else
   _prefs.notify_tone_pin = -1;

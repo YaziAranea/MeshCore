@@ -185,10 +185,10 @@
       field.key.endsWith('notify_mode')?(value===0?'Без уведомлений':[value&1?'LED':null,value&2?'Звук':null,value&4?'Вибро':null].filter(Boolean).join(' + ')):
       choices[field.key]?.[value]||(schema.min===0&&schema.max===1?(value?'Включено':'Выключено'):String(value))]);
   }
-  function notificationStatus(settings,caps){
+  function notificationStatus(settings,caps,schemas={}){
     if(!settings||!caps)return 'Сначала прочитайте настройки ноды.';
     if(Number(settings.muted)===1)return 'Общая тишина включена. Тест уведомления не подаст звук, свет или вибрацию. Индикаторы состояния и зарядки — отдельные.';
-    if(!Number(caps.sound))return 'Звук недоступен в этой сборке. Тест проверяет только доступные каналы уведомлений.';
+    if(!Number(caps.sound))return schemas.tone_pin?.supported&&Number(settings.tone_pin)===-1?'Внешний зуммер отключён. Выберите и сохраните разрешённый вывод звука; затем настройте уведомления.':'Звук недоступен в этой сборке. Тест проверяет только доступные каналы уведомлений.';
     if(Number(settings.sound_quiet)===1)return 'Звук выключен на ноде. Для мелодии включите «Звук уведомлений ЛС» и сохраните. Тест не включает отключённые каналы.';
     return 'Звук включён на ноде · громкость '+settings.volume+' / 10'+(settings.tone_pin===undefined?'':' · вывод '+settings.tone_pin)+'. Тест использует сохранённые настройки; ответ команды не подтверждает работу излучателя.';
   }
@@ -196,7 +196,7 @@
     const hasValue=key=>settings?.[key]!==undefined&&settings[key]!==null;
     const bridgeSupported=schemas?.bridge?schemas.bridge.supported:caps?.bridge===undefined?null:Number(caps.bridge)===1;
     const bridge=!settings?'не прочитан':bridgeSupported===false?'недоступен в этой сборке':bridgeSupported===true&&hasValue('bridge')&&[0,1,'0','1'].includes(settings.bridge)?(Number(settings.bridge)?'включён':'выключен'):'не прочитан';
-    return 'Мост: '+bridge+' · Вывод звука: '+(hasValue('tone_pin')?settings.tone_pin:'не прочитан')+' · Громкость: '+(hasValue('volume')?settings.volume+' / 10':'не прочитана');
+    return 'Мост: '+bridge+' · Вывод звука: '+(hasValue('tone_pin')?(Number(settings.tone_pin)===-1?'отключён':settings.tone_pin):'не прочитан')+' · Громкость: '+(hasValue('volume')?settings.volume+' / 10':'не прочитана');
   }
   function parseSettingValue(line,key,transport='settings'){
     const prefix='OK '+transport+' get key='+key+' value=';

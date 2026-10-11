@@ -56,10 +56,11 @@ def session_code(source):
     host_methods = '\n'.join(function(source, marker).replace('UITask::', '') for marker in (
         'void UITask::gotoHomeFirstScreen()', 'bool UITask::hasActiveComposeSession() const',
         'void UITask::markDisplayWake(bool reset_to_clock)', 'void UITask::handlePendingPopupWake()',
+        'bool UITask::shouldDeferPaperDisplay() const',
         'bool UITask::shouldHoldLightSleepLock() const'))
     loop = source[source.index('void UITask::loop()'):]
     idle_start = loop.index('#if UI_EINK_IDLE_SCREENSAVER\n  if (idle_saver')
-    idle = loop[idle_start:loop.index('  if (_display != NULL && _display->isOn())', idle_start)]
+    idle = loop[idle_start:loop.index('  if (_display != NULL && _display->isOn()', idle_start)]
     return q.PRELUDE + r'''
 #include "UiTiming.h"
 #define UI_MENU_AUTO_HOME_MILLIS 30000UL

@@ -35,6 +35,18 @@ test('sound tabs include bridge and all output pins as basic controls',()=>{
   assert.equal(SOUND_SETTING_KEYS.includes('ui_theme'),false,'A sound-only refresh must preserve unrelated drafts');
 });
 
+test('disabled optional tone remains discoverable without claiming the build lacks sound',()=>{
+  const {parseSettingSchema,settingValueValid,settingOptions,notificationStatus,soundOutputStatus}=require('./core');
+  const tone_pin=parseSettingSchema('OK ui schema key=tone_pin supported=1 min=-1 max=48 step=1 options=-1,13,14','tone_pin','ui');
+  assert.equal(settingValueValid(tone_pin,-1),true);assert.equal(settingValueValid(tone_pin,12),false);
+  assert.deepEqual(settingOptions({key:'tone_pin'},tone_pin),[[-1,'Отключён'],[13,'Вывод 13'],[14,'Вывод 14']]);
+  const settings={...SETTINGS,tone_pin:-1},caps={...SETTINGS_CAPS,sound:0};
+  assert.match(notificationStatus(settings,caps,{tone_pin}),/Внешний зуммер отключён/);
+  assert.match(notificationStatus(settings,caps,{tone_pin:{supported:false}}),/недоступен в этой сборке/);
+  assert.match(notificationStatus({...settings,muted:1},caps,{tone_pin}),/Общая тишина включена/);
+  assert.match(soundOutputStatus(settings,{tone_pin},caps),/Вывод звука: отключён/);
+});
+
 test('sound output summary distinguishes confirmed bridge values, unsupported and unread states',()=>{
   const {soundOutputStatus}=require('./core');
   const schemas={bridge:{supported:true}},settings={bridge:0,tone_pin:31,volume:7};

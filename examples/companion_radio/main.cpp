@@ -1136,7 +1136,8 @@ void loop() {
   // Retry only twice after the initial attempt. A physically absent display
   // must not consume SPI time and power forever on a functioning headless node.
   static uint8_t paper_attach_attempts = 0;
-  if (!paper_display_attached && paper_attach_attempts < 2 && display.retryAfterMillis() == 0) {
+  if (!paper_display_attached && paper_attach_attempts < 2 &&
+      !ui_task.shouldDeferPaperDisplay() && display.retryAfterMillis() == 0) {
     ++paper_attach_attempts;
     if (display.begin()) paper_display_attached = ui_task.attachDisplay(&display);
   }
