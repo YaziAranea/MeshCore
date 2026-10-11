@@ -231,8 +231,9 @@ int main() {
 
 def main():
     source = UI.read_text(encoding="utf-8")
-    loop = source[source.index("void UITask::loop()") :]
-    assert loop.index("importantNotifyHandler();") < loop.index("if (_display != NULL && _display->isOn())")
+    loop = function(source, "void UITask::loop()")
+    render_guard = "if (_display != NULL && _display->isOn() && !shouldDeferPaperDisplay())"
+    assert loop.index("importantNotifyHandler();") < loop.index(render_guard)
     assert "dismissCurrentMessageNotifications();" in loop[loop.index("if (c != 0 && curr)") : loop.index("userLedHandler();")]
     handler = function(source, "void UITask::importantNotifyHandler()")
     assert "_display" not in handler
