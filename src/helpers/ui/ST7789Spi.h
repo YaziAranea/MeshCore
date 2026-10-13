@@ -107,6 +107,8 @@ class ST7789Spi : public OLEDDisplay {
       uint16_t            _RGB=0xFFFF;
       uint16_t            _backgroundRGB=0x0000;
       uint8_t             _buffheight;
+      uint8_t             _madctl = ST77XX_MADCTL_RGB | ST77XX_MADCTL_MV | ST77XX_MADCTL_MX;
+      bool                _force_full_refresh = true;
       // The largest supported panel is 320x240. Reuse one scan line in the
       // driver object: no per-row heap churn and no large loop-task stack frame.
       static constexpr uint16_t MAX_PIXEL_WIDTH = 320;
@@ -164,11 +166,11 @@ class ST7789Spi : public OLEDDisplay {
     #ifdef OLEDDISPLAY_DOUBLE_BUFFER
        if (!buffer_back) return;
 
-       uint16_t minBoundY = UINT16_MAX;
-       uint16_t maxBoundY = 0;
+       uint16_t minBoundY = _force_full_refresh ? 0 : UINT16_MAX;
+       uint16_t maxBoundY = _force_full_refresh ? _buffheight - 1 : 0;
 
-       uint16_t minBoundX = UINT16_MAX;
-       uint16_t maxBoundX = 0;
+       uint16_t minBoundX = _force_full_refresh ? 0 : UINT16_MAX;
+       uint16_t maxBoundX = _force_full_refresh ? displayWidth - 1 : 0;
 
        uint16_t x, y;
         
@@ -193,6 +195,7 @@ class ST7789Spi : public OLEDDisplay {
        // we can savely assume that buffer_back[pos] == buffer[pos]
        // holdes true for all values of pos
        if (minBoundY == UINT16_MAX) return;
+       _force_full_refresh = false;
 
 		  set_CS(LOW);
 		  _spi->beginTransaction(_spiSettings);
@@ -246,6 +249,8 @@ class ST7789Spi : public OLEDDisplay {
 
  virtual void resetOrientation() {
 	uint8_t madctl = ST77XX_MADCTL_RGB|ST77XX_MADCTL_MV;
+	_madctl = madctl;
+	forceFullRefresh();
 	sendCommand(ST77XX_MADCTL);
 	WriteData(madctl);
 	delay(10);
@@ -253,6 +258,8 @@ class ST7789Spi : public OLEDDisplay {
   
  virtual void flipScreenVertically() {
 	uint8_t madctl = ST77XX_MADCTL_RGB|ST77XX_MADCTL_MV|ST77XX_MADCTL_MY;
+	_madctl = madctl;
+	forceFullRefresh();
 	sendCommand(ST77XX_MADCTL);
 	WriteData(madctl);
 	delay(10);
@@ -260,6 +267,8 @@ class ST7789Spi : public OLEDDisplay {
   
  virtual void mirrorScreen() {
 	uint8_t madctl = ST77XX_MADCTL_RGB|ST77XX_MADCTL_MV|ST77XX_MADCTL_MX|ST77XX_MADCTL_MY;
+	_madctl = madctl;
+	forceFullRefresh();
 	sendCommand(ST77XX_MADCTL);
 	WriteData(madctl);
 	delay(10);
@@ -270,6 +279,8 @@ class ST7789Spi : public OLEDDisplay {
     // MV swaps rows/columns for landscape orientation
     // Adding MX (instead of MY) flips X axis and rotates 180 degrees
     uint8_t madctl = ST77XX_MADCTL_RGB | ST77XX_MADCTL_MV | ST77XX_MADCTL_MX;
+    _madctl = madctl;
+    forceFullRefresh();
     sendCommand(ST77XX_MADCTL);
     WriteData(madctl);
     delay(10);
@@ -289,11 +300,9 @@ class ST7789Spi : public OLEDDisplay {
 
   void forceFullRefresh()
   {
-#ifdef OLEDDISPLAY_DOUBLE_BUFFER
-    if (buffer_back != NULL) {
-      memset(buffer_back, 0xFF, displayBufferSize);
-    }
-#endif
+    // No byte sentinel differs from every possible framebuffer. A solid-white
+    // page also needs retransmission when its color or orientation changes.
+    _force_full_refresh = true;
   }
   
   void displayOn(void) {
@@ -384,7 +393,11 @@ class ST7789Spi : public OLEDDisplay {
 
    void setAddrWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
     x += (320-displayWidth)/2;
-    y += (240-displayHeight)/2;
+    // The 135-row panel is asymmetric inside 240-column controller RAM.
+    // Heltec's ST7789 rotation 3 (MX|MV) starts at 53; MY|MV starts at 52.
+    // Rounding down in both orientations leaves the last visible row unwritten.
+    // Even-height 170/240-row panels retain their existing centered offsets.
+    y += (240-displayHeight + ((_madctl & ST77XX_MADCTL_MX) ? 1 : 0))/2;
     
     uint32_t xa = ((uint32_t)x << 16) | (x + w - 1);
     uint32_t ya = ((uint32_t)y << 16) | (y + h - 1);

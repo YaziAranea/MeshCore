@@ -154,6 +154,9 @@ bool ST7789Display::begin() {
   #endif
     display.displayOn();
     applyTheme();
+    // Orientation may select the other edge of an odd-sized panel. Refresh
+    // the final visible window before exposing controller RAM to the backlight.
+    display.display();
     setCursor(0,0);
     delay(20);
 

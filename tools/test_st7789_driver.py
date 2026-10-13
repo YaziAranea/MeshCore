@@ -3,6 +3,12 @@
 ASan/UBSan cover allocations, failed init/retry/destruction, clipped drawing and
 the actual RGB565 SPI rows for all supported panel sizes and both buffer modes.
 No physical display or embedded timing is simulated.
+
+Viewport expectations are independent panel constants, not the driver's
+centering formula. Heltec's 135x240 example uses rotation 3 (MX|MV), with
+column start 53; rotation 1 (MY|MV) uses 52:
+https://github.com/HelTecAutomation/Heltec_nRF52/blob/main/libraries/Adafruit-ST7735/Adafruit_ST7789.cpp
+https://github.com/HelTecAutomation/Heltec_nRF52/blob/main/libraries/Heltec_nrf_lorawan/examples/Display/graphicstest_st7789/graphicstest_st7789.ino
 """
 from pathlib import Path
 import argparse
@@ -45,8 +51,9 @@ using std::min; using std::max;
 #define ST7789_MISO -1
 #define ST7789_SCK PIN_TFT_SCL
 inline int pins[256] = {};
+void recordPinWrite(int,int);
 inline void pinMode(int, int) {}
-inline void digitalWrite(int p, int value) { assert(p>=0 && p<256); pins[p]=value; }
+inline void digitalWrite(int p, int value) { assert(p>=0 && p<256); pins[p]=value; recordPinWrite(p,value); }
 inline void delay(unsigned) {}
 inline void yield() {}
 class Print { public: virtual ~Print() = default; virtual size_t write(uint8_t)=0; };
@@ -81,6 +88,7 @@ class SPIClass {
 public:
   std::vector<Row> rows;
   unsigned transfers=0;
+  uint8_t madctl=0;
   void begin(int=-1,int=-1,int=-1,int=-1) {}
   void setClockDivider(int) {}
   void beginTransaction(SPISettings) {}
@@ -88,6 +96,7 @@ public:
   uint8_t transfer(uint8_t value) {
     ++transfers;
     if(pins[PIN_TFT_DC]==LOW) { command=value; data=0; count=0; }
+    else if(command==0x36) madctl=value;
     else if(command==0x2A || command==0x2B) {
       data=(data<<8)|value;
       if(++count==4) {
@@ -144,6 +153,23 @@ char* driver_strdup(const char* source) {
 #undef strdup
 #include "OLEDDisplayFonts.cpp"
 #include "ST7789Display.cpp"
+
+static size_t backlight_on_rows=0;
+static uint8_t backlight_on_madctl=0;
+void recordPinWrite(int pin,int value) {
+#ifdef PIN_TFT_LEDA_CTL_ACTIVE
+  const int active=PIN_TFT_LEDA_CTL_ACTIVE;
+#else
+  const int active=LOW;
+#endif
+  if(pin!=PIN_TFT_LEDA_CTL || value!=active) return;
+#if defined(HELTEC_VISION_MASTER_T190) || defined(THINKNODE_M9)
+  const auto& spi=SPI;
+#else
+  const auto& spi=SPI1;
+#endif
+  backlight_on_rows=spi.rows.size(); backlight_on_madctl=spi.madctl;
+}
 
 static unsigned checks=0;
 #define CHECK(x) do { ++checks; if(!(x)) { std::fprintf(stderr,"line %d: %s\n",__LINE__,#x); std::abort(); } } while(0)
@@ -210,13 +236,13 @@ void allocationLifecycle() {
   CHECK(allocations.empty());
 }
 
-void panel(unsigned width,unsigned height) {
+void panel(unsigned width,unsigned height,unsigned ox,unsigned oy,unsigned unflipped_y) {
   SPIClass spi;
   ST7789Spi d(&spi,PIN_TFT_RST,PIN_TFT_DC,PIN_TFT_CS,GEOMETRY_RAWMODE,width,height);
   fail_at=allocation_calls+1; CHECK(!d.init()); drawWithoutBuffer(d);
   CHECK(spi.rows.empty()); fail_at=0; CHECK(d.init());
   CHECK(spi.rows.size()==height);
-  const unsigned ox=(320-width)/2,oy=(240-height)/2;
+  CHECK(spi.madctl==0x60);
   for(unsigned y=0;y<height;++y) {
     const auto& row=spi.rows[y];
     CHECK(row.x0==ox && row.x1==ox+width-1 && row.y0==oy+y);
@@ -254,8 +280,70 @@ void panel(unsigned width,unsigned height) {
     spi.rows.clear(); d.forceFullRefresh(); d.display();
     for(const auto& row:spi.rows) CHECK(row.y0>=oy && row.y0<oy+height);
   }
+  // Different page contents, including a full white bitmap, must repaint every
+  // visible edge after a theme change. Filling the back buffer with 0xFF is not
+  // a valid invalidation sentinel: whole white pages would stay the old color.
+  d.clear(); d.setColor(WHITE); d.fillRect(0,0,width,height); d.display();
+  d.setRGB(0x07E0); d.setBackgroundRGB(0x001F);
+  spi.rows.clear(); d.forceFullRefresh(); d.display();
+  CHECK(spi.rows.size()==height);
+  for(unsigned y=0;y<height;++y) {
+    const auto& row=spi.rows[y];
+    CHECK(row.x0==ox && row.x1==ox+width-1 && row.y0==oy+y);
+    for(auto pixel:row.pixels) CHECK(pixel==0xE007);
+  }
+  // Test actual commands as well as literal viewport ranges in each supported
+  // landscape orientation, without changing framebuffer contents.
+  struct Orientation { void (ST7789Spi::*select)(); unsigned control,origin; };
+  const Orientation orientations[]={
+    {&ST7789Spi::flipScreenVertically,0xA0,unflipped_y},
+    {&ST7789Spi::mirrorScreen,0xE0,oy},
+    {&ST7789Spi::resetOrientation,0x20,unflipped_y},
+    {&ST7789Spi::landscapeScreen,0x60,oy}
+  };
+  for(const auto& orientation:orientations) {
+    spi.rows.clear(); (d.*orientation.select)(); d.display();
+    CHECK(spi.madctl==orientation.control); CHECK(spi.rows.size()==height);
+    for(unsigned y=0;y<height;++y) {
+      const auto& row=spi.rows[y];
+      CHECK(row.x0==ox && row.x1==ox+width-1 && row.y0==orientation.origin+y);
+      for(auto pixel:row.pixels) CHECK(pixel==0xE007);
+    }
+    spi.rows.clear(); d.clear(); d.display();
+    CHECK(spi.rows.size()==height);
+    for(const auto& row:spi.rows) for(auto pixel:row.pixels) CHECK(pixel==0x1F00);
+    d.fillRect(0,0,width,height); d.display();
+  }
   CHECK(allocation_calls==allocated); fail_at=0;
   d.end(); drawWithoutBuffer(d); CHECK(d.init());
+}
+
+void checkWrapperViewport() {
+#if defined(HELTEC_VISION_MASTER_T190)
+  const auto& spi=SPI; const unsigned width=320,height=170,ox=0,oy=35;
+#elif defined(THINKNODE_M9)
+  const auto& spi=SPI; const unsigned width=320,height=240,ox=0,oy=0;
+#else
+  const auto& spi=SPI1; const unsigned width=240,height=135,ox=40;
+  const unsigned oy=
+#ifdef DISPLAY_FLIP_VERTICALLY
+    52;
+#else
+    53;
+#endif
+#endif
+#ifdef DISPLAY_FLIP_VERTICALLY
+  CHECK(spi.madctl==0xA0);
+#else
+  CHECK(spi.madctl==0x60);
+#endif
+  CHECK(spi.rows.size()>=height);
+  CHECK(backlight_on_rows==spi.rows.size() && backlight_on_madctl==spi.madctl);
+  for(unsigned y=0;y<height;++y) {
+    const auto& row=spi.rows[spi.rows.size()-height+y];
+    CHECK(row.x0==ox && row.x1==ox+width-1 && row.y0==oy+y);
+    for(auto pixel:row.pixels) CHECK(pixel==0); // clean visible RAM on boot/wake
+  }
 }
 
 void wrapperLifecycle() {
@@ -277,6 +365,7 @@ void wrapperLifecycle() {
     CHECK(SPI.transfers+SPI1.transfers==transfers);
     wrapper.turnOn(); CHECK(!wrapper.isOn()); // failure still armed
     fail_at=0; wrapper.turnOn(); CHECK(wrapper.isOn());
+    checkWrapperViewport();
     auto calls=allocation_calls;
     for(unsigned wake=0;wake<8;++wake) {
       CHECK(wrapper.begin()); wrapper.startFrame(); wrapper.print("Retry");
@@ -284,6 +373,7 @@ void wrapperLifecycle() {
       CHECK(!wrapper.isOn()); transfers=SPI.transfers+SPI1.transfers;
       wrapper.endFrame(); CHECK(SPI.transfers+SPI1.transfers==transfers);
       wrapper.turnOn(); CHECK(wrapper.isOn());
+      checkWrapperViewport();
     }
     CHECK(allocation_calls==calls);
   }
@@ -292,7 +382,7 @@ void wrapperLifecycle() {
 
 int main() {
   allocationLifecycle();
-  panel(240,135); panel(320,170); panel(320,240);
+  panel(240,135,40,53,52); panel(320,170,0,35,35); panel(320,240,0,0,0);
   {
     SPIClass spi;
     ST7789Spi oversized(&spi,3,4,5,GEOMETRY_RAWMODE,321,241);
@@ -329,6 +419,7 @@ def main():
         source = path(cpp)
         for profile, flags in (
                 ('t114', []),
+                ('t114-flipped', ['-DDISPLAY_FLIP_VERTICALLY']),
                 ('t190', ['-DHELTEC_VISION_MASTER_T190', '-DESP_PLATFORM', '-DPIN_TFT_LEDA_CTL_ACTIVE=1']),
                 ('m9', ['-DTHINKNODE_M9', '-DESP_PLATFORM', '-DDISPLAY_SCALE_X=2.5f', '-DDISPLAY_SCALE_Y=3.75f'])):
             for reduced in (False, True):
