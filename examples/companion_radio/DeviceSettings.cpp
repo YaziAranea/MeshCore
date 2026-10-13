@@ -604,8 +604,15 @@ bool DeviceSettings::handleExtended(const char* command, char* reply, size_t cap
   }
   if (item->support == Support::BRIDGE) {
     if (!_hooks.setToneBridge) { response(reply, capacity, "ERR settings unsupported"); return true; }
-    if (!_hooks.setToneBridge(value != 0)) response(reply, capacity, "ERR settings storage");
-    else { _preview_token = 0; snprintf(reply, capacity, "OK settings set key=bridge value=%ld", static_cast<long>(value)); }
+    const ToneBridgeResult result = _hooks.setToneBridge(value != 0);
+    if (result == ToneBridgeResult::OK) {
+      _preview_token = 0;
+      snprintf(reply, capacity, "OK settings set key=bridge value=%ld", static_cast<long>(value));
+    } else {
+      const char* reason = result == ToneBridgeResult::PIN_CONFLICT ? "pin_conflict" :
+          result == ToneBridgeResult::UNSUPPORTED ? "unsupported" : "storage";
+      snprintf(reply, capacity, "ERR settings %s", reason);
+    }
     return true;
   }
   const DeviceSettingsState before = _hooks.read();
@@ -711,8 +718,11 @@ bool DeviceSettings::handleApi(const char* command, char* reply, size_t capacity
       else if (value > 1) response(reply, capacity, "ERR api range");
       else if (bridge) {
         const bool changed = (_hooks.read().bridge != 0) != (value != 0);
-        if (changed && !_hooks.setToneBridge(value != 0)) {
-          response(reply, capacity, "ERR api storage");
+        const ToneBridgeResult result = changed ? _hooks.setToneBridge(value != 0) : ToneBridgeResult::OK;
+        if (result != ToneBridgeResult::OK) {
+          const char* reason = result == ToneBridgeResult::PIN_CONFLICT ? "pin_conflict" :
+              result == ToneBridgeResult::UNSUPPORTED ? "unsupported" : "storage";
+          snprintf(reply, capacity, "ERR api %s", reason);
         } else {
           if (changed) _preview_token = 0;
           snprintf(reply, capacity, "OK api set key=bridge value=%lu", static_cast<unsigned long>(value));

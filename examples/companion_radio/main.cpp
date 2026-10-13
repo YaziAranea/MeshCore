@@ -144,7 +144,7 @@ static smartui::MeshCoreCli meshcore_cli;
 enum DeviceSettingEffect : uint8_t {
   EFFECT_ADC = 1, EFFECT_GPS = 2, EFFECT_LED = 4,
   EFFECT_LNA = 8, EFFECT_PA = 16, EFFECT_NOTIFY = 32,
-  EFFECT_PRESENTATION = 64,
+  EFFECT_PRESENTATION = 64, EFFECT_PINS = 128,
 };
 static uint8_t device_setting_effects = 0;
 
@@ -220,8 +220,9 @@ static void writeDeviceSettings(const smartui::DeviceSettingsState& s) {
 #ifdef DISPLAY_CLASS
   stored_font = ui_task.storedUiFontChoice(s.ui_font);
 #endif
-  if (p.notify_gpio_pin != s.led_pin || p.notify_tone_pin != s.tone_pin || p.notify_vibe_pin != s.vibe_pin ||
-      p.ui_font != stored_font || p.ui_theme != s.ui_theme || p.ui_top_color != s.ui_top_color ||
+  if (p.notify_gpio_pin != s.led_pin || p.notify_tone_pin != s.tone_pin || p.notify_vibe_pin != s.vibe_pin)
+    device_setting_effects |= EFFECT_PINS;
+  if (p.ui_font != stored_font || p.ui_theme != s.ui_theme || p.ui_top_color != s.ui_top_color ||
       p.ui_bottom_color != s.ui_bottom_color || p.backlight_timeout_idx != s.backlight_timeout ||
       p.msg_popup_enabled != s.msg_popup) device_setting_effects |= EFFECT_PRESENTATION;
   p.adc_multiplier = s.adc_override;
@@ -440,7 +441,8 @@ static void applyDeviceSettings(bool battery_changed) {
   if (effects & EFFECT_GPS) the_mesh.applyGpsPrefs();
 #endif
 #ifdef DISPLAY_CLASS
-  if (effects & EFFECT_PRESENTATION) ui_task.applyDeviceSettingsAppearanceAndPins();
+  if (effects & EFFECT_PINS) ui_task.applyDeviceSettingsPins();
+  if (effects & EFFECT_PRESENTATION) ui_task.applyDeviceSettingsAppearance();
   if (battery_changed || (effects & (EFFECT_NOTIFY | EFFECT_LED)))
     ui_task.applyDeviceSettingsRuntime(battery_changed);
 #else
@@ -527,12 +529,12 @@ static const char* apiMelodyName(uint8_t id) {
 #endif
 }
 
-static bool apiSetToneBridge(bool enabled) {
+static smartui::ToneBridgeResult apiSetToneBridge(bool enabled) {
 #ifdef DISPLAY_CLASS
   return ui_task.setNotifyToneBridgeEnabled(enabled);
 #else
   (void)enabled;
-  return false;
+  return smartui::ToneBridgeResult::UNSUPPORTED;
 #endif
 }
 

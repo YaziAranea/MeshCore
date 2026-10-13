@@ -70,12 +70,12 @@ static uint32_t readMillis() { return now; }
 static void testNotification() { ++tests; }
 static SoundPreviewResult previewSound() { ++sound_previews; return sound_preview_result; }
 static const char* melodyName(uint8_t id) { ++melody_reads; CHECK(id <= caps.melody_max); return melody_name; }
-static bool setToneBridge(bool enabled) {
+static ToneBridgeResult setToneBridge(bool enabled) {
   ++bridge_calls;
-  if (!bridge_ok) return false;
+  if (!bridge_ok) return ToneBridgeResult::STORAGE;
   state.bridge = enabled ? 1 : 0;
   persisted = state;
-  return true;
+  return ToneBridgeResult::OK;
 }
 static NightQuietResult setNightQuiet(bool enabled) {
   ++night_calls;

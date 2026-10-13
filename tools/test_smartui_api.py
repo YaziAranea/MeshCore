@@ -210,7 +210,7 @@ def setting_effects_source():
 #define ENV_INCLUDE_GPS 1
 static unsigned checks, saves, applies, adc_calls, gps_calls, led_calls, lna_calls, pa_calls;
 static unsigned notification_stops, battery_changes, radio_calls, global_applies, preview_calls;
-static unsigned presentation_calls;
+static unsigned presentation_calls, pin_calls;
 static bool save_ok;
 #define CHECK(x) do { ++checks; assert(x); } while (0)
 struct NodePrefs {
@@ -252,7 +252,8 @@ struct Radio { void setRxBoostedGainMode(bool) { ++radio_calls; } } radio_driver
 struct Ui {
   uint8_t getUiFontChoiceIndex() { return the_mesh.prefs.ui_font - 10; }
   uint8_t storedUiFontChoice(uint8_t choice) { return choice + 10; }
-  void applyDeviceSettingsAppearanceAndPins() { CHECK(save_ok && saves > 0); ++presentation_calls; }
+  void applyDeviceSettingsAppearance() { CHECK(save_ok && saves > 0); ++presentation_calls; }
+  void applyDeviceSettingsPins() { CHECK(save_ok && saves > 0); ++pin_calls; }
   void applyDeviceSettingsRuntime(bool battery_changed) {
     CHECK(save_ok && saves > 0); ++notification_stops; battery_changes += battery_changed;
   }
@@ -289,7 +290,7 @@ static bool pinAllowed(const char*, int pin) { return pin == -1 || pin == 35 || 
 static void fresh() {
   saves = applies = adc_calls = gps_calls = led_calls = lna_calls = pa_calls = 0;
   notification_stops = battery_changes = radio_calls = global_applies = preview_calls = 0;
-  presentation_calls = 0;
+  presentation_calls = pin_calls = 0;
   save_ok = true; the_mesh = Mesh{}; board = Board{}; device_setting_effects = 0;
   smartui::DeviceSettingsHooks hooks;
   hooks.read = readDeviceSettings; hooks.write = writeDeviceSettings; hooks.save = saveDeviceSettings;
@@ -393,10 +394,11 @@ int main() {
     CHECK(command(change) == "ERR settings storage");
     const auto after = readDeviceSettings();
     CHECK(memcmp(&before, &after, sizeof(before)) == 0);
-    CHECK(presentation_calls == 0 && applies == 0);
+    CHECK(presentation_calls == 0 && pin_calls == 0 && applies == 0);
     save_ok = true;
     CHECK(command(change).find("OK settings set ") == 0);
-    CHECK(presentation_calls == 1 && applies == 1);
+    const bool pin_change = strstr(change, "_pin ") != nullptr;
+    CHECK(presentation_calls == (pin_change ? 0U : 1U) && pin_calls == (pin_change ? 1U : 0U) && applies == 1);
     effects(0, 0, 0, 0, 0, 0, 0);
   }
   fresh(); CHECK(command("settings set gps_interval 30").find("OK settings ") == 0);
@@ -434,7 +436,7 @@ static bool save_ok;
 struct NodePrefs {
   double node_lat = 10, node_lon = 20;
   uint8_t notify_tone_bridge_enabled = 0;
-  int8_t notify_gpio_pin = 1, notify_tone_pin = 5, notify_vibe_pin = 2;
+  int8_t notify_gpio_pin = 6, notify_tone_pin = 5, notify_vibe_pin = 8;
   uint8_t unrelated = 77;
 };
 static NodePrefs prefs, persisted;
@@ -456,15 +458,15 @@ struct Mesh {
 class UITask {
 public:
   NodePrefs* _node_prefs = &prefs;
-  int _msg_alert_pin = 1, _msg_tone_pin = 5, _msg_vibe_pin = 2;
+  int _msg_alert_pin = 6, _msg_tone_pin = 5, _msg_vibe_pin = 8;
   int _next_refresh = 99;
   bool isNotifyToneBridgeEnabled() const;
   bool supportsNotifyToneBridge() const;
-  bool setNotifyToneBridgeEnabled(bool enabled);
+  smartui::ToneBridgeResult setNotifyToneBridgeEnabled(bool enabled);
   void toggleNotifyToneBridge();
   void stopNotifyOutputs() { ++stops; }
-  int getDefaultNotifyGpioPin() const { return 1; }
-  int getNextNotifyGpioPinExcept(int, int first, int second) const { CHECK(first == 1 && second == 2); return 6; }
+  int getNotifyLedPin() const { return _msg_alert_pin; }
+  int getNotifyVibePin() const { return _msg_vibe_pin; }
   void configureMsgTonePin(int pin) { ++pin_changes; _msg_tone_pin = pin; prefs.notify_tone_pin = pin; }
   void configureMsgAlertPin(int pin) { ++pin_changes; _msg_alert_pin = pin; prefs.notify_gpio_pin = pin; }
   void configureMsgVibePin(int pin) { ++pin_changes; _msg_vibe_pin = pin; prefs.notify_vibe_pin = pin; }
@@ -475,7 +477,7 @@ public:
     bodies = "\n".join(extract_scope(source, signature) for signature in (
         "bool UITask::isNotifyToneBridgeEnabled(",
         "bool UITask::supportsNotifyToneBridge(",
-        "bool UITask::setNotifyToneBridgeEnabled(",
+        "smartui::ToneBridgeResult UITask::setNotifyToneBridgeEnabled(",
         "void UITask::toggleNotifyToneBridge(",
     ))
     assertions = r'''
@@ -488,7 +490,7 @@ static smartui::DeviceSettingsCaps capabilities() { smartui::DeviceSettingsCaps 
 static uint16_t battery() { return 4000; }
 static float multiplier() { return 4; }
 static uint32_t clockMillis() { return 100; }
-static bool bridge(bool enabled) { return ui.setNotifyToneBridgeEnabled(enabled); }
+static smartui::ToneBridgeResult bridge(bool enabled) { return ui.setNotifyToneBridgeEnabled(enabled); }
 static void fresh() {
   saves = stops = beeps = alerts = pin_changes = global_radio_applies = 0;
   save_ok = true; prefs = NodePrefs{}; persisted = prefs; the_mesh = Mesh{}; ui = UITask{};
@@ -503,47 +505,48 @@ static std::string command(const char* input) {
 }
 static void untouched() {
   CHECK(saves == 0 && stops == 0 && beeps == 0 && pin_changes == 0 && global_radio_applies == 0);
-  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_gpio_pin == 1 && prefs.notify_tone_pin == 5 && prefs.notify_vibe_pin == 2);
+  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_gpio_pin == 6 && prefs.notify_tone_pin == 5 && prefs.notify_vibe_pin == 8);
 }
 int main() {
+  using Result = smartui::ToneBridgeResult;
   fresh();
 #if UI_TONE_BRIDGE_PAGE == 1
   CHECK(ui.supportsNotifyToneBridge());
-  fresh(); CHECK(ui.setNotifyToneBridgeEnabled(false)); untouched();
+  fresh(); CHECK(ui.setNotifyToneBridgeEnabled(false) == Result::OK); untouched();
   CHECK(command("api set bridge 1") == "OK api set key=bridge value=1");
   CHECK(prefs.notify_tone_bridge_enabled == 1 && prefs.notify_tone_pin == 1);
-  CHECK(prefs.notify_gpio_pin == 6 && prefs.notify_vibe_pin == -1 && prefs.unrelated == 77);
-  CHECK(ui._msg_tone_pin == 1 && ui._msg_alert_pin == 6 && ui._msg_vibe_pin == -1);
-  CHECK(persisted.notify_tone_bridge_enabled == 1 && persisted.notify_gpio_pin == 6 && persisted.notify_vibe_pin == -1);
+  CHECK(prefs.notify_gpio_pin == 6 && prefs.notify_vibe_pin == 8 && prefs.unrelated == 77);
+  CHECK(ui._msg_tone_pin == 1 && ui._msg_alert_pin == 6 && ui._msg_vibe_pin == 8);
+  CHECK(persisted.notify_tone_bridge_enabled == 1 && persisted.notify_gpio_pin == 6 && persisted.notify_vibe_pin == 8);
   CHECK(saves == 1 && stops == 1 && beeps == 0 && alerts == 0 && global_radio_applies == 0);
   const auto changes = pin_changes;
   CHECK(command("api set bridge 1") == "OK api set key=bridge value=1");
-  CHECK(ui.setNotifyToneBridgeEnabled(true));
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::OK);
   CHECK(saves == 1 && stops == 1 && pin_changes == changes);
   CHECK(command("api get").find("bridge=1") != std::string::npos);
   CHECK(command("api set bridge 0") == "OK api set key=bridge value=0");
-  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_tone_pin == 1 && prefs.notify_gpio_pin == 6 && prefs.notify_vibe_pin == -1);
+  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_tone_pin == 1 && prefs.notify_gpio_pin == 6 && prefs.notify_vibe_pin == 8);
   CHECK(saves == 2 && stops == 2 && beeps == 0 && alerts == 0 && global_radio_applies == 0);
   fresh(); save_ok = false;
   CHECK(command("api set bridge 1") == "ERR api storage");
-  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_tone_pin == 5 && prefs.notify_gpio_pin == 1 && prefs.notify_vibe_pin == 2);
-  CHECK(ui._msg_tone_pin == 5 && ui._msg_alert_pin == 1 && ui._msg_vibe_pin == 2);
+  CHECK(prefs.notify_tone_bridge_enabled == 0 && prefs.notify_tone_pin == 5 && prefs.notify_gpio_pin == 6 && prefs.notify_vibe_pin == 8);
+  CHECK(ui._msg_tone_pin == 5 && ui._msg_alert_pin == 6 && ui._msg_vibe_pin == 8);
   CHECK(prefs.node_lat == 10 && prefs.node_lon == 20 && prefs.unrelated == 77);
-  CHECK(saves == 1 && stops == 1 && beeps == 0 && alerts == 0 && global_radio_applies == 0);
+  CHECK(saves == 1 && stops == 0 && pin_changes == 0 && beeps == 0 && alerts == 0 && global_radio_applies == 0);
   save_ok = true;
   CHECK(command("api set bridge 1") == "OK api set key=bridge value=1");
   save_ok = false;
   CHECK(command("api set bridge 0") == "ERR api storage");
-  CHECK(prefs.notify_tone_bridge_enabled == 1 && ui._msg_tone_pin == 1 && ui._msg_alert_pin == 6 && ui._msg_vibe_pin == -1);
+  CHECK(prefs.notify_tone_bridge_enabled == 1 && ui._msg_tone_pin == 1 && ui._msg_alert_pin == 6 && ui._msg_vibe_pin == 8);
   CHECK(beeps == 0 && alerts == 0 && global_radio_applies == 0);
   fresh(); the_mesh.quarantined = true;
-  CHECK(!ui.setNotifyToneBridgeEnabled(true)); untouched();
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::STORAGE); untouched();
   fresh(); the_mesh.rescue = true;
-  CHECK(!ui.setNotifyToneBridgeEnabled(true)); untouched();
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::STORAGE); untouched();
   fresh(); ui._node_prefs = nullptr;
-  CHECK(!ui.setNotifyToneBridgeEnabled(true)); untouched();
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::STORAGE); untouched();
   fresh(); prefs.notify_gpio_pin = ui._msg_alert_pin = 7; prefs.notify_vibe_pin = ui._msg_vibe_pin = 8;
-  CHECK(ui.setNotifyToneBridgeEnabled(true));
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::OK);
   CHECK(prefs.notify_gpio_pin == 7 && prefs.notify_vibe_pin == 8);
   fresh(); ui.toggleNotifyToneBridge();
   CHECK(prefs.notify_tone_bridge_enabled == 1 && saves == 1 && alerts == 1 && beeps == 1);
@@ -552,7 +555,7 @@ int main() {
   CHECK(global_radio_applies == 0);
 #else
   CHECK(!ui.supportsNotifyToneBridge());
-  CHECK(!ui.setNotifyToneBridgeEnabled(true)); untouched();
+  CHECK(ui.setNotifyToneBridgeEnabled(true) == Result::UNSUPPORTED); untouched();
   CHECK(command("api caps").find("bridge=0") != std::string::npos);
   CHECK(command("api set bridge 1") == "ERR api unsupported"); untouched();
   ui.toggleNotifyToneBridge();

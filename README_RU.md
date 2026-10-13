@@ -1,12 +1,12 @@
 # MeshCore Smart UI PowerSaving17 — полная документация
 
-> **Текущая публичная версия для семи плат — Smart UI 0.14.**
-> [Скачать](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.14)
-> · [Изменения, выбор файла и ограничения чистой установки](RELEASE_NOTES_SmartUI_0.14_RU.md)
+> **Текущая публичная версия для семи плат — Smart UI 0.19.**
+> [Скачать](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.19)
+> · [Изменения, выбор файла и ограничения чистой установки](RELEASE_NOTES_SmartUI_0.19_RU.md)
 > · [Свежие экраны](docs/SCREENS_RU.md).
 > Latest — текущий выпуск, не подтверждение стабильности на всех физических платах.
 > [SmartUI 0.11](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.11) сохранён для отката и прежнего API, без замены его файлов.
-> Ниже сохранены исторические сведения. Актуальное описание — [README](README.md), интеграция — [Companion CLI](docs/SMARTUI_CLI_RU.md), помощник — [1.8](tools/usb-helper/README_RU.md). В 0.14 API201 и синхронизация событий выключены; используется локальный CMD66/RESP29.
+> Ниже сохранены исторические сведения. Актуальное описание — [README](README.md), интеграция — [Companion CLI](docs/SMARTUI_CLI_RU.md), помощник — [2.6](tools/usb-helper/README_RU.md). В 0.19 API201 и синхронизация событий выключены; используется локальный CMD66/RESP29.
 
 ## Новое в 0.14
 

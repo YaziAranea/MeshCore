@@ -13,6 +13,10 @@ enum class NightQuietResult : uint8_t {
   OK, UNSUPPORTED, TIME, MUTED, STORAGE
 };
 
+enum class ToneBridgeResult : uint8_t {
+  OK, UNSUPPORTED, PIN_CONFLICT, STORAGE
+};
+
 // Small, display-independent transaction image. Never copy NodePrefs (including
 // quick replies and serializers) onto the nRF52's 4 KiB loop stack.
 struct DeviceSettingsState {
@@ -113,7 +117,7 @@ struct DeviceSettingsHooks {
   const char* (*melodyName)(uint8_t id) = nullptr;
   // Dedicated checked transaction: fixed bridge pins and peripheral ownership
   // cannot be safely represented by changing the preferences byte alone.
-  bool (*setToneBridge)(bool enabled) = nullptr;
+  ToneBridgeResult (*setToneBridge)(bool enabled) = nullptr;
   // Timed quiet owns its prompt day and morning-release policy in UITask.
   NightQuietResult (*setNightQuiet)(bool enabled) = nullptr;
   void (*adcService)(const char* action, char* reply, size_t capacity,

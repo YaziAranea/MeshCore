@@ -103,6 +103,10 @@
   const CAP_KEYS=['v','adc','sound','board_led','unread_led','vibration','gps','battery_protection','display','melody_max','adc_min','adc_max','agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema','sound_preview'];
   const GET_KEYS=['battery_mv','adc_multiplier','adc_default','sound_quiet','volume','melody','board_led','unread_led','vibration','gps','battery_protection','shutdown_mv','muted','agc_reset','fem_lna','fem_pa','bridge'];
   const OPTIONAL_CAPS=new Set(['agc_reset','fem_lna','fem_pa','bridge','melody_names','adc_service','schema','sound_preview']),OPTIONAL_GET=new Set(['agc_reset','fem_lna','fem_pa','bridge']);
+  // These setters change their own value and reset profile only. Coupled values
+  // (melodies, mute/night mode, notification masks, pins, GPS, ADC and profiles)
+  // retain a full refresh, including dynamic capabilities and pin schemas.
+  const SCALAR_READBACK_KEYS=new Set(['volume','board_led','tone_8bit','resonance_hz','offline_dm_led','ble_dm_led','msg_popup','ui_font','ui_theme','ui_top_color','ui_bottom_color','backlight_timeout','agc_reset','fem_lna','fem_pa']);
   function note(text,kind='info'){$('api-feedback').textContent=text;$('api-feedback').className='notice'+(kind==='error'?' error':kind==='warning'?' warning':'');}
   function log(text){const li=document.createElement('li');li.textContent=new Date().toLocaleTimeString('ru-RU')+' · '+text;$('api-log').prepend(li);while($('api-log').children.length>40)$('api-log').lastChild.remove();}
   const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing&&!networkRunning;
@@ -331,8 +335,14 @@
     return result;
   }
   const fields=[['muted',null,'Общая тишина',0,1],['sound_quiet','sound','Звук уведомлений ЛС',0,1],['volume','sound','Громкость',1,10],['melody','sound','Общая мелодия',0,30],['board_led','board_led','LED платы',0,1],['unread_led','unread_led','LED уведомлений',0,1],['vibration','vibration','Вибрация',0,1],['gps','gps','Аппаратный GPS',0,1],['battery_protection','battery_protection','Защита АКБ 3,2 В',0,1],['agc_reset','agc_reset','AGC-сброс · каждые 60 с',0,1],['fem_lna','fem_lna','FEM · усилитель приёма',0,1],['fem_pa','fem_pa','FEM · усилитель передачи',0,1],['bridge','bridge','Мостовой звук · два вывода',0,1]];
-  async function loadSettings({discardEdits=false}={}){
+  async function loadSettings({discardEdits=false,savedKey=null}={}){
     try {
+    if(savedKey&&SCALAR_READBACK_KEYS.has(savedKey)&&caps&&settings){
+      const keys=[savedKey];if(schemas.profile?.supported)keys.push('profile');
+      const values=await readFields('get',keys,new Set());
+      for(const key of keys)if(schemas[key]&&!SmartUiConsole.settingValueValid(schemas[key],Number(values[key])))throw new api.CliError('PROTOCOL');
+      settings={...settings,...values};preview=null;
+    }else{
     caps=await readFields('caps',CAP_KEYS,OPTIONAL_CAPS);settings=await readFields('get',GET_KEYS,OPTIONAL_GET);preview=null;if(discardEdits)settingEdits.clear();
     schemas=Object.create(null);
     if(caps.schema==='1')for(const key of SmartUiConsole.SETTING_KEYS){
@@ -358,6 +368,7 @@
         const melody=await rec('ui melody '+id,'OK ui melody');if(numeric(melody.id,255)!==id)throw new api.CliError('PROTOCOL');
         const name=api.decodeHex(melody.name_hex,64);if(!name||/[\u0000-\u001f\u007f]/.test(name))throw new api.CliError('PROTOCOL');melodyNames.set(id,name);
       }
+    }
     }
     const container=$('api-settings-fields');container.replaceChildren();
     const groups={sound:'Звук и уведомления',lights:'Свет и вибрация',display:'Экран и оформление',gps:'Координаты',battery:'Аккумулятор',system:'Система и FEM'},panels={};
@@ -386,7 +397,15 @@
         if(key.endsWith('_pin')&&!await legacy.confirmAction('Изменить '+label.toLowerCase()+' на '+value+'? Номера — выводы прошивки, не номера ножек корпуса. Проверьте проводку. LED требует резистор, вибромотор — совместимый драйвер.'))return;
         if(key==='profile'&&!await legacy.confirmAction('Применить профиль? Несколько настроек звука и индикации изменятся сразу.'))return;
         if((key==='battery_protection'&&value===0||key==='bridge'&&value===1)&&!await legacy.confirmAction(key==='bridge'?'Включить мостовой звук? Требуется плавающий пьезоизлучатель между штатными выводами. Нельзя соединять такой выход с землёй.':'Выключить защиту аккумулятора 3,2 В? Останется только аварийная отсечка 2,7 В. Это не безопасная цель разряда.'))return;
-        await run(async()=>{try{status.textContent='Сохраняем и проверяем…';preview=null;const ack=await rec(`ui set ${key} ${value}`,'OK ui set',true);if(ack.key!==key||Number(ack.value)!==value)throw new api.CliError('PROTOCOL');settingEdits.delete(key);await loadSettings();if(Number(settings[key])!==value)throw new api.CliError('PROTOCOL');note('Настройка сохранена и прочитана обратно с ноды.');}catch(error){($('api-saved-'+key)||status).textContent=error.safe?error.message:'Сохранение не подтверждено.';throw error;}});
+        await run(async()=>{let acknowledged=false;const session=client.session;try{
+          status.textContent='Сохраняем и проверяем…';preview=null;
+          const ack=await rec(`ui set ${key} ${value}`,'OK ui set',true);acknowledged=true;
+          if(ack.key!==key||Number(ack.value)!==value)throw new api.CliError('PROTOCOL');
+          await loadSettings({savedKey:key});if(Number(settings[key])!==value)throw new api.CliError('PROTOCOL');
+          settingEdits.delete(key);note('Настройка сохранена и прочитана обратно с ноды.');
+        }catch(error){($('api-saved-'+key)||status).textContent=error.safe?error.message:'Сохранение не подтверждено.';
+          if(acknowledged&&session===client.session){client.update({uncertain:true,phase:'uncertain'});throw new api.CliError('UNCERTAIN');}throw error;
+        }});
       };
       controls.append(select,save);row.append(caption,controls,status);(panels[meta?.group||(key==='battery_protection'?'battery':['board_led','unread_led','vibration'].includes(key)?'lights':key==='gps'?'gps':'sound')]).append(row);
     }

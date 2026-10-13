@@ -93,7 +93,7 @@
     renderAdcService(readReady,ready);
     if (!caps) return;
     const melody=$("setting-melody");
-    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16","0.17","0.18"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
+    const melodyCatalog=["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16","0.17","0.18","0.19"].includes(state.info?.firmware) && caps.melody_max===melodyNames.length-1;
     const catalogKey=String(melodyCatalog)+":"+caps.melody_max;
     if (melody.dataset.catalog!==catalogKey) {
       addOptions(melody,Array.from({length:caps.melody_max+1},(_,i)=>[i,melodyCatalog ? i+" · "+melodyNames[i] : "Мелодия "+i]));

@@ -432,7 +432,7 @@ public:
   void cycleNotifyToneResonance();
   void toggleNotifyToneBridge();
   bool supportsNotifyToneBridge() const;
-  bool setNotifyToneBridgeEnabled(bool enabled);
+  smartui::ToneBridgeResult setNotifyToneBridgeEnabled(bool enabled);
   bool hasToneAlert() const;
   void cycleNotifyMode();
   void previewNotifyMode();
@@ -484,9 +484,11 @@ public:
   void cycleSmartProfile();
   void applyImportedPrefs() override;
   void applyDeviceSettingsRuntime(bool battery_changed);
-  void applyDeviceSettingsAppearanceAndPins();
+  void applyDeviceSettingsAppearance();
+  void applyDeviceSettingsPins();
   void describeDeviceSettings(smartui::DeviceSettingsCaps& caps) const;
   bool isDeviceSettingsPinAllowed(const char* key, int pin) const;
+  int nextDeviceSettingsPin(const char* key, int current) const;
   void deviceSettingsPinOptions(const char* key, char* out, size_t capacity) const;
   uint8_t storedUiFontChoice(uint8_t choice) const;
   void setAdcCalibrationServiceActive(bool active);

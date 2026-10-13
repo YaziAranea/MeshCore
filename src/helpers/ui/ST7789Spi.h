@@ -107,6 +107,11 @@ class ST7789Spi : public OLEDDisplay {
       uint16_t            _RGB=0xFFFF;
       uint16_t            _backgroundRGB=0x0000;
       uint8_t             _buffheight;
+      // The largest supported panel is 320x240. Reuse one scan line in the
+      // driver object: no per-row heap churn and no large loop-task stack frame.
+      static constexpr uint16_t MAX_PIXEL_WIDTH = 320;
+      static constexpr uint16_t MAX_PIXEL_HEIGHT = 240;
+      uint16_t            _pixel_row[MAX_PIXEL_WIDTH];
   public:
     /* pass _cs as -1 to indicate "do not use CS pin", for cases where it is hard wired low */
     ST7789Spi(SPIClass *spiClass,uint8_t _rst, uint8_t _dc, uint8_t _cs, OLEDDISPLAY_GEOMETRY g = GEOMETRY_RAWMODE,uint16_t width=240,uint16_t height=135,int mosi=-1,int miso=-1,int clk=-1) {
@@ -123,6 +128,8 @@ class ST7789Spi : public OLEDDisplay {
     }
 
     bool connect(){
+      if (!_spi || displayWidth == 0 || displayWidth > MAX_PIXEL_WIDTH ||
+          displayHeight == 0 || displayHeight > MAX_PIXEL_HEIGHT) return false;
       this->_buffheight=displayHeight / 8;
       this->_buffheight+=displayHeight % 8 ? 1:0;
       pinMode(_cs, OUTPUT);
@@ -152,7 +159,10 @@ class ST7789Spi : public OLEDDisplay {
     }
 
     void display(void) {
+       if (!buffer || !_spi || displayWidth == 0 || displayWidth > MAX_PIXEL_WIDTH ||
+           displayHeight == 0 || displayHeight > MAX_PIXEL_HEIGHT) return;
     #ifdef OLEDDISPLAY_DOUBLE_BUFFER
+       if (!buffer_back) return;
 
        uint16_t minBoundY = UINT16_MAX;
        uint16_t maxBoundY = 0;
@@ -189,23 +199,19 @@ class ST7789Spi : public OLEDDisplay {
 
           for (y = minBoundY; y <= maxBoundY; y++)
           {
-            for(int temp = 0; temp<8;temp++)
+            for(int temp = 0; temp<8 && y*8+temp<displayHeight;temp++)
             {
-              //setAddrWindow(minBoundX,y*8+temp,maxBoundX-minBoundX+1,1);
               setAddrWindow(minBoundX,y*8+temp,maxBoundX-minBoundX+1,1);
-              //setAddrWindow(y*8+temp,minBoundX,1,maxBoundX-minBoundX+1);
               uint32_t const pixbufcount = maxBoundX-minBoundX+1;
-              uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = minBoundX; x <= maxBoundX; x++)
               {
-                pixbuf[x-minBoundX] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
+                _pixel_row[x-minBoundX] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
               }
 #ifdef ESP_PLATFORM
-              _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);
+              _spi->transferBytes((uint8_t *)_pixel_row, NULL, 2 * pixbufcount);
 #else
-              _spi->transfer(pixbuf, NULL, 2 * pixbufcount);
+              _spi->transfer(_pixel_row, NULL, 2 * pixbufcount);
 #endif
-              rtos_free(pixbuf);
             }
           }
 	  _spi->endTransaction();
@@ -214,26 +220,22 @@ class ST7789Spi : public OLEDDisplay {
      #else
 		  set_CS(LOW);
 		  _spi->beginTransaction(_spiSettings);
-		uint8_t x, y;
+		uint16_t x, y;
           for (y = 0; y < _buffheight; y++)
           {
-            for(int temp = 0; temp<8;temp++)
+            for(int temp = 0; temp<8 && y*8+temp<displayHeight;temp++)
             {
-              //setAddrWindow(minBoundX,y*8+temp,maxBoundX-minBoundX+1,1);
-              //setAddrWindow(minBoundX,y*8+temp,maxBoundX-minBoundX+1,1);
-              setAddrWindow(y*8+temp,0,1,displayWidth);
+              setAddrWindow(0,y*8+temp,displayWidth,1);
               uint32_t const pixbufcount = displayWidth;
-              uint16_t *pixbuf = (uint16_t *)rtos_malloc(2 * pixbufcount);
               for (x = 0; x < displayWidth; x++)
               {
-                pixbuf[x] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
+                _pixel_row[x] = ((buffer[x + y * displayWidth]>>temp)&0x01)==1?_RGB:_backgroundRGB;
               }
 #ifdef ESP_PLATFORM
-              _spi->transferBytes((uint8_t *)pixbuf, NULL, 2 * pixbufcount);
+              _spi->transferBytes((uint8_t *)_pixel_row, NULL, 2 * pixbufcount);
 #else
-              _spi->transfer(pixbuf, NULL, 2 * pixbufcount);
+              _spi->transfer(_pixel_row, NULL, 2 * pixbufcount);
 #endif
-              rtos_free(pixbuf);
             }
           }
 	  _spi->endTransaction();

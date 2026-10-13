@@ -25,13 +25,14 @@ import validate_release_uf2 as uf2
 import validate_release_v3 as v3
 import package_usb_helper as usb_helper
 import package_smartui_developer_kit as developer_kit
+from smartui_source_guard import build_override_reason, checkout_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.18"
-TAG = "smartui-0.18"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.18_RU.md"
-ARCHIVE_NAME = "SmartUI_0.18_all-boards.zip"
+VERSION = "0.19"
+TAG = "smartui-0.19"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.19_RU.md"
+ARCHIVE_NAME = "SmartUI_0.19_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 ASSET_COUNT = 19
 DISTRIBUTION = "public"
@@ -79,6 +80,9 @@ def validate_release_notes(text: str) -> None:
 
 
 def require_clean_checkout(root: Path = ROOT) -> None:
+    root = checkout_root(root)
+    override = build_override_reason(root)
+    require(override is None, "refusing exact-source packaging with " + (override or ""))
     untracked = subprocess.check_output(
         ["git", "ls-files", "--others", "--exclude-standard"], cwd=root)
     require(not untracked.strip(), "refusing exact-source packaging with untracked files")

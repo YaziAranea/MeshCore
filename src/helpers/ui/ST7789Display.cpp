@@ -138,13 +138,16 @@ bool ST7789Display::begin() {
     pinMode(PIN_TFT_LEDA_CTL, OUTPUT);
     digitalWrite(PIN_TFT_VDD_CTL, LOW);
   #ifdef PIN_TFT_LEDA_CTL_ACTIVE
-    digitalWrite(PIN_TFT_LEDA_CTL, PIN_TFT_LEDA_CTL_ACTIVE);
+    digitalWrite(PIN_TFT_LEDA_CTL, !PIN_TFT_LEDA_CTL_ACTIVE);
   #else
-    digitalWrite(PIN_TFT_LEDA_CTL, LOW);
+    digitalWrite(PIN_TFT_LEDA_CTL, HIGH);
   #endif
     digitalWrite(PIN_TFT_RST, HIGH);
 
-    display.init();
+    if (!display.init()) {
+      turnOff();
+      return false;
+    }
     display.landscapeScreen();
   #ifdef DISPLAY_FLIP_VERTICALLY
     display.flipScreenVertically();
@@ -152,25 +155,6 @@ bool ST7789Display::begin() {
     display.displayOn();
     applyTheme();
     setCursor(0,0);
-
-    _isOn = true;
-  }
-  return true;
-}
-
-void ST7789Display::turnOn() {
-  if (!_isOn) {
-    // Restore power to the display but keep backlight off
-    digitalWrite(PIN_TFT_VDD_CTL, LOW);
-    digitalWrite(PIN_TFT_RST, HIGH);
-    
-    // Re-initialize the display
-    display.init();
-    display.displayOn();
-  #ifdef DISPLAY_FLIP_VERTICALLY
-    display.flipScreenVertically();
-  #endif
-    applyTheme();
     delay(20);
 
     // Now turn on the backlight
@@ -181,6 +165,11 @@ void ST7789Display::turnOn() {
   #endif    
     _isOn = true;
   }
+  return true;
+}
+
+void ST7789Display::turnOn() {
+  if (!_isOn) begin();
 }
 
 void ST7789Display::turnOff() {
@@ -195,6 +184,7 @@ void ST7789Display::turnOff() {
 }
 
 void ST7789Display::clear() {
+  if (!_isOn) return;
   display.clear();
 }
 
@@ -212,6 +202,7 @@ void ST7789Display::applyTheme() {
 }
 
 void ST7789Display::startFrame(ColorVal bkg) {
+  if (!_isOn) return;
   (void)bkg;
   applyTheme();
   display.clear();
@@ -314,6 +305,7 @@ uint16_t ST7789Display::codepointWidth(uint16_t codepoint) {
 }
 
 void ST7789Display::drawCodepoint(uint16_t codepoint) {
+  if (!_isOn) return;
   if (codepoint == '\r') return;
   if (codepoint == '\n') {
     setCursor(0, _logical_y + fontLineHeight());
@@ -386,6 +378,7 @@ void ST7789Display::translateUTF8ToBlocks(char* dest, const char* src, size_t de
 }
 
 void ST7789Display::fillRect(int x, int y, int w, int h) {
+  if (!_isOn) return;
   if (w <= 0 || h <= 0) return;
   int x1 = scaleXBoundary(x);
   int y1 = scaleYBoundary(y);
@@ -399,6 +392,7 @@ void ST7789Display::fillRect(int x, int y, int w, int h) {
 }
 
 void ST7789Display::drawRect(int x, int y, int w, int h) {
+  if (!_isOn) return;
   if (w <= 0 || h <= 0) return;
   int x1 = scaleXBoundary(x);
   int y1 = scaleYBoundary(y);
@@ -412,6 +406,7 @@ void ST7789Display::drawRect(int x, int y, int w, int h) {
 }
 
 void ST7789Display::drawXbm(int x, int y, const uint8_t* bits, int w, int h) {
+  if (!_isOn || !bits || w <= 0 || h <= 0) return;
   // Calculate the base position in display coordinates
   uint16_t startX = x * SCALE_X + X_OFFSET;
   uint16_t startY = y * SCALE_Y + Y_OFFSET;
@@ -464,6 +459,7 @@ uint16_t ST7789Display::getTextWidth(const char* str) {
 }
 
 void ST7789Display::endFrame() {
+  if (!_isOn) return;
   applyTheme();
   display.display();
 }

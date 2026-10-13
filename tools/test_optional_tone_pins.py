@@ -73,7 +73,7 @@ def configuration():
                                ("UI_SOUND_SETTINGS_GROUP", "1")):
                 assert current.get(key) == value, (name, key, current.get(key))
         assert macros("env:" + headless)["SMARTUI_HEADLESS"] == "1"
-        assert flags["SMARTUI_RELEASE_LABEL"].strip("'\"") == "0.18"
+        assert flags["SMARTUI_RELEASE_LABEL"].strip("'\"") == "0.19"
         assert "PIN_BUZZER" not in flags and "PIN_VIBRATION" not in flags
         if name == "Paper":
             assert flags["UI_NOTIFY_GPIO_SELECT"] == "0", "Tone must not enable Paper vibration GPIO"

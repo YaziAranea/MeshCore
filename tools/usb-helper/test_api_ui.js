@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.5.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.6.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -443,10 +443,76 @@ test('per-field save/readback keeps another unsaved field',async()=>{
     await tab(p,'sound');
     await p.locator('#api-setting-volume').selectOption('3');
     await tab(p,'device');
+    const before=await p.evaluate(()=>__apiMock.commands.length);
     await p.locator('#api-setting-agc_reset').selectOption('1');await p.getByRole('button',{name:'Сохранить CLI: AGC-сброс · каждые 60 с',exact:true}).click();await ready(p);
     assert.equal(await p.evaluate(()=>window.__apiMock.settings.agc_reset),1);assert.equal(await p.locator('#api-setting-volume').inputValue(),'3');
     assert.equal(await p.evaluate(()=>window.__apiMock.settings.volume),7);
+    assert.deepEqual(await p.evaluate(n=>__apiMock.commands.slice(n),before),['ui set agc_reset 1','ui get agc_reset']);
   }finally{await f.close();}
+});
+
+test('scalar readback stays bounded, refreshes profile reset and preserves drafts; explicit read is fresh',async()=>{
+  const full=fullSettingsFixture();full.schemas.profile.supported=1;full.settings.profile=2;
+  const f=await fixture({console:1,control:1,firmware:'0.19',...full});
+  try{const p=f.page;await connect(p);
+    await p.locator('#api-setting-ui_theme').selectOption('2');await tab(p,'sound');
+    await p.evaluate(()=>{const m=__apiMock,original=m.handle;m.handle=function(packet){original.call(this,packet);if(/^ui set volume /.test(this.commands.at(-1)))this.settings.profile=0;};});
+    for(let i=0;i<40;i++){
+      const value=String(3+i%2),before=await p.evaluate(()=>__apiMock.commands.length);
+      await p.locator('#api-setting-volume').selectOption(value);
+      await p.getByRole('button',{name:'Сохранить CLI: Громкость',exact:true}).click();await ready(p);
+      assert.deepEqual(await p.evaluate(n=>__apiMock.commands.slice(n),before),['ui set volume '+value,'ui get volume','ui get profile']);
+      assert.equal(await p.locator('#api-setting-volume').inputValue(),value);
+      assert.equal(await p.locator('#api-setting-profile').inputValue(),'0');
+      assert.equal(await p.locator('#api-setting-ui_theme').inputValue(),'2');
+      assert.equal(await p.locator('#api-saved-ui_theme').getAttribute('data-dirty'),'true');
+    }
+    // A coupled setter keeps the full dependency/capability/schema refresh.
+    let before=await p.evaluate(()=>__apiMock.commands.length);
+    await p.locator('#api-setting-melody').selectOption('1');
+    await p.getByRole('button',{name:'Сохранить CLI: Общая мелодия',exact:true}).click();await ready(p);
+    let commands=await p.evaluate(n=>__apiMock.commands.slice(n),before);
+    assert.ok(commands.includes('ui caps sound')&&commands.includes('ui schema tone_pin')&&commands.includes('ui get melody_system'));
+    await p.evaluate(()=>{__apiMock.settings.ui_theme=3;__apiMock.settings.volume=9;});
+    before=await p.evaluate(()=>__apiMock.commands.length);
+    await tab(p,'device');
+    await p.locator('#api-settings-load').click();await p.locator('#confirm-yes').click();await ready(p);
+    commands=await p.evaluate(n=>__apiMock.commands.slice(n),before);
+    assert.ok(commands.includes('ui caps sound')&&commands.includes('ui schema tone_pin'));
+    assert.equal(await p.locator('#api-setting-ui_theme').inputValue(),'3');
+    assert.equal(await p.locator('#api-setting-volume').inputValue(),'9');
+    assert.equal(await p.locator('#api-saved-ui_theme').getAttribute('data-dirty'),'false');
+  }finally{await f.close();}
+});
+
+test('scalar failed ACK or readback never retries or reports success and blocks further writes',async()=>{
+  for(const failure of ['storage','mismatch','lost_ack','lost_read']){
+    const f=await fixture({clock:true,...fullSettingsFixture()});
+    try{const p=f.page;await connect(p);await tab(p,'sound');
+      await p.evaluate(failure=>{const m=__apiMock,original=m.reply;m.reply=function(tag,text){
+        const command=this.commands.at(-1);
+        if(command==='ui set volume 3'){this.afterSave=true;if(failure==='lost_ack')return;}
+        else if(this.afterSave&&command==='ui get volume'){
+          if(failure==='lost_read')return;
+          text=failure==='storage'?'ERR ui storage':'OK ui get key=volume value=4';
+        }
+        original.call(this,tag,text);
+      };},failure);
+      await p.locator('#api-setting-volume').selectOption('3');
+      await p.getByRole('button',{name:'Сохранить CLI: Громкость',exact:true}).click();
+      await p.waitForFunction(()=>__apiMock.commands.includes('ui set volume 3'));
+      if(failure==='lost_read')await p.waitForFunction(()=>__apiMock.afterSave&&__apiMock.commands.at(-1)==='ui get volume');
+      if(failure.startsWith('lost_'))await p.clock.fastForward(6500);
+      await p.waitForFunction(()=>document.getElementById('transport-state').textContent.includes('Результат неизвестен'));
+      assert.equal(await p.locator('#api-settings-load').isDisabled(),true);
+      assert.doesNotMatch(await p.locator('#api-feedback').textContent(),/Настройка сохранена/);
+      assert.equal(await p.evaluate(()=>__apiMock.commands.filter(c=>c==='ui set volume 3').length),1);
+      if(failure==='mismatch'||failure==='lost_ack'){
+        assert.equal(await p.locator('#api-setting-volume').inputValue(),'3');
+        assert.equal(await p.locator('#api-saved-volume').getAttribute('data-dirty'),'true');
+      }
+    }finally{await f.close();}
+  }
 });
 test('bridge/protection confirmations can decline; no accidental writes',async()=>{
   const f=await fixture();try{const p=f.page;await connect(p);

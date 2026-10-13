@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PublicReleasePolicyTests(unittest.TestCase):
     def test_one_public_version_for_seven_boards_and_eleven_images(self):
-        self.assertEqual((VERSION, TAG), ("0.18", "smartui-0.18"))
+        self.assertEqual((VERSION, TAG), ("0.19", "smartui-0.19"))
         self.assertEqual(DISTRIBUTION, "public")
         self.assertEqual(PUBLICATION, {
             "draft": False, "prerelease": False, "make_latest": True,
@@ -29,19 +29,19 @@ class PublicReleasePolicyTests(unittest.TestCase):
         from prune_superseded_helper_assets import TAG as cleanup_tag
         self.assertEqual(cleanup_tag, "smartui-0.16")
         self.assertNotEqual(cleanup_tag, TAG)
-        self.assertTrue(all("_UI_0.18" in name for name in FIRMWARE_NAMES))
-        self.assertEqual(ARCHIVE_NAME, "SmartUI_0.18_all-boards.zip")
-        self.assertEqual(NOTES_NAME, "RELEASE_NOTES_SmartUI_0.18_RU.md")
-        self.assertIn("Smart UI 0.18", (ROOT / NOTES_NAME).read_text(encoding="utf-8"))
+        self.assertTrue(all("_UI_0.19" in name for name in FIRMWARE_NAMES))
+        self.assertEqual(ARCHIVE_NAME, "SmartUI_0.19_all-boards.zip")
+        self.assertEqual(NOTES_NAME, "RELEASE_NOTES_SmartUI_0.19_RU.md")
+        self.assertIn("Smart UI 0.19", (ROOT / NOTES_NAME).read_text(encoding="utf-8"))
         validate_release_notes((ROOT / NOTES_NAME).read_text(encoding="utf-8"))
         build_info = (ROOT / "src/helpers/SmartUiBuildInfo.h").read_text(encoding="utf-8")
-        self.assertIn('#define SMARTUI_VERSION "0.18"', build_info)
+        self.assertIn('#define SMARTUI_VERSION "0.19"', build_info)
 
     def test_public_title_and_firmware_spelling_require_exact_version(self):
-        for title in ("# Smart UI 0.18 — release", "# SmartUI 0.18"):
+        for title in ("# Smart UI 0.19 — release", "# SmartUI 0.19"):
             validate_release_notes(title)
-        for title in ("", "Smart UI 0.11", "SmartUI 0.180", "Smart UI 0.18.1",
-                      "SmartUI 0.18 RELEASE_FINALIZATION"):
+        for title in ("", "Smart UI 0.11", "SmartUI 0.190", "Smart UI 0.19.1",
+                      "SmartUI 0.19 RELEASE_FINALIZATION"):
             with self.subTest(title=title), self.assertRaises(ValueError):
                 validate_release_notes(title)
 
@@ -50,8 +50,8 @@ class PublicReleasePolicyTests(unittest.TestCase):
                       "heltec_v4", "heltec_wireless_paper", "heltec_v4_r8"):
             with self.subTest(board=board):
                 source = (ROOT / "variants" / board / "platformio.ini").read_text(encoding="utf-8")
-                self.assertIn('SMARTUI_RELEASE_LABEL=\'"0.18"\'', source)
-                self.assertIn("SmartUI 0.18", source)
+                self.assertIn('SMARTUI_RELEASE_LABEL=\'"0.19"\'', source)
+                self.assertIn("SmartUI 0.19", source)
                 self.assertNotIn("SmartUI 0.06-test.2", source)
                 self.assertNotIn("PRIVATE_RELAY", source)
 
@@ -62,12 +62,12 @@ class PublicReleasePolicyTests(unittest.TestCase):
                       "github.event.repository.private == false",
                       "github.event_name == 'workflow_dispatch'",
                       "inputs.publish_experimental",
-                      "github.ref == 'refs/heads/smartui-0.18'",
+                      "github.ref == 'refs/heads/smartui-0.19'",
                       "needs: release-gate"):
             self.assertIn(guard, publish)
         self.assertIn('.full_name == "YaziAranea/MeshCore" and .private == false and .visibility == "public"', publish)
         self.assertEqual(publish.count("          check_public_target\n"), 2)
-        self.assertLess(publish.index("          check_public_target\n"), publish.index('tag="smartui-0.18"'))
+        self.assertLess(publish.index("          check_public_target\n"), publish.index('tag="smartui-0.19"'))
         self.assertLess(publish.rindex("          check_public_target\n"), publish.index('gh release edit "$tag"'))
         self.assertIn("--prerelease=false", publish)
         self.assertIn("--latest=true", publish)
@@ -81,6 +81,7 @@ class PublicReleasePolicyTests(unittest.TestCase):
                      "test_agc_maintenance.py", "test_smartui_cli.py", "test_fem_prefs.py",
                      "test_smartui_console_commands.py", "test_companion_cli_stack.py",
                      "test_optional_tone_pins.py", "test_optional_tone_runtime.py",
+                     "test_notify_pin_transactions.py", "test_st7789_driver.py",
                      "test_ble_pin_page.py", "test_connection_ui_v005.py",
                      "test_smartui_developer_kit.py", "test_heltec_v4_r8_profile.py",
                      "test_prune_superseded_helper_assets.py"):
@@ -117,10 +118,10 @@ class PublicReleasePolicyTests(unittest.TestCase):
 
     def test_esp_profile_order_and_r8_identity_are_unambiguous(self):
         expected = (
-            ("Heltec_v3_companion_radio_ble_smartui", "Heltec_V3_UI_0.18", "Heltec V3 OLED"),
-            ("heltec_v4_3_companion_radio_ble_femon_smartui", "Heltec_V4.3_UI_0.18", "Heltec V4.3 OLED FEM ON"),
-            ("Heltec_Wireless_Paper_companion_radio_ble_smartui_full", "Paper_UI_0.18", "Wireless Paper FULL"),
-            ("heltec_v4_r8_companion_radio_ble_femon_smartui", "Heltec_V4_R8_UI_0.18", "Heltec V4 R8 OLED FEM ON"),
+            ("Heltec_v3_companion_radio_ble_smartui", "Heltec_V3_UI_0.19", "Heltec V3 OLED"),
+            ("heltec_v4_3_companion_radio_ble_femon_smartui", "Heltec_V4.3_UI_0.19", "Heltec V4.3 OLED FEM ON"),
+            ("Heltec_Wireless_Paper_companion_radio_ble_smartui_full", "Paper_UI_0.19", "Wireless Paper FULL"),
+            ("heltec_v4_r8_companion_radio_ble_femon_smartui", "Heltec_V4_R8_UI_0.19", "Heltec V4 R8 OLED FEM ON"),
         )
         self.assertEqual(len(ESP_ENVS), len(ESP_PAIRS))
         self.assertEqual(len(BOARD_NAMES), len(NRF_ENVS) + len(ESP_ENVS))

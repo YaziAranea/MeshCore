@@ -9,7 +9,7 @@
 class ST7789Display : public DisplayDriver {
   ST7789Spi display;
   bool _isOn;
-  uint16_t _color;
+  uint16_t _color=0xFFFF;
   int _x=0, _y=0;
   int _logical_x=0, _logical_y=0;
   uint8_t _text_size=1;

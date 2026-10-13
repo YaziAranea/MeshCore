@@ -1,43 +1,16 @@
 #!/usr/bin/env python3
 """Exercise exact-source packaging against real Git line-ending edge cases."""
 
-from pathlib import Path
 import os
-import subprocess
-import tempfile
 import unittest
+from unittest.mock import patch
 
 from package_smartui_release import require_clean_checkout
+from release_source_test_support import GitCheckoutFixture
+from smartui_source_guard import BUILD_OVERRIDE_ENV
 
 
-class SourceGuardTests(unittest.TestCase):
-    def setUp(self):
-        self.folder = tempfile.TemporaryDirectory(prefix="smartui-source-guard-")
-        self.addCleanup(self.folder.cleanup)
-        self.root = Path(self.folder.name)
-        self.git("init", "--quiet")
-        self.git("config", "user.name", "Source guard test")
-        self.git("config", "user.email", "source-guard@example.invalid")
-        self.git("config", "core.autocrlf", "false")
-        self.git("config", "core.filemode", "false")
-        (self.root / ".gitattributes").write_bytes(b"*.cpp -text\n")
-        (self.root / "source.cpp").write_bytes(b"int value = 1;\r\n")
-        self.git("add", ".")
-        self.git("commit", "--quiet", "-m", "Inherited CRLF source")
-        (self.root / ".gitattributes").write_bytes(b"*.cpp text eol=lf\n")
-        self.git("add", ".gitattributes")
-        self.git("commit", "--quiet", "-m", "New newline policy")
-        # Force a content check after the attribute change. Otherwise Git's
-        # stat cache can legitimately consider this untouched file clean,
-        # making the CRLF regression fixture depend on filesystem timing.
-        source = self.root / "source.cpp"
-        stat = source.stat()
-        os.utime(source, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
-
-    def git(self, *args):
-        return subprocess.run(["git", *args], cwd=self.root,
-                              capture_output=True, check=True).stdout
-
+class SourceGuardTests(GitCheckoutFixture, unittest.TestCase):
     def rejected(self):
         with self.assertRaisesRegex(ValueError, "dirty tracked checkout"):
             require_clean_checkout(self.root)
@@ -81,6 +54,40 @@ class SourceGuardTests(unittest.TestCase):
     def test_staged_mode_change_is_rejected(self):
         self.git("update-index", "--chmod=+x", "source.cpp")
         self.rejected()
+
+    def test_ignored_local_config_is_rejected_even_when_empty(self):
+        local = self.root / "platformio.local.ini"
+        for contents in (b"", b"[env:test]\nbuild_flags = -DLOCAL_OVERRIDE=1\n"):
+            with self.subTest(contents=contents):
+                local.write_bytes(contents)
+                self.assertIn(b"platformio.local.ini", self.git("check-ignore", str(local)))
+                with self.assertRaisesRegex(ValueError, "local build override: platformio.local.ini"):
+                    require_clean_checkout(self.root)
+        local.unlink()
+        require_clean_checkout(self.root)
+
+    def test_environment_build_overrides_are_rejected(self):
+        for name in BUILD_OVERRIDE_ENV:
+            with self.subTest(name=name), patch.dict(os.environ, {name: "private-value"}):
+                with self.assertRaisesRegex(ValueError, "environment: " + name) as raised:
+                    require_clean_checkout(self.root)
+                self.assertNotIn("private-value", str(raised.exception))
+
+    def test_output_environment_and_ignored_artifacts_remain_allowed(self):
+        output = self.root / ".pio"
+        output.mkdir()
+        (output / "firmware.bin").write_bytes(b"cached output")
+        with patch.dict(os.environ, {"PLATFORMIO_BUILD_DIR": str(output),
+                                     "PLATFORMIO_UPLOAD_PORT": "unused"}):
+            require_clean_checkout(self.root)
+
+    def test_subdirectory_still_checks_worktree_root(self):
+        child = self.root / "nested"
+        child.mkdir()
+        require_clean_checkout(child)
+        (self.root / "platformio.local.ini").write_bytes(b"")
+        with self.assertRaisesRegex(ValueError, "platformio.local.ini"):
+            require_clean_checkout(child)
 
 
 if __name__ == "__main__":

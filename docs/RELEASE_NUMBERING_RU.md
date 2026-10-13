@@ -15,7 +15,7 @@
 | Smart UI 0.07 | 0.07 | [smartui-0.07](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.07) |
 | Smart UI 0.08 | 0.08 | [smartui-0.08](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.08) |
 
-Текущий публичный выпуск — [Smart UI 0.18](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.18). Его встроенная версия — **0.18**, версия USB-помощника — **2.5**. Описанное ниже переименование без пересборки относится только к прежним выпускам 0.01–0.06.
+Текущий публичный выпуск — [Smart UI 0.19](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.19). Его встроенная версия — **0.19**, версия USB-помощника — **2.6**. Описанное ниже переименование без пересборки относится только к прежним выпускам 0.01–0.06.
 
 ## Что изменилось
 

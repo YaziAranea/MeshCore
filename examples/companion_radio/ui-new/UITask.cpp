@@ -5582,17 +5582,14 @@ class HomeScreen : public UIScreen {
         return;
       }
 #endif
+      const char* role = page == HomePage::ALERT_LED ? "led_pin" : "vibe_pin";
+#ifdef PIN_MSG_TONE
+      if (page == HomePage::ALERT_TONE_PIN) role = "tone_pin";
+#endif
+      if (page == HomePage::ALERT_VIBE_PIN) _notify_picker.add(-1);
       for (size_t i = 0; i < sizeof(notify_gpio_pins) / sizeof(notify_gpio_pins[0]); i++) {
         int pin = notify_gpio_pins[i];
-        if (isNotifyGpioPinBlockedByBuild(pin)) continue;
-#if UI_OPTIONAL_NOTIFY_TONE
-        const char* role = page == HomePage::ALERT_LED ? "led_pin" : "vibe_pin";
         if (!_task->isDeviceSettingsPinAllowed(role, pin)) continue;
-#endif
-#if UI_TONE_BRIDGE_PAGE == 1
-        if (_task->isNotifyToneBridgeEnabled() &&
-            (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) continue;
-#endif
         _notify_picker.add(pin);
       }
 #else
@@ -12074,9 +12071,35 @@ void UITask::deviceSettingsPinOptions(const char* key, char* out, size_t capacit
 #endif
 }
 
-void UITask::applyDeviceSettingsAppearanceAndPins() {
+int UITask::nextDeviceSettingsPin(const char* key, int current) const {
+  const int8_t* pins = nullptr;
+  size_t count = 0;
+  bool allow_off = strcmp(key, "vibe_pin") == 0;
+#if UI_NOTIFY_GPIO_SELECT
+  pins = notify_gpio_pins;
+  count = sizeof(notify_gpio_pins) / sizeof(notify_gpio_pins[0]);
+#endif
+#if UI_OPTIONAL_NOTIFY_TONE
+  if (strcmp(key, "tone_pin") == 0) {
+    pins = smartui::optional_tone_gpio_pins;
+    count = sizeof(smartui::optional_tone_gpio_pins) / sizeof(smartui::optional_tone_gpio_pins[0]);
+    allow_off = true;
+  }
+#endif
+  int first = current;
+  bool have_first = false, after_current = false;
+  for (size_t i = 0; i < count + (allow_off ? 1U : 0U); ++i) {
+    const int pin = allow_off && i == 0 ? -1 : pins[i - (allow_off ? 1U : 0U)];
+    if (!isDeviceSettingsPinAllowed(key, pin)) continue;
+    if (!have_first) { first = pin; have_first = true; }
+    if (after_current && pin != current) return pin;
+    if (pin == current) after_current = true;
+  }
+  return first;
+}
+
+void UITask::applyDeviceSettingsAppearance() {
   if (!_node_prefs) return;
-  stopNotifyOutputs();
   if (_display) {
 #if UI_T096_PREMIUM_TFT || UI_V4_3_OLED_PROFILE
     _display->setUiFont(uiOledFontForRole(_node_prefs->ui_font, UI_OLED_FONT_M));
@@ -12087,6 +12110,13 @@ void UITask::applyDeviceSettingsAppearanceAndPins() {
 #endif
     _display->setUiTheme(_node_prefs->ui_theme);
   }
+  extendAutoOff();
+  _next_refresh = 0;
+}
+
+void UITask::applyDeviceSettingsPins() {
+  if (!_node_prefs) return;
+  stopNotifyOutputs();
 #ifdef PIN_MSG_ALERT
   configureMsgAlertPin(_node_prefs->notify_gpio_pin);
 #endif
@@ -12554,15 +12584,7 @@ void UITask::cycleImportantNotifyMode() {
 void UITask::cycleNotifyLedPin() {
 #ifdef PIN_MSG_ALERT
 #if UI_NOTIFY_GPIO_SELECT
-  int next;
-#if UI_TONE_BRIDGE_PAGE == 1
-  next = isNotifyToneBridgeEnabled()
-      ? getNextNotifyGpioPinExcept(getMsgAlertPin(), DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN)
-      : getNextNotifyGpioPin(getMsgAlertPin());
-#else
-  next = getNextNotifyGpioPin(getMsgAlertPin());
-#endif
-  setNotifyLedPin(next);
+  setNotifyLedPin(nextDeviceSettingsPin("led_pin", getMsgAlertPin()));
 #else
   showAlert("Свет фикс", 900);
 #endif
@@ -12571,17 +12593,7 @@ void UITask::cycleNotifyLedPin() {
 
 void UITask::cycleNotifyTonePin() {
 #ifdef PIN_MSG_TONE
-#if UI_OPTIONAL_NOTIFY_TONE
-  const int current = getMsgTonePin();
-  int next = -1;
-  bool after_current = current < 0;
-  for (int8_t pin : smartui::optional_tone_gpio_pins) {
-    if (pin < 0) continue;
-    if (after_current && isDeviceSettingsPinAllowed("tone_pin", pin)) { next = pin; break; }
-    if (pin == current) after_current = true;
-  }
-  setNotifyTonePin(next);
-#elif UI_NOTIFY_GPIO_SELECT
+#if UI_NOTIFY_GPIO_SELECT || UI_OPTIONAL_NOTIFY_TONE
 #if UI_TONE_BRIDGE_PAGE == 1
   if (isNotifyToneBridgeEnabled()) {
     char fixed_alert[40];
@@ -12592,8 +12604,7 @@ void UITask::cycleNotifyTonePin() {
     return;
   }
 #endif
-  int next = getNextNotifyGpioPin(getMsgTonePin());
-  setNotifyTonePin(next);
+  setNotifyTonePin(nextDeviceSettingsPin("tone_pin", getMsgTonePin()));
 #else
   showAlert("Зумер фикс", 900);
 #endif
@@ -12602,16 +12613,7 @@ void UITask::cycleNotifyTonePin() {
 
 void UITask::cycleNotifyVibePin() {
 #if UI_NOTIFY_GPIO_SELECT
-  int current = getMsgVibePin();
-  int next;
-#if UI_TONE_BRIDGE_PAGE == 1
-  next = isNotifyToneBridgeEnabled()
-      ? getNextNotifyGpioPinExcept(current, DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN)
-      : getNextNotifyGpioPin(current);
-#else
-  next = getNextNotifyGpioPin(current);
-#endif
-  setNotifyVibePin(next);
+  setNotifyVibePin(nextDeviceSettingsPin("vibe_pin", getMsgVibePin()));
 #else
   showAlert("Вибро фикс", 900);
 #endif
@@ -12619,14 +12621,7 @@ void UITask::cycleNotifyVibePin() {
 
 void UITask::setNotifyLedPin(int pin) {
 #if defined(PIN_MSG_ALERT) && UI_NOTIFY_GPIO_SELECT
-  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
-#if UI_OPTIONAL_NOTIFY_TONE
-  if (!isDeviceSettingsPinAllowed("led_pin", pin)) return;
-#endif
-#if UI_TONE_BRIDGE_PAGE == 1
-  if (isNotifyToneBridgeEnabled() &&
-      (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
-#endif
+  if (!_node_prefs || !isDeviceSettingsPinAllowed("led_pin", pin)) return;
   if (getMsgAlertPin() == pin) return;
   const NodePrefs before = *_node_prefs;
   configureMsgAlertPin(pin);
@@ -12649,11 +12644,7 @@ void UITask::setNotifyLedPin(int pin) {
 
 void UITask::setNotifyTonePin(int pin) {
 #if defined(PIN_MSG_TONE) && (UI_NOTIFY_GPIO_SELECT || UI_OPTIONAL_NOTIFY_TONE)
-#if UI_OPTIONAL_NOTIFY_TONE
   if (!_node_prefs || !isDeviceSettingsPinAllowed("tone_pin", pin)) return;
-#else
-  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
-#endif
   if (isNotifyToneBridgeEnabled() || getMsgTonePin() == pin) return;
   const NodePrefs before = *_node_prefs;
   configureMsgTonePin(pin);
@@ -12677,14 +12668,7 @@ void UITask::setNotifyTonePin(int pin) {
 
 void UITask::setNotifyVibePin(int pin) {
 #if UI_NOTIFY_GPIO_SELECT
-  if (!_node_prefs || !isNotifyGpioPinAllowed(pin) || isNotifyGpioPinBlockedByBuild(pin)) return;
-#if UI_OPTIONAL_NOTIFY_TONE
-  if (!isDeviceSettingsPinAllowed("vibe_pin", pin)) return;
-#endif
-#if UI_TONE_BRIDGE_PAGE == 1
-  if (isNotifyToneBridgeEnabled() &&
-      (pin == DEFAULT_NOTIFY_TONE_PIN || pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)) return;
-#endif
+  if (!_node_prefs || !isDeviceSettingsPinAllowed("vibe_pin", pin)) return;
   if (getMsgVibePin() == pin) return;
   const NodePrefs before = *_node_prefs;
   configureMsgVibePin(pin);
@@ -12697,7 +12681,8 @@ void UITask::setNotifyVibePin(int pin) {
     return;
   }
   char alert[32];
-  snprintf(alert, sizeof(alert), "Вибро: D%d", pin);
+  if (pin < 0) snprintf(alert, sizeof(alert), "Вибро: ВЫКЛ");
+  else snprintf(alert, sizeof(alert), "Вибро: D%d", pin);
   showAlert(alert, 900);
   triggerMsgVibe();
 #else
@@ -12861,69 +12846,65 @@ bool UITask::supportsNotifyToneBridge() const {
 #endif
 }
 
-bool UITask::setNotifyToneBridgeEnabled(bool enable) {
+smartui::ToneBridgeResult UITask::setNotifyToneBridgeEnabled(bool enable) {
+  using Result = smartui::ToneBridgeResult;
 #if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
-  if (_node_prefs == NULL || the_mesh.isStorageRecoveryRequired() || the_mesh.isCLIRescue()) return false;
-  if (isNotifyToneBridgeEnabled() == enable) return true;
+  if (_node_prefs == NULL || the_mesh.isStorageRecoveryRequired() || the_mesh.isCLIRescue()) return Result::STORAGE;
+  if (isNotifyToneBridgeEnabled() == enable) return Result::OK;
+
+  // A bridge owns its fixed pair. Never relocate LED/vibration assignments or
+  // disable another output to make room: the user must free those pins first.
+  // An unchanged legacy shared LED/tone output remains usable in normal mode,
+  // but cannot acquire bridge ownership over another role.
+#if UI_NOTIFY_GPIO_SELECT
+  if (!isNotifyGpioPinAllowed(DEFAULT_NOTIFY_TONE_PIN) ||
+      isNotifyGpioPinBlockedByBuild(DEFAULT_NOTIFY_TONE_PIN)) return Result::PIN_CONFLICT;
+  if (enable && (!isNotifyGpioPinAllowed(DEFAULT_NOTIFY_TONE_BRIDGE_PIN) ||
+      isNotifyGpioPinBlockedByBuild(DEFAULT_NOTIFY_TONE_BRIDGE_PIN))) return Result::PIN_CONFLICT;
+#endif
+  if (enable) {
+    const int led = getNotifyLedPin(), vibe = getNotifyVibePin();
+    if (DEFAULT_NOTIFY_TONE_PIN == DEFAULT_NOTIFY_TONE_BRIDGE_PIN ||
+        led == DEFAULT_NOTIFY_TONE_PIN || led == DEFAULT_NOTIFY_TONE_BRIDGE_PIN ||
+        vibe == DEFAULT_NOTIFY_TONE_PIN || vibe == DEFAULT_NOTIFY_TONE_BRIDGE_PIN)
+      return Result::PIN_CONFLICT;
+  }
 
   // Only these fields are touched. Avoid a full NodePrefs copy on the nRF
-  // loop stack, and do not reapply unrelated radio settings on rollback.
+  // loop stack. Persistence failure must not change the active outputs.
   struct BridgeSnapshot {
     double latitude, longitude;
     uint8_t bridge;
-    int8_t gpio, tone, vibe;
+    int8_t tone;
   };
   const BridgeSnapshot before = {
     _node_prefs->node_lat, _node_prefs->node_lon,
-    _node_prefs->notify_tone_bridge_enabled, _node_prefs->notify_gpio_pin,
-    _node_prefs->notify_tone_pin, _node_prefs->notify_vibe_pin
+    _node_prefs->notify_tone_bridge_enabled, _node_prefs->notify_tone_pin
   };
   static_assert(sizeof(BridgeSnapshot) <= 32, "Keep bridge rollback off the large preferences stack");
-  stopNotifyOutputs();
   _node_prefs->notify_tone_bridge_enabled = enable ? 1 : 0;
+  _node_prefs->notify_tone_pin = DEFAULT_NOTIFY_TONE_PIN;
+  if (!the_mesh.savePrefs()) {
+    _node_prefs->notify_tone_bridge_enabled = before.bridge;
+    _node_prefs->notify_tone_pin = before.tone;
+    _node_prefs->node_lat = before.latitude;
+    _node_prefs->node_lon = before.longitude;
+    return Result::STORAGE;
+  }
 
+  stopNotifyOutputs();
+  configureMsgTonePin(DEFAULT_NOTIFY_TONE_PIN);
   if (enable) {
-    configureMsgTonePin(DEFAULT_NOTIFY_TONE_PIN);
-#ifdef PIN_MSG_ALERT
-    if (_msg_alert_pin == DEFAULT_NOTIFY_TONE_PIN || _msg_alert_pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN) {
-      int safe_alert = getDefaultNotifyGpioPin();
-      if (safe_alert == DEFAULT_NOTIFY_TONE_PIN || safe_alert == DEFAULT_NOTIFY_TONE_BRIDGE_PIN) {
-        safe_alert = getNextNotifyGpioPinExcept(safe_alert, DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
-      }
-      configureMsgAlertPin(safe_alert);
-    }
-#endif
-    if (_msg_vibe_pin == DEFAULT_NOTIFY_TONE_PIN || _msg_vibe_pin == DEFAULT_NOTIFY_TONE_BRIDGE_PIN) {
-      configureMsgVibePin(-1);
-    }
     pinMode(DEFAULT_NOTIFY_TONE_BRIDGE_PIN, OUTPUT);
     digitalWrite(DEFAULT_NOTIFY_TONE_BRIDGE_PIN, LOW);
   } else {
     uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
-    configureMsgTonePin(DEFAULT_NOTIFY_TONE_PIN);
-  }
-
-  if (!the_mesh.savePrefs()) {
-    _node_prefs->notify_tone_bridge_enabled = before.bridge;
-    _node_prefs->notify_gpio_pin = before.gpio;
-    _node_prefs->notify_tone_pin = before.tone;
-    _node_prefs->notify_vibe_pin = before.vibe;
-    _node_prefs->node_lat = before.latitude;
-    _node_prefs->node_lon = before.longitude;
-    uiStopToneBridge(DEFAULT_NOTIFY_TONE_PIN, DEFAULT_NOTIFY_TONE_BRIDGE_PIN);
-#ifdef PIN_MSG_ALERT
-    configureMsgAlertPin(before.gpio);
-#endif
-    configureMsgTonePin(before.tone);
-    configureMsgVibePin(before.vibe);
-    _next_refresh = 0;
-    return false;
   }
   _next_refresh = 0;
-  return true;
+  return Result::OK;
 #else
   (void)enable;
-  return false;
+  return Result::UNSUPPORTED;
 #endif
 }
 
@@ -12931,8 +12912,10 @@ void UITask::toggleNotifyToneBridge() {
 #if UI_TONE_BRIDGE_PAGE == 1 && defined(PIN_MSG_TONE)
   if (_node_prefs == NULL) return;
   const bool enable = !isNotifyToneBridgeEnabled();
-  if (!setNotifyToneBridgeEnabled(enable)) {
-    showAlert(the_mesh.getPrefsSaveErrorText(), 1400);
+  const auto result = setNotifyToneBridgeEnabled(enable);
+  if (result != smartui::ToneBridgeResult::OK) {
+    showAlert(result == smartui::ToneBridgeResult::PIN_CONFLICT ?
+        "Вывод занят: LED/вибро" : the_mesh.getPrefsSaveErrorText(), 1400);
     return;
   }
   char alert[48];

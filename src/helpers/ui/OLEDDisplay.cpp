@@ -48,6 +48,9 @@ OLEDDisplay::OLEDDisplay() {
 	fontData = ArialMT_Plain_10;
 	fontTableLookupFunction = DefaultFontTableLookup;
 	buffer = NULL;
+	BufferOffset = 0;
+	logBufferSize = logBufferFilled = logBufferLine = logBufferMaxLines = 0;
+	logBuffer = NULL;
 #ifdef OLEDDISPLAY_DOUBLE_BUFFER
 	buffer_back = NULL;
 #endif
@@ -59,37 +62,34 @@ OLEDDisplay::~OLEDDisplay() {
 
 bool OLEDDisplay::allocateBuffer() {
 
-  logBufferSize = 0;
-  logBufferFilled = 0;
-  logBufferLine = 0;
-  logBufferMaxLines = 0;
-  logBuffer = NULL;
-
+  // allocateBuffer() is public and may be called without init(). Preserve an
+  // existing allocation's offset and log buffer across wake/reinitialization.
+  if (buffer == NULL) BufferOffset = getBufferOffset();
+  if (BufferOffset < 0 || displayBufferSize == 0) return false;
   if (!connect()) {
     DEBUG_OLEDDISPLAY("[OLEDDISPLAY][init] Can't establish connection to display\n");
     return false;
   }
 
   if(this->buffer==NULL) {
-    this->buffer = (uint8_t*) malloc((sizeof(uint8_t) * displayBufferSize) + BufferOffset);
-    this->buffer += BufferOffset;
-
-    if(!this->buffer) {
+    uint8_t* allocated = (uint8_t*) malloc((sizeof(uint8_t) * displayBufferSize) + BufferOffset);
+    if(!allocated) {
       DEBUG_OLEDDISPLAY("[OLEDDISPLAY][init] Not enough memory to create display\n");
       return false;
     }
+    this->buffer = allocated + BufferOffset;
   }
 
   #ifdef OLEDDISPLAY_DOUBLE_BUFFER
   if(this->buffer_back==NULL) {
-    this->buffer_back = (uint8_t*) malloc((sizeof(uint8_t) * displayBufferSize) + BufferOffset);
-    this->buffer_back += BufferOffset;
-
-    if(!this->buffer_back) {
+    uint8_t* allocated = (uint8_t*) malloc((sizeof(uint8_t) * displayBufferSize) + BufferOffset);
+    if(!allocated) {
       DEBUG_OLEDDISPLAY("[OLEDDISPLAY][init] Not enough memory to create back buffer\n");
       free(this->buffer - BufferOffset);
+      this->buffer = NULL;
       return false;
     }
+    this->buffer_back = allocated + BufferOffset;
   }
   #endif
 
@@ -97,8 +97,6 @@ bool OLEDDisplay::allocateBuffer() {
 }
 
 bool OLEDDisplay::init() {
-
-  BufferOffset = getBufferOffset();
 
   if(!allocateBuffer()) {
     return false;
@@ -116,9 +114,14 @@ void OLEDDisplay::end() {
   if (this->buffer_back) { free(this->buffer_back - BufferOffset); this->buffer_back = NULL; }
   #endif
   if (this->logBuffer != NULL) { free(this->logBuffer); this->logBuffer = NULL; }
+  logBufferSize = logBufferFilled = logBufferLine = logBufferMaxLines = 0;
 }
 
 void OLEDDisplay::resetDisplay(void) {
+  if (!buffer) return;
+  #ifdef OLEDDISPLAY_DOUBLE_BUFFER
+  if (!buffer_back) return;
+  #endif
   clear();
   #ifdef OLEDDISPLAY_DOUBLE_BUFFER
   memset(buffer_back, 1, displayBufferSize);
@@ -135,6 +138,7 @@ OLEDDISPLAY_COLOR OLEDDisplay::getColor() {
 }
 
 void OLEDDisplay::setPixel(int16_t x, int16_t y) {
+  if (!buffer) return;
   if (x >= 0 && x < this->width() && y >= 0 && y < this->height()) {
     switch (color) {
       case WHITE:   buffer[x + (y / 8) * this->width()] |=  (1 << (y & 7)); break;
@@ -145,6 +149,7 @@ void OLEDDisplay::setPixel(int16_t x, int16_t y) {
 }
 
 void OLEDDisplay::setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR color) {
+  if (!buffer) return;
   if (x >= 0 && x < this->width() && y >= 0 && y < this->height()) {
     switch (color) {
       case WHITE:   buffer[x + (y / 8) * this->width()] |=  (1 << (y & 7)); break;
@@ -155,6 +160,7 @@ void OLEDDisplay::setPixelColor(int16_t x, int16_t y, OLEDDISPLAY_COLOR color) {
 }
 
 void OLEDDisplay::clearPixel(int16_t x, int16_t y) {
+  if (!buffer) return;
   if (x >= 0 && x < this->width() && y >= 0 && y < this->height()) {
     switch (color) {
       case BLACK:   buffer[x + (y >> 3) * this->width()] |=  (1 << (y & 7)); break;
@@ -389,6 +395,7 @@ void OLEDDisplay::fillTriangle(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
 }
 
 void OLEDDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length) {
+  if (!buffer) return;
   if (y < 0 || y >= this->height()) { return; }
 
   if (x < 0) {
@@ -422,6 +429,7 @@ void OLEDDisplay::drawHorizontalLine(int16_t x, int16_t y, int16_t length) {
 }
 
 void OLEDDisplay::drawVerticalLine(int16_t x, int16_t y, int16_t length) {
+  if (!buffer) return;
   if (x < 0 || x >= this->width()) return;
 
   if (y < 0) {
@@ -828,6 +836,7 @@ void OLEDDisplay::mirrorScreen() {
 }
 
 void OLEDDisplay::clear(void) {
+  if (!buffer) return;
   memset(buffer, 0, displayBufferSize);
 }
 
@@ -873,17 +882,18 @@ uint16_t OLEDDisplay::getHeight(void) {
 
 bool OLEDDisplay::setLogBuffer(uint16_t lines, uint16_t chars){
   if (logBuffer != NULL) free(logBuffer);
-  uint16_t size = lines * chars;
+  logBuffer = NULL;
+  logBufferSize = logBufferFilled = logBufferLine = logBufferMaxLines = 0;
+  uint32_t size = (uint32_t)lines * chars;
+  if (size > UINT16_MAX) return false;
   if (size > 0) {
-    this->logBufferLine     = 0;      // Lines printed
-    this->logBufferFilled   = 0;      // Nothing stored yet
-    this->logBufferMaxLines = lines;  // Lines max printable
-    this->logBufferSize     = size;   // Total number of characters the buffer can hold
     this->logBuffer         = (char *) malloc(size * sizeof(uint8_t));
     if(!this->logBuffer) {
       DEBUG_OLEDDISPLAY("[OLEDDISPLAY][setLogBuffer] Not enough memory to create log buffer\n");
       return false;
     }
+    this->logBufferMaxLines = lines;
+    this->logBufferSize = (uint16_t)size;
   }
   return true;
 }
@@ -925,7 +935,7 @@ size_t OLEDDisplay::write(uint8_t c) {
         // Calculate the new logBufferFilled value
         this->logBufferFilled = logBufferFilled - firstLineEnd;
         // Now we move the lines infront of the buffer
-        memcpy(this->logBuffer, &this->logBuffer[firstLineEnd], logBufferFilled);
+        memmove(this->logBuffer, &this->logBuffer[firstLineEnd], logBufferFilled);
       } else {
         // Let's reuse the buffer if it was full
         if (!bufferNotFull) {
@@ -1051,7 +1061,7 @@ void OLEDDisplay::sendInitCommands(void) {
 }
 
 void inline OLEDDisplay::drawInternal(int16_t xMove, int16_t yMove, int16_t width, int16_t height, const uint8_t *data, uint16_t offset, uint16_t bytesInData) {
-  if (width < 0 || height < 0) return;
+  if (!buffer || !data || width <= 0 || height <= 0) return;
   if (yMove + height < 0 || yMove > this->height())  return;
   if (xMove + width  < 0 || xMove > this->width())   return;
 
