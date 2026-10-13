@@ -544,7 +544,9 @@ jobs:
           python tools/test_release_source_identity.py
 
       - name: Check connection UI navigation and real-font layouts
-        run: python tools/test_connection_ui_v005.py
+        run: |
+          python tools/test_ble_pin_page.py
+          python tools/test_connection_ui_v005.py
 
       - name: Check offline USB Helper in isolated desktop and mobile Chromium
         env:

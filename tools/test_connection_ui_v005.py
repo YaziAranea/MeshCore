@@ -1,4 +1,4 @@
-"""Host QA for SmartUI 0.06 companion connection UI.
+"""Host QA for SmartUI companion connection and manual BLE PIN pages.
 
 Compiles the production policy helper, checks UITask source wiring, then
 extracts and runs the production render methods with checked-in firmware bitmap
@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import simulate_dev2_settings as settings
@@ -466,9 +468,218 @@ def geometry_and_previews() -> int:
     return checks
 
 
+def ble_pin_rendering() -> int:
+    """Execute the real PIN renderer and font-role helpers for every release board.
+
+    Reachability/lifecycle belong to test_ble_pin_page.py. Here only recorded
+    production draw calls are painted, using committed glyph bytes and the
+    drivers' pixel scale/weight rules; no Python copy of the page layout exists.
+    """
+    from PIL import Image, ImageDraw
+    from embedded_bitmap_fonts import EmbeddedRaw
+    from simulate_oled_128x64 import STYLES, glyph_for
+    from simulate_wireless_paper_ps17_qa import PROFILES as PAPER_FONTS
+    from test_ble_pin_page import production_defines, resolved_profiles
+    from test_ui_sessions_v006 import function, run_cpp
+
+    source = UI_PATH.read_text(encoding="utf-8")
+    roles = _extract_method_block(source, "static const uint8_t UI_OLED_FONT_M",
+                                  "\nstatic void drawOledCompactMenuPage")
+    renderer = function(source, "static int renderBlePinPage(")
+    t114_source = (ROOT / "src/helpers/ui/ST7789Display.cpp").read_text(encoding="utf-8")
+    t114_table = t114_source.split("ST7789_FONT_PROFILES[] = {", 1)[1].split("};", 1)[0]
+    t114_fonts = [(int(body), int(clock), name) for body, clock, name in
+                  re.findall(r'\{(\d+),\s*(\d+),\s*"([^"]+)"\}', t114_table)]
+    assert len(t114_fonts) == 10
+    profiles = resolved_profiles()
+    assert len(profiles) == 7 and len({env for env, _ in profiles}) == 7
+    native = OUT / "ble-pin-actual-cpp"
+    native.mkdir(parents=True, exist_ok=True)
+    records, preview_rows = [], []
+
+    @lru_cache(maxsize=None)
+    def raw_font(kind, index):
+        return EmbeddedRaw("meshcore_st7789_font" if kind == "T114" else "meshcore_font",
+                           "meshcoreSt7789Fonts" if kind == "T114" else "meshcoreSmallFonts", index)
+
+    def pixels(kind, font, size, bold, cx, y, text):
+        # Match driver widths before positioning centred text. T114 converts
+        # each glyph advance to logical coordinates, then paints physical ink.
+        if kind in ("T096", "T114"):
+            index = t114_fonts[font][int(size > 1)] if kind == "T114" else font
+            raw = raw_font(kind, index)
+            scale = 1 if kind == "T114" else size
+            extra = int(bold and size == 1)
+            advances = [raw.glyph(ch)["x_advance"] * scale + extra for ch in text]
+            width = sum(int(advance / 1.875 + .999) for advance in advances) if kind == "T114" else sum(advances)
+            x = cx - width // 2
+            if kind == "T114":
+                x, y = int(x * 1.875), int(y * 2.109375) + 1
+            points = set()
+            for ch, advance in zip(text, advances):
+                glyph = raw.glyph(ch)
+                for row in range(glyph["height"]):
+                    for col in range(glyph["width"]):
+                        if glyph["data"][row * glyph["row_bytes"] + col // 8] & (1 << (col & 7)):
+                            for dy in range(scale):
+                                for dx in range(scale + extra):
+                                    points.add((x + (glyph["x_offset"] + col) * scale + dx,
+                                                y + row * scale + dy))
+                x += advance
+            return points
+        if kind == "Paper":
+            advance, _gap, weight, fixed = list(PAPER_FONTS.values())[font]
+            weight = int(bold or weight)
+            widths = [(advance if ch != " " or fixed else 4) * size + weight for ch in text]
+        else:
+            _name, advance, style_bold = STYLES[font]
+            weight = int((bold or style_bold) and size == 1)
+            if weight and advance < 6:
+                advance = 6
+            if weight and advance < 7 and font != 4:
+                advance = 7
+            widths = [advance * size] * len(text)
+        x = cx - sum(widths) // 2
+        points = set()
+        for ch, advance in zip(text, widths):
+            if ch != " ":
+                for col, bits in enumerate(glyph_for(ch)):
+                    for row in range(8):
+                        if bits & (1 << row):
+                            for dy in range(size):
+                                for dx in range(size + weight):
+                                    points.add((x + col * size + dx, y + row * size + dy))
+            x += advance
+        return points
+
+    for board_index, (env, flags) in enumerate(profiles):
+        if "t096" in env:
+            kind, dimensions, fonts, count = "T096", (160, 80, 160, 80), range(5, 20), 20
+        elif "t114" in env:
+            kind, dimensions, fonts, count = "T114", (128, 64, 240, 135), range(10), 10
+        elif "Paper" in env:
+            kind, dimensions, fonts, count = "Paper", (250, 122, 250, 122), range(5), 5
+        else:
+            kind, dimensions, fonts, count = "OLED", (128, 64, 128, 64), range(5), 5
+        w, h, physical_w, physical_h = dimensions
+        code = r'''
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <iostream>
+#include <initializer_list>
+''' + production_defines(source, flags) + f'''
+struct DisplayDriver {{
+  enum {{ GREEN=1, LIGHT=2, YELLOW=3 }};
+  int font, size=1, color=LIGHT; bool bold=false;
+  int initial, scene;
+  int width() const {{return {w};}}
+  int height() const {{return {h};}}
+  uint8_t getUiFont() const {{return font;}}
+  uint8_t getUiFontCount() const {{return {count};}}
+  void setUiFont(uint8_t value) {{assert(value<getUiFontCount());font=value;}}
+  void setTextSize(int value) {{size=value;}}
+  void setBold(bool value) {{bold=value;}}
+  void setColor(int value) {{color=value;}}
+}};
+void drawRichTextCentered(DisplayDriver& d,int x,int y,const char* text) {{
+  std::cout<<d.initial<<'\\t'<<d.scene<<'\\t'<<d.font<<'\\t'<<d.size<<'\\t'
+           <<d.bold<<'\\t'<<x<<'\\t'<<y<<'\\t'<<d.color<<'\\t'<<text<<'\\n';
+}}
+''' + roles + "\n" + renderer + "\nint main(){\n"
+        for font in fonts:
+            # Include zero's defensive placeholder, leading zeroes, and the
+            # valid six-digit extremes. Every connection/enabled combination
+            # is executed, including stale connected=true while BLE is off.
+            for pin_index, pin in enumerate((0, 1, 100000, 428731, 999999)):
+                for enabled in (False, True):
+                    for connected in (False, True):
+                        scene = pin_index * 4 + int(enabled) * 2 + int(connected)
+                        code += (f'{{DisplayDriver d{{{font},1,2,false,{font},{scene}}};'
+                                 f'int refresh=renderBlePinPage(d,{pin},{str(connected).lower()},'
+                                 f'{str(enabled).lower()});assert(refresh>0);'
+                                 f'assert(d.font=={font});}}\n')
+        code += "}\n"
+        output = run_cpp(code, native, f"ble_pin_{board_index}")
+        scenes = {}
+        for line in output.splitlines():
+            initial, scene, font, size, bold, x, y, color, text = line.split("\t", 8)
+            key = int(initial), int(scene)
+            scenes.setdefault(key, []).append((int(font), int(size), bool(int(bold)),
+                                               int(x), int(y), int(color), text))
+        assert len(scenes) == len(fonts) * 20, (env, "missing renderer scene")
+        picked, font_frames = [], {}
+        for (initial, scene), ops in scenes.items():
+            pin = (0, 1, 100000, 428731, 999999)[scene // 4]
+            enabled, connected = bool(scene & 2), bool(scene & 1)
+            texts = [op[-1] for op in ops]
+            expected = ["ПИНКОД BLE", f"{pin:06d}" if pin else "------"]
+            if kind == "Paper":
+                expected += (["BLUETOOTH ВЫКЛ", "НАСТРОЙКИ > СИСТЕМА", "ПОДКЛЮЧЕНИЕ > BLE"]
+                             if not enabled else ["BLE ПОДКЛЮЧЕН"] if connected else
+                             ["ОТКРОЙТЕ MESHCORE", "УСТРОЙСТВА > ДОБАВИТЬ", "PIN / PASSKEY: ЭТИ 6 ЦИФР"])
+            else:
+                expected += ["Включите BLE" if not enabled else "BLE подключен" if connected else "код в приложении"]
+            assert texts == expected, (env, initial, scene, texts, expected)
+            image = Image.new("RGB", (physical_w, physical_h), "white" if kind == "Paper" else "black")
+            draw = ImageDraw.Draw(image)
+            boxes = []
+            for font, size, bold, x, y, color, text in ops:
+                ink = pixels(kind, font, size, bold, x, y, text)
+                assert ink, (env, initial, scene, "missing glyph ink", text)
+                box = (min(p[0] for p in ink), min(p[1] for p in ink),
+                       max(p[0] for p in ink) + 1, max(p[1] for p in ink) + 1)
+                assert 0 <= box[0] < box[2] <= physical_w and 0 <= box[1] < box[3] <= physical_h, (env, initial, scene, text, box)
+                # Header/page-indicator chrome ends at physical logical y=16.
+                chrome_end = int(16 * 2.109375) + 1 if kind == "T114" else 16
+                assert box[1] >= chrome_end, (env, initial, scene, "chrome collision", text, box)
+                for other in boxes:
+                    assert box[2] <= other[0] or other[2] <= box[0] or box[3] <= other[1] or other[3] <= box[1], (env, initial, scene, "overlapping rows", box, other)
+                boxes.append(box)
+                # SSD1306 and the ST7789 driver's one-bit framebuffer collapse
+                # semantic colours to foreground; only T096 paints RGB roles.
+                paint = ("black" if kind == "Paper" else "white" if kind in ("OLED", "T114")
+                         else {1: "#1df07a", 2: "#f4faf8", 3: "#ffe04a"}[color])
+                for point in ink:
+                    draw.point(point, fill=paint)
+            records.append(dict(environment=env, font=initial, scene=scene, texts=texts, ink_boxes=boxes))
+            if scene in (12, 14, 15):
+                font_frames.setdefault(initial, []).append((scene, image))
+                if initial == (10 if kind == "T096" else 0):
+                    picked.append((scene, image))
+        styles = Image.new("RGB", (3 * 520, len(fonts) * 290), "#20242b")
+        style_draw = ImageDraw.Draw(styles)
+        for row, (initial, frames) in enumerate(sorted(font_frames.items())):
+            style_draw.text((8, row * 290 + 4), f"{env} font={initial}: BLE off / waiting / connected", fill="white")
+            for column, (_scene, frame) in enumerate(sorted(frames)):
+                frame = frame.resize((frame.width * 2, frame.height * 2), Image.Resampling.NEAREST)
+                styles.paste(frame, (column * 520 + 8, row * 290 + 20))
+        styles.save(native / f"BLE_PIN_{board_index}_ALL_FONTS.png")
+        preview_rows.append((env, sorted(picked)))
+
+    # Seven separate board rows prevent aliases such as generic "OLED" from
+    # silently dropping V3, V4.3, R8, or ProMicro coverage.
+    sheet = Image.new("RGB", (3 * 520, 7 * 290), "#20242b")
+    draw = ImageDraw.Draw(sheet)
+    for row, (env, scenes) in enumerate(preview_rows):
+        draw.text((8, row * 290 + 4), env, fill="white")
+        for column, (scene, frame) in enumerate(scenes):
+            frame = frame.resize((frame.width * 2, frame.height * 2), Image.Resampling.NEAREST)
+            sheet.paste(frame, (column * 520 + 8, row * 290 + 20))
+    sheet.save(OUT / "BLE_PIN_ALL_SEVEN.png")
+    report = dict(boards=7, scenes=len(records), font_profiles=sum(len({r['font'] for r in records if r['environment']==env}) for env, _ in profiles),
+                  renderer_sha256=hashlib.sha256((roles + renderer).encode()).hexdigest(),
+                  scope="production C++ renderer/font roles, resolved release macros, committed bitmap pixels; no hardware execution",
+                  records=records)
+    (native / "REPORT.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"PASS {len(records)} production BLE PIN framebuffer scenes across all seven boards")
+    return len(records)
+
+
 def main():
-    total = compile_policy() + source_contract() + geometry_and_previews()
-    print(f"PASS {total} SmartUI 0.06 connection UI checks")
+    total = compile_policy() + source_contract() + geometry_and_previews() + ble_pin_rendering()
+    print(f"PASS {total} SmartUI connection UI checks")
 
 
 if __name__ == "__main__":

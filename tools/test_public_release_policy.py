@@ -81,6 +81,7 @@ class PublicReleasePolicyTests(unittest.TestCase):
                      "test_agc_maintenance.py", "test_smartui_cli.py", "test_fem_prefs.py",
                      "test_smartui_console_commands.py", "test_companion_cli_stack.py",
                      "test_optional_tone_pins.py", "test_optional_tone_runtime.py",
+                     "test_ble_pin_page.py", "test_connection_ui_v005.py",
                      "test_smartui_developer_kit.py", "test_heltec_v4_r8_profile.py",
                      "test_prune_superseded_helper_assets.py"):
             self.assertIn("python tools/" + test, workflow)

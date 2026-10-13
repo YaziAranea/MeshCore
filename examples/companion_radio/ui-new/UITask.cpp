@@ -3383,7 +3383,7 @@ static bool drawClockUptimeBetween(DisplayDriver& display, const UITask* task,
 }
 
 #if UI_BLE_PIN_PAGE
-static int renderBlePinPage(DisplayDriver& display, uint32_t ble_pin, bool connected) {
+static int renderBlePinPage(DisplayDriver& display, uint32_t ble_pin, bool connected, bool ble_enabled) {
   char pin_text[12];
   if (ble_pin != 0) {
     snprintf(pin_text, sizeof(pin_text), "%06lu", (unsigned long)ble_pin);
@@ -3404,8 +3404,12 @@ static int renderBlePinPage(DisplayDriver& display, uint32_t ble_pin, bool conne
     display.setBold(false);
     display.setTextSize(1);
     drawRichTextCentered(display, display.width() / 2, 82,
+                         !ble_enabled ? "BLUETOOTH ВЫКЛ" :
                          connected ? "BLE ПОДКЛЮЧЕН" : "ОТКРОЙТЕ MESHCORE");
-    if (!connected) {
+    if (!ble_enabled) {
+      drawRichTextCentered(display, display.width() / 2, 96, "НАСТРОЙКИ > СИСТЕМА");
+      drawRichTextCentered(display, display.width() / 2, 110, "ПОДКЛЮЧЕНИЕ > BLE");
+    } else if (!connected) {
       drawRichTextCentered(display, display.width() / 2, 96, "УСТРОЙСТВА > ДОБАВИТЬ");
       drawRichTextCentered(display, display.width() / 2, 110, "PIN / PASSKEY: ЭТИ 6 ЦИФР");
     }
@@ -3448,6 +3452,7 @@ static int renderBlePinPage(DisplayDriver& display, uint32_t ble_pin, bool conne
   uint8_t small_font = uiPushCompactChromeFont(display);
 #endif
   drawRichTextCentered(display, display.width() / 2, hint_y,
+                       !ble_enabled ? "Включите BLE" :
                        connected ? "BLE подключен" : "код в приложении");
   uiPopFont(display, small_font);
   return UI_IDLE_REFRESH_MILLIS;
@@ -6653,11 +6658,9 @@ class HomeScreen : public UIScreen {
 #endif
 #if UI_BLE_PIN_PAGE
     if (page == HomePage::BLE_PIN) {
-      return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0
-#if SMARTUI_CONNECTION_SELECTOR
-          && _task->getCompanionStatus().selected == CompanionMode::BLE
-#endif
-          ;
+      // This is a manually opened reference page. A connected companion or
+      // a saved USB/Wi-Fi selection must not make the passkey inaccessible.
+      return !_settings_open && the_mesh.getBLEPin() != 0;
     }
 #endif
     if (!UI_RECENT_PAGE && page == HomePage::RECENT) return false;
@@ -8286,23 +8289,13 @@ public:
 
   bool isBlePinPage() const {
 #if UI_BLE_PIN_PAGE
-    return !_settings_open && _page == HomePage::BLE_PIN
-#if SMARTUI_CONNECTION_SELECTOR
-        && _task->getCompanionStatus().selected == CompanionMode::BLE
-#endif
-        ;
+    return !_settings_open && _page == HomePage::BLE_PIN;
 #else
     return false;
 #endif
   }
 
   void poll() override {
-#if SMARTUI_CONNECTION_SELECTOR && UI_BLE_PIN_PAGE
-    if (!_settings_open && _page == HomePage::BLE_PIN &&
-        _task->getCompanionStatus().selected != CompanionMode::BLE) {
-      _page = defaultHomePage();
-    }
-#endif
     if (_shutdown_init && !_task->isButtonPressed()) {  // must wait for USR button to be released
       // Consume this request once. If storage cannot flush, shutdown returns
       // with an alert and requires a new confirmation instead of retrying on
@@ -9592,7 +9585,9 @@ public:
 #endif
 #if UI_BLE_PIN_PAGE
     } else if (_page == HomePage::BLE_PIN) {
-      renderBlePinPage(display, the_mesh.getBLEPin(), _task->hasConnection());
+      const bool ble_enabled = _task->isBluetoothEnabled();
+      renderBlePinPage(display, the_mesh.getBLEPin(),
+                       ble_enabled && _task->hasConnection(), ble_enabled);
 #endif
     } else if (_page == HomePage::MSG_POPUP) {
 #if UI_V4_3_OLED_PROFILE
@@ -14731,9 +14726,8 @@ void UITask::updateConnectionState() {
     _last_connection_state = connected;
     _ble_state_changed_at = millis();
 #if UI_BLE_PIN_PAGE
-    if (connected && home != NULL && ((HomeScreen*)home)->isBlePinPage()) {
-      ((HomeScreen*)home)->resetToFirstPage();
-      if (curr == home) _next_refresh = 0;
+    if (home != NULL && curr == home && ((HomeScreen*)home)->isBlePinPage()) {
+      _next_refresh = 0;
     }
 #endif
   }

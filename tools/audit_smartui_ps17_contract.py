@@ -179,8 +179,8 @@ check(
         (
             "#if UI_BLE_PIN_PAGE",
             "static int renderBlePinPage",
-            "return !_settings_open && !_task->hasConnection() && the_mesh.getBLEPin() != 0",
-            "_task->getCompanionStatus().selected == CompanionMode::BLE",
+            "return !_settings_open && the_mesh.getBLEPin() != 0;",
+            "ble_enabled && _task->hasConnection(), ble_enabled",
             "isBlePinPage()",
         ),
     )
@@ -214,11 +214,11 @@ check(
     and has_all(
         connection_block,
         (
-            "connected && home != NULL && ((HomeScreen*)home)->isBlePinPage()",
-            "((HomeScreen*)home)->resetToFirstPage();",
+            "home != NULL && curr == home && ((HomeScreen*)home)->isBlePinPage()",
+            "_next_refresh = 0;",
         ),
     )
-    and "curr == home && ((HomeScreen*)home)->isBlePinPage()" not in connection_block
+    and "resetToFirstPage()" not in connection_block
     and "connected && idle_saver != NULL && curr == idle_saver" not in connection_block
     and has_all(
         wake_block,
