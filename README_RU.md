@@ -4,6 +4,7 @@
 > [Скачать](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.20)
 > · [Изменения, выбор файла и ограничения чистой установки](RELEASE_NOTES_SmartUI_0.20_RU.md)
 > · [Свежие экраны](docs/SCREENS_RU.md).
+> **Без экрана:** чистый ProMicro/FakeTec Headless использует BLE PIN `123456`; при обновлении остаётся прежний код. [Первое подключение и чтение неизвестного PIN по USB](docs/FLASHING_RU.md#первое-подключение-ble).
 > Latest — текущий выпуск, не подтверждение стабильности на всех физических платах.
 > [SmartUI 0.11](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.11) сохранён для отката и прежнего API, без замены его файлов.
 > Ниже сохранены исторические сведения. Актуальное описание — [README](README.md), интеграция — [Companion CLI](docs/SMARTUI_CLI_RU.md), помощник — [2.7](tools/usb-helper/README_RU.md). В 0.20 API201 и синхронизация событий выключены; используется локальный CMD66/RESP29.
