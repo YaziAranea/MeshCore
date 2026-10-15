@@ -14,6 +14,7 @@ DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
     "LICENSE",
     "docs/SMARTUI_CLI_RU.md",
+    "docs/HELPER_CONSOLE_RU.md",
     "docs/CONSOLE_COMMANDS_RU.md",
     "docs/CLI_BOARD_MATRIX_RU.md",
     "docs/EXTERNAL_BUZZER_RU.md",
@@ -41,6 +42,12 @@ SOURCES = (
     "tools/smartui-cli/tests/test_smartui_cli.py",
     "tools/usb-helper/api.js",
     "tools/usb-helper/core.js",
+    "tools/usb-helper/console_catalog.js",
+    "tools/usb-helper/console_runner.js",
+    "tools/usb-helper/test_console_catalog.js",
+    "tools/usb-helper/test_console_runner.js",
+    "tools/usb-helper/screenshots/command-tree-desktop.png",
+    "tools/usb-helper/screenshots/command-tree-mobile.png",
     "tools/usb-helper/test_api.js",
     "tools/usb-helper/test_api_fixture.js",
     "tools/usb-helper/presets.js",
@@ -55,7 +62,7 @@ def digest(raw):
     return hashlib.sha256(raw).hexdigest()
 
 
-def package(output, commit, *, root=ROOT, development=False):
+def package(output, commit, *, root=ROOT, development=False, firmware_commit=None):
     """Package only explicit sources, preserving repo-relative offline links.
 
     The default retains the release contract: commit identifies exact sources,
@@ -67,6 +74,9 @@ def package(output, commit, *, root=ROOT, development=False):
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         label = "base commit" if development else "exact-source commit"
         raise ValueError(f"Developer kit requires the full {label}")
+    if firmware_commit is not None:
+        if development or not re.fullmatch(r"[0-9a-f]{40}", firmware_commit):
+            raise ValueError("Separate firmware commit requires release mode and a full lowercase SHA")
     output, root = Path(output), Path(root)
     path = output / (DEVELOPMENT_ZIP_NAME if development else ZIP_NAME)
     if path.exists():
@@ -78,8 +88,9 @@ def package(output, commit, *, root=ROOT, development=False):
             raise ValueError(f"Developer kit source must be a regular nonempty file: {name}")
         payloads[name] = source.read_bytes()
     payloads["tools/usb-helper/README_RU.md"] = (
-        "# USB Helper 2.7\n\n"
+        "# USB Helper 2.8\n\n"
         "[Локальные команды и подключение](../../docs/SMARTUI_CLI_RU.md).\n\n"
+        "[Дерево команд и макросы](../../docs/HELPER_CONSOLE_RU.md).\n\n"
         "Отдельный offline HTML и полная инструкция находятся в "
         "[USB Helper из выпуска SmartUI 0.20](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.20).\n"
     ).encode("utf-8")
@@ -95,10 +106,11 @@ def package(output, commit, *, root=ROOT, development=False):
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 2.7"
+    helper = "USB Helper 2.8"
     payloads["README.md"] = (
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "
+        "[Дерево команд и макросы](docs/HELPER_CONSOLE_RU.md) · "
         "[Справочник команд](docs/CONSOLE_COMMANDS_RU.md) · "
         "[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md) · "
         "[Внешний зуммер](docs/EXTERNAL_BUZZER_RU.md) · "
@@ -123,6 +135,9 @@ def package(output, commit, *, root=ROOT, development=False):
             "schema_version": 1, "firmware_version": VERSION, "cli_version": 1,
             "source_commit": commit, "distribution": "public", "stage": "release",
         }
+    if firmware_commit is not None:
+        manifest.update(firmware_source_commit=firmware_commit, helper_source_commit=commit,
+                        documentation_source_commit=commit, helper_version="2.8")
     manifest.update(transport="companion-cli", command=66, response=29,
                     companion_protocol_version=14, local_only=True, sync=False, events=False)
     manifest["files"] = [{"name": name, "bytes": len(raw), "sha256": digest(raw)}
@@ -152,6 +167,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="output folder; existing kit files are never overwritten")
     parser.add_argument("--development", action="store_true", help="package a distinctly named local working-tree snapshot")
+    parser.add_argument("--firmware-commit", help="unchanged firmware SHA when updating only Helper/SDK")
     identity = parser.add_mutually_exclusive_group(required=True)
     identity.add_argument("--commit", help="full exact-source commit, release mode only")
     identity.add_argument("--base-commit", help="full provenance base commit, development mode only")
@@ -162,7 +178,7 @@ def main(argv=None):
         parser.error("--base-commit requires --development")
     try:
         path = package(args.output, args.base_commit if args.development else args.commit,
-                       development=args.development)
+                       development=args.development, firmware_commit=args.firmware_commit)
     except ValueError as exc:
         parser.error(str(exc))
     print(f"{path.name}: {path.stat().st_size} bytes; SHA256 {digest(path.read_bytes())}")

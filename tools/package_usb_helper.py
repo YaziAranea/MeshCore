@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_2.7.html"
-ZIP_NAME = "SmartUI_USB_Helper_2.7.zip"
+HTML_NAME = "SmartUI_USB_Helper_2.8.html"
+ZIP_NAME = "SmartUI_USB_Helper_2.8.zip"
 
 
 def digest(data):
@@ -18,7 +18,8 @@ def digest(data):
 
 def render():
     html = (SOURCE / "index.html").read_text(encoding="utf-8")
-    for part in ("core", "firmware", "api", "presets", "app", "dashboard"):
+    for part in ("core", "firmware", "api", "presets", "console_catalog",
+                 "console_runner", "app", "dashboard", "console"):
         marker = f"/* SMARTUI_HELPER_{part.upper()} */"
         if html.count(marker) != 1:
             raise ValueError(f"Expected exactly one {part} marker")
@@ -41,12 +42,15 @@ def package(output):
     # The repository README lives under tools/usb-helper; the archive's copy
     # lives at its root. Keep both locations' document links functional.
     for name in ("docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
-                 "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.20_RU.md"):
+                 "docs/FLASHING_RU.md", "docs/HELPER_CONSOLE_RU.md",
+                 "RELEASE_NOTES_SmartUI_0.20_RU.md"):
         readme = readme.replace(f"](../../{name})", f"]({name})")
     payloads = {
         HTML_NAME: html,
         "README_RU.md": readme.encode("utf-8"),
         "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
+        "docs/HELPER_CONSOLE_RU.md": (ROOT / "docs/HELPER_CONSOLE_RU.md").read_text(
+            encoding="utf-8").replace("../tools/usb-helper/screenshots/", "../screenshots/").encode("utf-8"),
         "docs/CONSOLE_COMMANDS_RU.md": (ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes(),
         "docs/CLI_BOARD_MATRIX_RU.md": (ROOT / "docs/CLI_BOARD_MATRIX_RU.md").read_bytes(),
         "docs/EXTERNAL_BUZZER_RU.md": (ROOT / "docs/EXTERNAL_BUZZER_RU.md").read_bytes(),
@@ -58,7 +62,7 @@ def package(output):
         "docs/BUILD_RU.md": (ROOT / "docs/BUILD_RU.md").read_bytes(),
         "docs/VERIFY_RU.md": (ROOT / "docs/VERIFY_RU.md").read_bytes(),
         "variants/promicro/variant.cpp": (ROOT / "variants/promicro/variant.cpp").read_bytes(),
-        "tools/usb-helper/README_RU.md": "# USB Helper 2.7\n\n[Инструкция, возможности и подключение](../../README_RU.md).\n".encode("utf-8"),
+        "tools/usb-helper/README_RU.md": "# USB Helper 2.8\n\n[Инструкция, возможности и подключение](../../README_RU.md).\n".encode("utf-8"),
         "RELEASE_NOTES_SmartUI_0.20_RU.md": (ROOT / "RELEASE_NOTES_SmartUI_0.20_RU.md").read_bytes(),
         "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
         "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
@@ -75,6 +79,8 @@ def package(output):
         "screenshots/console-mobile.png": (SOURCE / "screenshots/console-mobile.png").read_bytes(),
         "screenshots/headless-desktop.png": (SOURCE / "screenshots/headless-desktop.png").read_bytes(),
         "screenshots/headless-mobile.png": (SOURCE / "screenshots/headless-mobile.png").read_bytes(),
+        "screenshots/command-tree-desktop.png": (SOURCE / "screenshots/command-tree-desktop.png").read_bytes(),
+        "screenshots/command-tree-mobile.png": (SOURCE / "screenshots/command-tree-mobile.png").read_bytes(),
     }
     # Linked historical context and wiring illustrations remain readable offline.
     for name in ("docs/AUDIT_FIXES_0.06_RU.md", "RELEASE_NOTES_v2.1.0-dev.1_RU.md",

@@ -1211,3 +1211,240 @@ test('network settings persist once, preserve current path, and fail closed afte
   assert.equal(state.path_bytes,3);assert.equal(state.tx_dbm,20);assert.equal(state.freq_khz,868731);assert.equal(f.instance.state.verified,false);
   assert.equal(f.port.commands.filter(c=>c.startsWith('settings radio set')).length,1);await f.instance.disconnect();
 });
+
+test('public service console rejects secrets, form-only operations and injection before I/O',async()=>{
+  const {consoleCommandPolicy}=require('./core');
+  const f=await connected({settings:true});
+  try{
+    const count=f.port.commands.length;
+    const forbidden=['',' help','help','status ','STATUS','get pin','get ble.pin','set pin 654321','mode ble',
+      'wifi setup','wifi status','wifi forget','reply get 1','reply set 1 6162','reboot','format','cat /prefs',
+      'settings adc preview 3800','settings adc apply 1','settings adc reset','settings adc set 4.9',
+      'settings adc service start','settings adc service stop','settings name 00','settings name c0af',
+      'settings name e280ae','settings name '+('61'.repeat(32)),
+      ...['tone_pin','led_pin','vibe_pin','profile','bridge','high_drive'].map(k=>'settings set '+k+' 1'),
+      'settings set volume 1;reboot','settings set unknown 1','settings set volume NaN','settings set volume 9007199254740993',
+      'settings set volume 1\nmode usb','settings get volume\r','settings get volume\0','settings get пароль',
+      'settings set volume -1','settings set volume +1','settings set volume 01','settings tx set -0',
+      'settings caps password','settings schema adc_multiplier','settings tx set 51','settings advert set 16',
+      'settings radio set 868731 62500 7 7 4'];
+    for(const command of forbidden){
+      assert.throws(()=>consoleCommandPolicy(command),code('COMMAND_INVALID'),command);
+      await assert.rejects(f.instance.executeConsoleCommand(command,{mutate:false}),code('COMMAND_INVALID'),command);
+    }
+    assert.equal(f.port.commands.length,count,'Rejected commands must not touch USB');
+    assert.deepEqual(consoleCommandPolicy('settings set battery_protection 0'),{write:true,warning:'battery'});
+    for(const command of ['settings set muted 0','settings sound preview','settings test','settings name 6162','settings tx set -9'])assert.equal(consoleCommandPolicy(command).write,true);
+    for(const command of ['info','status','settings get tone_pin','settings schema profile','settings adc manual','settings adc service'])assert.equal(consoleCommandPolicy(command).write,false);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service console parses exact read records, zero values and capability denials',async()=>{
+  const f=await connected({settings:true,schemas:{},manualAdc:true,settingsCaps:{adc_service:1},onCommand(command,port){
+    if(command==='settings caps night_quiet'){port.reply('OK settings caps key=night_quiet value=0');return false;}
+    if(command==='settings melody 0'){port.reply('OK settings melody id=0 name_hex=d09fd183d0bbd18cd181');return false;}
+  }});
+  try{
+    for(const command of ['info','status','settings caps','settings get','settings caps schema','settings caps night_quiet',
+      'settings schema volume','settings get muted','settings get adc_multiplier','settings adc manual','settings adc service','settings melody 0']){
+      const before=f.port.commands.length,reply=await f.instance.executeConsoleCommand(command);
+      assert.equal(typeof reply,'string');assert.ok(reply.length);
+      assert.deepEqual(f.port.commands.slice(before),[command]);
+    }
+    assert.equal(await f.instance.executeConsoleCommand('settings caps night_quiet'),'OK settings caps key=night_quiet value=0');
+    assert.equal(f.instance.state.verified,true);
+    assert.equal(f.instance.state.deviceSettings.muted,0);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service console readonly is inferred for every write and permits reads',async()=>{
+  let readonly=false;
+  const f=await connected({settings:true,schemas:{},onCommand(command,port){
+    if(command==='status'&&readonly){port.reply(STATUS+' storage=recovery-required');return false;}
+  }});
+  try{
+    readonly=true;await f.instance.executeConsoleCommand('status');
+    const count=f.port.commands.length;
+    for(const command of ['settings set volume 3','settings sound preview','settings test','settings name 6162',
+      'settings tx set 10','settings advert set 30','settings radio set 868731 62500 7 7 2']){
+      await assert.rejects(f.instance.executeConsoleCommand(command,{mutate:false}),code('READ_ONLY'));
+    }
+    assert.equal(f.port.commands.length,count);
+    assert.equal(await f.instance.executeConsoleCommand('settings get muted'),'OK settings get key=muted value=0');
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service scalar writes use fresh schema, exact ACK and authoritative dependent readback',async()=>{
+  const f=await connected({settings:true,schemas:{},onCommand(command,port){
+    if(command==='settings set muted 1'){
+      port.settingsState.muted=1;port.settingsState.sound_quiet=1;
+      port.reply('OK settings set key=muted value=1');return false;
+    }
+  }});
+  try{
+    const count=f.port.commands.length;
+    assert.equal(await f.instance.executeConsoleCommand('settings set muted 1'),'OK settings set key=muted value=1');
+    const commands=f.port.commands.slice(count);
+    assert.equal(commands[0],'settings schema muted');assert.equal(commands[1],'settings set muted 1');
+    assert.ok(commands.indexOf('settings caps')>1);assert.ok(commands.indexOf('settings get')>1);
+    assert.equal(commands.at(-1),'settings get muted');
+    assert.equal(f.instance.state.deviceSettings.muted,1);assert.equal(f.instance.state.deviceSettings.sound_quiet,1);
+    assert.equal(commands.filter(c=>c.startsWith('settings set ')).length,1);
+    await assert.rejects(f.instance.executeConsoleCommand('settings set volume 11'),code('SETTINGS_RANGE'));
+    await assert.rejects(f.instance.executeConsoleCommand('settings set vibration 1'),code('SETTINGS_UNSUPPORTED'));
+    assert.equal(f.port.commands.some(c=>c==='settings set volume 11'||c==='settings set vibration 1'),false);
+    assert.equal(f.instance.state.verified,true);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service night quiet is opt-in, refreshes mute and reports unset clock without false success',async()=>{
+  let noClock=false;
+  const f=await connected({settings:true,schemas:{night_quiet:{supported:1,min:0,max:1,step:1,options:'-'}},settingsState:{night_quiet:0},onCommand(command,port){
+    if(command==='settings set night_quiet 1'){
+      if(noClock)port.reply('ERR settings time');
+      else {port.settingsState.night_quiet=1;port.settingsState.muted=1;port.reply('OK settings set key=night_quiet value=1');}
+      return false;
+    }
+  }});
+  try{
+    assert.equal(f.port.commands.some(c=>c.includes('night_quiet')),false,'Legacy connect discovery must not acquire a new mandatory capability');
+    await f.instance.executeConsoleCommand('settings set night_quiet 1');
+    assert.equal(f.instance.state.deviceSettings.night_quiet,1);assert.equal(f.instance.state.deviceSettings.muted,1);
+    noClock=true;await assert.rejects(f.instance.executeConsoleCommand('settings set night_quiet 1'),code('SETTINGS_TIME'));
+    assert.equal(f.instance.state.verified,true);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service writes stop after lost ACK or contradictory readback, without retry',async()=>{
+  for(const mode of ['lost-ack','wrong-ack','wrong-readback','readback-error']){
+    let sent=false;
+    const f=await connected({settings:true,schemas:{},onCommand(command,port){
+      if(command==='settings set volume 3'){
+        sent=true;port.settingsState.volume=mode==='wrong-readback'?4:3;
+        if(mode!=='lost-ack')port.reply('OK settings set key=volume value='+(mode==='wrong-ack'?4:3));
+        return false;
+      }
+      if(sent&&mode==='readback-error'&&command==='settings caps'){port.reply('ERR settings busy');return false;}
+    }});
+    try{
+      await assert.rejects(f.instance.executeConsoleCommand('settings set volume 3'),code('SETTINGS_UNCERTAIN'),mode);
+      assert.equal(f.port.commands.filter(c=>c==='settings set volume 3').length,1);
+      assert.equal(f.instance.state.verified,false);assert.equal(f.instance.state.deviceSettings,null);
+      const count=f.port.commands.length;
+      await assert.rejects(f.instance.executeConsoleCommand('settings set volume 4'),code('NOT_VERIFIED'));
+      assert.equal(f.port.commands.length,count);
+    }finally{await f.instance.disconnect();}
+  }
+});
+
+test('public service rejects malformed or wrong-request replies without exposing serial text',async()=>{
+  for(const response of ['OK settings get key=melody value=3','OK settings get key=volume value=9007199254740993',
+    'OK settings get key=volume value=11','OK settings get key=volume value=0','OK settings get key=volume value=1.5',
+    'OK settings get key=volume value=3 extra=<secret>','OK settings get key=volume value=NaN','SmartUI=<secret>']){
+    let corrupt=false;
+    const f=await connected({settings:true,onCommand(command,port){
+      if(corrupt&&command==='settings get volume'){port.reply(response);return false;}
+    }});
+    try{
+      corrupt=true;await assert.rejects(f.instance.executeConsoleCommand('settings get volume'),code('PROTOCOL'));
+      assert.equal(f.instance.state.verified,false);
+      assert.doesNotMatch(JSON.stringify(f.seen),/<secret>/);
+    }finally{await f.instance.disconnect();}
+  }
+});
+
+test('public service read timeout and concurrent access fail closed',async()=>{
+  const f=await connected({settings:true,onCommand(command){if(command==='settings identity')return false;}});
+  try{
+    const request=f.instance.executeConsoleCommand('settings identity');
+    await assert.rejects(f.instance.executeConsoleCommand('settings get volume'),code('BUSY'));
+    await assert.rejects(request,code('TIMEOUT'));assert.equal(f.instance.state.verified,false);
+    const count=f.port.commands.length;
+    await assert.rejects(f.instance.executeConsoleCommand('settings get volume'),code('NOT_VERIFIED'));
+    assert.equal(f.port.commands.length,count);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service radio, advert, identity and TX setters confirm readback and radio dependencies',async()=>{
+  const radio={freq_khz:869525,bw_hz:250000,sf:11,cr:5,path_bytes:3,tx_dbm:20,repeat:0};
+  let advert=30,nameHex='4e6f6465',tx=20;
+  const f=await connected({settings:true,onCommand(command,port){
+    if(command==='settings radio'){port.reply(wireRecord('radio',radio));return false;}
+    if(command.startsWith('settings radio set ')){
+      ['freq_khz','bw_hz','sf','cr','path_bytes'].forEach((k,i)=>radio[k]=Number(command.split(' ')[i+3]));
+      port.reply(wireRecord('radio',radio));return false;
+    }
+    if(command.startsWith('settings advert')){
+      if(command.startsWith('settings advert set '))advert=Number(command.split(' ').at(-1));
+      port.reply('OK settings advert interval_min='+advert);return false;
+    }
+    if(command.startsWith('settings tx')){
+      if(command.startsWith('settings tx set '))tx=Number(command.split(' ').at(-1));
+      port.reply(`OK settings tx value=${tx} min=-9 max=22`);return false;
+    }
+    if(command==='settings identity'){port.reply('OK settings identity name_hex='+nameHex+' max_name_bytes=31');return false;}
+    if(command.startsWith('settings name ')){nameHex=command.slice(14);port.reply('OK settings name name_hex='+nameHex);return false;}
+  }});
+  try{
+    const count=f.port.commands.length;
+    assert.equal(await f.instance.executeConsoleCommand('settings radio set 868731 62500 7 7 2'),wireRecord('radio',radio));
+    assert.deepEqual(f.port.commands.slice(count),['settings radio','settings radio set 868731 62500 7 7 2','settings radio']);
+    assert.equal(radio.tx_dbm,20);assert.equal(radio.repeat,0);assert.equal(radio.path_bytes,2);
+    assert.equal(await f.instance.executeConsoleCommand('settings advert set 60'),'OK settings advert interval_min=60');
+    assert.equal(await f.instance.executeConsoleCommand('settings tx set -9'),'OK settings tx value=-9 min=-9 max=22');
+    await assert.rejects(f.instance.executeConsoleCommand('settings tx set 23'),code('SETTINGS_RANGE'));
+    assert.equal(f.port.commands.includes('settings tx set 23'),false);
+    assert.equal(await f.instance.executeConsoleCommand('settings name d09dd0bed0b4d0b0'),'OK settings name name_hex=d09dd0bed0b4d0b0');
+    assert.equal(nameHex,'d09dd0bed0b4d0b0');assert.equal(f.instance.state.verified,true);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service notification acknowledgements do not alter quiet settings or claim hardware success',async()=>{
+  const f=await connected({settings:true,soundPreview:true,settingsState:{sound_quiet:1,muted:0}});
+  try{
+    const count=f.port.commands.length;
+    assert.equal(await f.instance.executeConsoleCommand('settings sound preview'),'OK settings sound_preview');
+    assert.equal(await f.instance.executeConsoleCommand('settings test'),'OK settings test');
+    assert.deepEqual(f.port.commands.slice(count),['settings sound preview','settings test']);
+    assert.equal(f.port.settingsState.sound_quiet,1);assert.equal(f.port.settingsState.muted,0);
+    f.port.settingsState.muted=1;
+    await assert.rejects(f.instance.executeConsoleCommand('settings sound preview'),code('SOUND_MUTED'));
+    assert.equal(f.instance.state.verified,true);
+  }finally{await f.instance.disconnect();}
+});
+
+test('public service radio setter rejects changed TX/repeat and failed restore without retry',async()=>{
+  for(const failureMode of ['tx','repeat','restore']){
+    const radio={freq_khz:868731,bw_hz:62500,sf:7,cr:7,path_bytes:2,tx_dbm:20,repeat:0};
+    const f=await connected({settings:true,onCommand(command,port){
+      if(command==='settings radio'){port.reply(wireRecord('radio',radio));return false;}
+      if(command.startsWith('settings radio set ')){
+        if(failureMode==='restore')port.reply('ERR settings restore');
+        else {radio[failureMode==='tx'?'tx_dbm':'repeat']=1;port.reply(wireRecord('radio',radio));}
+        return false;
+      }
+    }});
+    try{
+      await assert.rejects(f.instance.executeConsoleCommand('settings radio set 868731 62500 7 7 2'),code('SETTINGS_UNCERTAIN'));
+      assert.equal(f.instance.state.verified,false);
+      assert.equal(f.port.commands.filter(c=>c.startsWith('settings radio set ')).length,1);
+    }finally{await f.instance.disconnect();}
+  }
+});
+
+test('public service console keeps firmware rejections retryable but latches new readonly state',async()=>{
+  let response='ERR settings storage';
+  const f=await connected({settings:true,schemas:{},onCommand(command,port){
+    if(command==='settings set volume 3'){port.reply(response);return false;}
+  }});
+  try{
+    await assert.rejects(f.instance.executeConsoleCommand('settings set volume 3'),code('SETTINGS_STORAGE'));
+    assert.equal(f.instance.state.verified,true);assert.equal(f.instance.state.deviceSettings.volume,10);
+    response='ERR settings readonly';
+    await assert.rejects(f.instance.executeConsoleCommand('settings set volume 3'),code('READ_ONLY'));
+    assert.equal(f.instance.state.status.readOnly,true);
+    const count=f.port.commands.length;
+    await assert.rejects(f.instance.executeConsoleCommand('settings set volume 3'),code('READ_ONLY'));
+    assert.equal(f.port.commands.length,count);
+  }finally{await f.instance.disconnect();}
+});

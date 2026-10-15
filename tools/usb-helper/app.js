@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id);
   let state = {connected:false,busy:false,verified:false,testPassed:false,status:null,info:null};
   let choosingPort = false;
+  let externalBusy = false;
   let confirmation = null;
   let renderedReplies = Array(9).fill(null);
   let firmwareBusy = false;
@@ -73,7 +74,7 @@
   }
   function renderDeviceSettings() {
     const caps=state.settingsCaps, saved=state.deviceSettings;
-    const readReady=state.connected && state.verified && !state.busy && !state.testPassed;
+    const readReady=state.connected && state.verified && !state.busy && !state.testPassed && !externalBusy;
     const ready=readReady && !state.status?.readOnly && Boolean(caps && saved);
     if (!state.connected) settingsDirty.clear();
     $("settings-load").disabled=!readReady || !state.settingsSupported;
@@ -183,7 +184,7 @@
     $("show-password").checked = false;
   };
   function render() {
-    const ready = state.connected && state.verified && !state.busy && !state.status?.readOnly;
+    const ready = state.connected && state.verified && !state.busy && !state.status?.readOnly && !externalBusy;
     const idle = ready && !state.testPassed;
     const wifiAvailable = !state.info || state.info.capabilities.includes("WiFi");
     const wifiIdle = idle && wifiAvailable;
@@ -223,6 +224,8 @@
     $("wifi-hint").textContent = !wifiAvailable ? "Прошивка сообщает: у этой платы нет Wi-Fi. Доступны Bluetooth и USB-компаньон." : state.testPassed ? "Сеть проверена, но ещё не сохранена. Нажмите «Сохранить сеть» или отмените проверку. Через две минуты бездействия нода отменит настройку." : "Сначала проверка, потом сохранение. Старые данные не заменяются неудачным тестом. Имя и пароль чувствительны к регистру и пробелам.";
     $("open-warning").hidden = !$("open-network").checked;
     renderDeviceSettings();
+    if(externalBusy)for(const section of [$('device-section'),$('replies-section'),$('wifi-title').closest('section'),$('mode-title').closest('section')])for(const element of section.querySelectorAll('button,input,select'))element.disabled=true;
+    if(externalBusy){$('refresh').disabled=true;$('replies-load').disabled=true;}
     window.dispatchEvent(new CustomEvent("smartui-console-state",{detail:state}));
   }
   const client = new SmartUiConsole.ConsoleClient({
@@ -231,6 +234,7 @@
     onEvent:event,
   });
   const run = async operation => {
+    if(externalBusy)return;
     try { await operation(); } catch (error) {
       // Protocol errors are sanitized by core. Never surface device bytes,
       // browser exception text, SSID or passwords through this fallback.
@@ -263,7 +267,7 @@
       feedback(error?.name === "NotFoundError" ? "Порт не выбран. Можно попробовать снова." : "Браузер не предоставил доступ к порту. Проверьте разрешения и закройте другие программы.","warning");
     } finally { choosingPort = false; render(); }
   };
-  $("disconnect").onclick = () => run(() => client.disconnect());
+  $("disconnect").onclick = () => externalBusy ? client.disconnect() : run(() => client.disconnect());
   $("refresh").onclick = () => run(() => client.refreshStatus());
   $("settings-load").onclick=async()=>{
     if (settingsDirty.size && !await confirmAction("Прочитать значения с ноды заново? Несохранённые изменения в полях помощника будут отменены.")) return;
@@ -311,7 +315,7 @@
   $("adc-service-stop").onclick=()=>run(()=>client.stopAdcService());
   $("adc-service-refresh").onclick=()=>run(()=>client.loadAdcService());
   setInterval(()=>{
-    if (state.connected&&state.verified&&!state.busy&&!state.testPassed&&state.adcService?.active) void run(()=>client.loadAdcService());
+    if (state.connected&&state.verified&&!state.busy&&!externalBusy&&!state.testPassed&&state.adcService?.active) void run(()=>client.loadAdcService());
   },5000);
   $("adc-preview").onclick=()=>runAdc(()=>client.previewAdc($("adc-measured").value),{progress:'Получаем опорный замер и рассчитываем поправку…',success:p=>'Рассчитано: '+p.multiplier.toFixed(6)+'. Пока не сохранено — проверьте результат и нажмите «Сохранить калибровку».'});
   $("adc-apply").onclick=async()=>{
@@ -385,7 +389,7 @@
   $("cancel").onclick = () => run(() => client.cancelWifi());
   for (const mode of Object.keys(modeNames)) $("mode-" + mode).onclick = async () => {
     if (state.status?.mode === mode) return;
-    const message = mode === "usb" ? "Включить USB-компаньон? Помощник потеряет связь с консолью. Для возврата выберите Bluetooth/Wi-Fi на экране. В SmartUI 0.08–0.15 без дисплея: перезапустите ноду, после запуска прошивки в первые 8 секунд выполните долгое нажатие пользовательской кнопки. Не удерживайте ESP BOOT во время перезапуска. Результат переключения в USB не подтверждается закрытием порта." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
+    const message = mode === "usb" ? "Включить USB-компаньон? Текстовая консоль отключится. Для возврата в Bluetooth выберите в Helper «Настройки (USB-компаньон)», подключите порт и откройте «Подключение» → Bluetooth. Это работает и без экрана. Закрытие порта само по себе не подтверждает успешное переключение." : "Переключить ноду на " + modeNames[mode] + "? Текущее соединение приложения-компаньона будет разорвано.";
     if (await confirmAction(message)) await run(() => client.setMode(mode));
   };
   $("forget").onclick = async () => {
@@ -399,6 +403,6 @@
     if (state.connected && (state.busy || state.testPassed)) {e.preventDefault();e.returnValue = "";}
   });
   $("unsupported").hidden = supported;
-  window.SmartUiLegacy = {client,confirmAction,feedback,getState:()=>state};
+  window.SmartUiLegacy = {client,confirmAction,feedback,getState:()=>state,setExternalBusy(value){externalBusy=Boolean(value);render();}};
   render();
 })();

@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.7.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.8.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -311,8 +311,8 @@ test('console tabs expose sound pins, hash and collapsed phrases without sending
   const full=fullSettingsFixture(),f=await fixture({settings:true,replies:true,radioFeature:true,soundPreview:true,info:RELEASE_DEVICE_INFO,schemas:full.schemas,extendedValues:full.settings});
   try{const p=f.page;await connect(p);await p.waitForFunction(()=>!document.getElementById('sound-read').disabled);
     const before=await p.evaluate(()=>__serialMock.commands.length);
-    assert.equal(await p.locator('[data-page-target]').count(),7);
-    for(const name of ['connection','radio','sound','device','wifi','phrases','service']){
+    assert.equal(await p.locator('[data-page-target]').count(),8);
+    for(const name of ['connection','radio','sound','device','wifi','phrases','console','service']){
       await tab(p,name);
       assert.deepEqual(await p.evaluate(selected=>[...document.querySelectorAll('[data-pages]')].filter(el=>!el.dataset.pages.split(/\s+/).includes(selected)&&el.getClientRects().length).map(el=>el.id||el.tagName),name),[],'Only active tab panels are visible');
       await noOverlap(p);

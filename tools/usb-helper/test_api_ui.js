@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.7.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.8.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -20,7 +20,7 @@ async function fixture(options={}){
   return {page,async close(){await context.close();assert.deepEqual(errors,[]);assert.deepEqual(network,[]);}};
 }
 async function connect(page){await page.locator('#connect').click();await page.waitForFunction(()=>document.getElementById('api-settings-status').textContent==='Прочитано с ноды'&&!document.getElementById('api-settings-load').disabled);await tab(page,'device');}
-async function tab(page,name){await page.locator('[data-page-target="'+name+'"]').click();assert.equal(await page.locator('[data-page-target="'+name+'"]').getAttribute('aria-selected'),'true');}
+async function tab(page,name){await page.locator('[data-page-target="'+name+'"]').click();if(name==='service')await page.locator('#legacy-cli-details').evaluate(el=>{el.open=true;});assert.equal(await page.locator('[data-page-target="'+name+'"]').getAttribute('aria-selected'),'true');}
 
 async function ready(page){await page.waitForFunction(()=>!document.getElementById('api-settings-load').disabled);}
 

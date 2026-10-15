@@ -61,7 +61,8 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("SmartUI 0.20", readme)
-            self.assertIn("USB Helper 2.7", readme)
+            self.assertIn("USB Helper 2.8", readme)
+            self.assertIn("[Дерево команд и макросы](docs/HELPER_CONSOLE_RU.md)", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
             self.assertIn("[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md)", readme)
             self.assertIn("docs/CLI_BOARD_MATRIX_RU.md", kit.SOURCES)
@@ -74,8 +75,7 @@ class DeveloperKitTests(unittest.TestCase):
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
             for name in ("docs/SMARTUI_CLI_RU.md",):
                 self.assertIn("../../" + name, archive.read("tools/smartui-cli/README.md").decode())
-            for name in ("README.md", "docs/SMARTUI_CLI_RU.md", "docs/CONSOLE_COMMANDS_RU.md",
-                         "docs/CLI_BOARD_MATRIX_RU.md", "docs/EXTERNAL_BUZZER_RU.md", "tools/smartui-cli/README.md"):
+            for name in (entry for entry in archive.namelist() if entry.endswith(".md")):
                 for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):
                     if "://" in link or link.startswith("#"):
                         continue
@@ -88,6 +88,27 @@ class DeveloperKitTests(unittest.TestCase):
         other = kit.package(self.root / "other", "87654321" + "0" * 32, root=self.source).read_bytes()
         self.assertEqual(first, second)
         self.assertNotEqual(first, other)
+
+    def test_helper_update_keeps_firmware_and_sdk_sources_distinct(self):
+        firmware = "abcdef01" + "0" * 32
+        path = kit.package(self.root / "update", COMMIT, root=self.source, firmware_commit=firmware)
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read(kit.MANIFEST_NAME))
+            self.assertEqual(manifest["source_commit"], COMMIT)
+            self.assertEqual(manifest["helper_source_commit"], COMMIT)
+            self.assertEqual(manifest["documentation_source_commit"], COMMIT)
+            self.assertEqual(manifest["firmware_source_commit"], firmware)
+            self.assertEqual(manifest["helper_version"], "2.8")
+            self.assertEqual(manifest["firmware_version"], "0.20")
+            self.assertEqual(archive.read("docs/HELPER_CONSOLE_RU.md"),
+                             (self.source / "docs/HELPER_CONSOLE_RU.md").read_bytes())
+
+    def test_separate_firmware_identity_rejects_dirty_sha_and_development_mode(self):
+        for firmware, development in ((COMMIT + "+dirty", False), ("12345678", False), (COMMIT, True)):
+            with self.subTest(firmware=firmware, development=development), self.assertRaisesRegex(ValueError, "Separate firmware"):
+                kit.package(self.root / "invalid-firmware", COMMIT, root=self.source,
+                            firmware_commit=firmware, development=development)
+        self.assertFalse((self.root / "invalid-firmware").exists())
 
     def test_current_release_and_optional_development_names(self):
         self.assertEqual(kit.VERSION, "0.20")
@@ -147,7 +168,7 @@ class DeveloperKitTests(unittest.TestCase):
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 2.7", readme)
+            self.assertIn("USB Helper 2.8", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
@@ -204,7 +225,8 @@ class DeveloperKitTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         javascript = subprocess.run(
-            ["node", "--test", "tools/usb-helper/test_api.js"], cwd=extracted,
+            ["node", "--test", "tools/usb-helper/test_api.js", "tools/usb-helper/test_console_catalog.js",
+             "tools/usb-helper/test_console_runner.js"], cwd=extracted,
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(javascript.returncode, 0, javascript.stdout + javascript.stderr)

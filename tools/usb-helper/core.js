@@ -57,6 +57,7 @@
     FORGET_UNCERTAIN: 'Подтверждение удаления WiFi не получено. Проверьте устройство; результат неизвестен.',
     PROTOCOL: 'Ответ не соответствует сервисной консоли SmartUI. Переподключитесь.',
     INPUT_OVERFLOW: 'Устройство отклонило слишком длинный ввод.',
+    COMMAND_INVALID: 'Команда не входит в безопасный каталог консоли. Для PIN, подключения, выводов и калибровки используйте отдельные формы.',
     REPLIES_UNAVAILABLE: 'Свои фразы требуют прошивку с поддержкой этой функции.',
     INVALID_REPLY: 'Фраза: не более 64 байт UTF-8, без управляющих символов. Пустое поле возвращает стандартную фразу.',
     REPLY_FAILED: 'Фраза не сохранена. Проверьте состояние хранилища.',
@@ -72,6 +73,7 @@
     SETTINGS_UNCERTAIN: 'Результат изменения неизвестен. Переподключитесь и прочитайте настройки: не считайте их сохранёнными.',
     SETTINGS_READBACK: 'Не удалось прочитать настройки. Текущие значения не подтверждены.',
     SETTINGS_PIN: 'Этот вывод занят другой функцией или не разрешён для выбранного выхода. Прочитайте настройки заново и выберите свободный вывод.',
+    SETTINGS_TIME: 'Время ноды не установлено. Ночная тишина не включена; сначала синхронизируйте время через приложение.',
     SOUND_MUTED: 'Общая тишина включена. Выключите её и сохраните перед прослушиванием.',
     RADIO_FAILED: 'Радио отклонило параметры. Изменение не подтверждено; прочитайте состояние ноды.',
     RADIO_RESTORE: 'Не удалось восстановить прежнее состояние радио. Перезапустите ноду и проверьте параметры.',
@@ -169,7 +171,7 @@
   const SOUND_SETTING_KEYS=Object.freeze(['muted','sound_quiet','volume','melody','board_led','unread_led','vibration',...EXTENDED_FIELDS.filter(f=>['sound','lights'].includes(f.group)).map(f=>f.key)]);
   const ADVANCED_SETTING_KEYS=Object.freeze(['notify_mode','important_notify_mode','melody_dm','melody_mention','melody_system','tone_8bit','high_drive','resonance_hz','offline_dm_led','ble_dm_led','msg_popup','ui_top_color','ui_bottom_color','gps_source','gps_interval','advert_location']);
   function parseSettingSchema(line,key,transport='settings') {
-    if(!['settings','ui'].includes(transport)||!SETTING_KEYS.includes(key)||typeof line!=='string'||line.length>156)return null;
+    if(!['settings','ui'].includes(transport)||(!SETTING_KEYS.includes(key)&&key!=='night_quiet')||typeof line!=='string'||line.length>156)return null;
     const prefix='OK '+transport+' schema key='+key+' ';
     if(!line.startsWith(prefix))return null;
     const m=/^supported=([01]) min=(-?\d+) max=(-?\d+) step=(\d+) options=(-|(?:-?\d+)(?:,-?\d+)*)$/.exec(line.slice(prefix.length));
@@ -301,11 +303,74 @@
   }
   function settingsError(line) {
     if (line === RX.readonly || line === 'ERR settings readonly') return 'READ_ONLY';
-    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',pin_conflict:'SETTINGS_PIN',muted:'SOUND_MUTED',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
+    const errors = {invalid:'SETTINGS_INVALID',unsupported:'SETTINGS_UNSUPPORTED',storage:'SETTINGS_STORAGE',stale:'SETTINGS_STALE',measurement:'SETTINGS_MEASUREMENT',source:'SETTINGS_SOURCE',range:'SETTINGS_RANGE',pin_conflict:'SETTINGS_PIN',time:'SETTINGS_TIME',muted:'SOUND_MUTED',buffer:'PROTOCOL',internal:'PROTOCOL',busy:'BUSY',unavailable:'SETTINGS_UNAVAILABLE',radio:'RADIO_FAILED',restore:'RADIO_RESTORE',repeat:'RADIO_REPEAT'};
     const match = /^ERR settings ([a-z_]+)$/.exec(line);
     if (match) return match[1] === 'usb_required' ? 'ADC_USB_REQUIRED' : errors[match[1]] || 'PROTOCOL';
     if (line.startsWith('ERR settings') || line === RX.unknown) return 'PROTOCOL';
     return null;
+  }
+
+  // Service wire syntax only. Canonical Companion commands belong to the catalog
+  // adapter. Keeping this allowlist here also protects callers outside the UI.
+  const CONSOLE_SCALARS = Object.freeze([...SETTING_KEYS,'night_quiet']);
+  const CONSOLE_READ_VALUES = Object.freeze([...CONSOLE_SCALARS,'adc_multiplier','adc_default','battery_mv','shutdown_mv']);
+  const CONSOLE_FORM_ONLY = Object.freeze(['tone_pin','led_pin','vibe_pin','profile','bridge','high_drive']);
+  function describeConsoleCommand(command) {
+    if(typeof command!=='string'||!command.length||command.length>156||/[^\x20-\x7e]/.test(command))throw failure('COMMAND_INVALID');
+    const read = kind => ({kind,write:false,warning:null});
+    if(command==='info'||command==='status')return read(command);
+    if(command==='settings caps')return read('caps');
+    if(command==='settings get')return read('all');
+    let m=/^settings caps (schema|sound_preview|night_quiet)$/.exec(command);
+    if(m)return {...read('cap'),key:m[1]};
+    m=/^settings (get|schema) ([a-z_]+)$/.exec(command);
+    if(m&&(m[1]==='get'?CONSOLE_READ_VALUES:CONSOLE_SCALARS).includes(m[2]))return {...read(m[1]),key:m[2]};
+    m=/^settings (radio|advert|identity|tx)$/.exec(command);
+    if(m)return read(m[1]);
+    m=/^settings adc (manual|service)$/.exec(command);
+    if(m)return read('adc_'+m[1]);
+    m=/^settings melody (0|[1-9]\d{0,2})$/.exec(command);
+    if(m&&Number(m[1])<=255)return {...read('melody'),value:Number(m[1])};
+    if(command==='settings sound preview'||command==='settings test')return {kind:command.endsWith('preview')?'preview':'test',write:true,warning:null};
+    m=/^settings set ([a-z_]+) (0|[1-9]\d{0,6})$/.exec(command);
+    if(m&&CONSOLE_SCALARS.includes(m[1])&&!CONSOLE_FORM_ONLY.includes(m[1])&&Number(m[2])<=1000000)return {kind:'set',key:m[1],value:Number(m[2]),write:true,warning:m[1]==='battery_protection'?'battery':null};
+    m=/^settings tx set (-?(?:0|[1-9]\d?))$/.exec(command);
+    if(m&&m[1]!=='-0'&&integer(Number(m[1]),-30,50))return {kind:'tx_set',value:Number(m[1]),write:true,warning:null};
+    m=/^settings name ((?:[0-9a-f]{2}){1,31})$/.exec(command);
+    if(m){
+      const parsed=parseCoreSetting('OK settings identity name_hex='+m[1]+' max_name_bytes=31','identity');
+      if(parsed&&!controls.test(parsed.name)&&!/[\u202a-\u202e\u2066-\u2069]/u.test(parsed.name))return {kind:'identity_set',value:parsed.name,hex:m[1],write:true,warning:null};
+    }
+    m=/^settings advert set (0|[1-9]\d{0,2})$/.exec(command);
+    if(m&&ADVERT_INTERVALS.includes(Number(m[1])))return {kind:'advert_set',values:{interval_min:Number(m[1])},write:true,warning:null};
+    m=/^settings radio set ([1-9]\d{0,6}) ([1-9]\d{0,5}) (\d{1,2}) (\d) (\d)$/.exec(command);
+    if(m){
+      const values=Object.fromEntries(['freq_khz','bw_hz','sf','cr','path_bytes'].map((key,i)=>[key,Number(m[i+1])]));
+      if(networkValuesValid('radio',values))return {kind:'radio_set',values,write:true,warning:null};
+    }
+    throw failure('COMMAND_INVALID');
+  }
+  function consoleCommandPolicy(command) {
+    const {write,warning}=describeConsoleCommand(command);
+    return {write,warning};
+  }
+  function parseConsoleValue(line,key) {
+    const value=parseSettingValue(line,key);
+    if(value===null)return null;
+    if(key==='adc_multiplier'||key==='adc_default')return value>=0&&value<=1000?value:null;
+    const maxima={volume:10,melody:255,melody_dm:255,melody_mention:255,melody_system:255,
+      notify_mode:7,important_notify_mode:7,tone_pin:127,led_pin:127,vibe_pin:127,resonance_hz:4200,
+      ui_font:255,ui_theme:255,ui_top_color:5,ui_bottom_color:5,backlight_timeout:2,
+      gps_interval:86400,profile:3,battery_mv:65535,shutdown_mv:65535};
+    return integer(value,key.endsWith('_pin')?-1:key==='volume'?1:0,maxima[key]??1)?value:null;
+  }
+  function parseConsoleMelody(line,id) {
+    const match=/^OK settings melody id=(\d{1,3}) name_hex=((?:[0-9a-f]{2}){1,64})$/.exec(line);
+    if(!match||Number(match[1])!==id)return null;
+    try {
+      const name=new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(match[2].match(/../g),b=>parseInt(b,16)));
+      return controls.test(name)||/[\u202a-\u202e\u2066-\u2069]/u.test(name)?null:{id,name};
+    } catch (_) {return null;}
   }
 
   class ConsoleClient {
@@ -813,6 +878,118 @@
         if (line.startsWith('OK settings')) return rejected('PROTOCOL');
       });
     }
+    async _consoleExchange(session,command,parser) {
+      return this._exchange(session,command,line=>{
+        const error=settingsError(line);
+        if(error==='READ_ONLY'){
+          session.readOnly=true;
+          if(this._state.status)this._setStatus({...this._state.status,readOnly:true});
+        }
+        if(error)return rejected(error);
+        if(line===RX.overflow)return rejected('INPUT_OVERFLOW');
+        const value=parser(line);
+        if(value!==null&&value!==undefined&&value!==false)return success({line,value});
+        // Debug chatter is ignored. A malformed or wrong-kind protocol record
+        // cannot satisfy this request or be rendered as arbitrary terminal text.
+        if(/^(?:OK settings|SmartUI=|Mode=)/.test(line))return rejected('PROTOCOL');
+      });
+    }
+    async _consoleRead(session,command,description) {
+      const {kind,key,value:id}=description;
+      const parser={
+        info:parseInfo,status:parseStatus,caps:parseSettingsCaps,
+        all:line=>parseDeviceSettings(line,this._state.settingsCaps),
+        cap:line=>{
+          const prefix='OK settings caps key='+key+' value=';
+          return line===prefix+'0'?0:line===prefix+'1'?1:null;
+        },
+        schema:line=>parseSettingSchema(line,key),get:line=>parseConsoleValue(line,key),
+        radio:line=>parseNetworkSetting(line,'radio'),advert:line=>parseNetworkSetting(line,'advert'),
+        identity:line=>parseCoreSetting(line,'identity'),tx:line=>parseCoreSetting(line,'tx'),
+        adc_manual:parseAdcManual,adc_service:parseAdcService,melody:line=>parseConsoleMelody(line,id)
+      }[kind];
+      const result=await this._consoleExchange(session,command,parser);
+      this._assertCurrent(session);
+      const value=result.value;
+      if(kind==='status')this._setStatus({...value,readOnly:value.readOnly||session.readOnly});
+      else if(kind==='info')this._stateChanged({info:value});
+      else if(kind==='caps')this._stateChanged({settingsCaps:value});
+      else if(kind==='all')this._stateChanged({deviceSettings:{...this._state.deviceSettings,...value}});
+      else if(kind==='schema')this._stateChanged({settingSchemas:{...this._state.settingSchemas,[key]:value}});
+      else if(kind==='get')this._stateChanged({deviceSettings:{...this._state.deviceSettings,[key]:value}});
+      else if(kind==='cap'&&key==='sound_preview')this._stateChanged({soundPreviewSupported:Boolean(value)});
+      else if(kind==='adc_manual')this._stateChanged({adcManualSupported:Boolean(value.supported)});
+      else if(kind==='adc_service'){
+        if(this._state.adcService?.active&&!value.active)this.clearAdcPreview();
+        this._stateChanged({adcService:{...value,receivedAt:Date.now()}});
+      }
+      return result;
+    }
+    async executeConsoleCommand(command,{mutate=false}={}) {
+      const description=describeConsoleCommand(command);
+      return this._operate(async session=>{
+        const {kind,key,value,values}=description;
+        let issued=false,acknowledged=false;
+        try {
+          if(command.startsWith('settings '))this._requireSettings();
+          if(!description.write)return (await this._consoleRead(session,command,description)).line;
+          let before;
+          if(kind==='set'){
+            const schema=(await this._consoleRead(session,'settings schema '+key,{kind:'schema',key})).value;
+            if(!settingValueValid(schema,value))throw failure(schema.supported?'SETTINGS_RANGE':'SETTINGS_UNSUPPORTED');
+          }else if(kind==='preview'){
+            this._requireSettings('sound');
+            if(!this._state.soundPreviewSupported)throw failure('SETTINGS_UNSUPPORTED');
+          }else if(kind==='test'){
+            const caps=this._state.settingsCaps;
+            if(!(caps.sound||caps.unread_led||caps.vibration))throw failure('SETTINGS_UNSUPPORTED');
+          }else{
+            const readKind=kind.slice(0,-4);
+            before=(await this._consoleRead(session,'settings '+readKind,{kind:readKind})).value;
+            if(kind==='tx_set'&&(value<before.min||value>before.max))throw failure('SETTINGS_RANGE');
+          }
+          // Only state-changing writes invalidate an ADC draft. Test/preview do
+          // not change settings or claim to verify a physical notification.
+          if(!['preview','test'].includes(kind))this.clearAdcPreview();
+          issued=true;
+          const ack=await this._consoleExchange(session,command,line=>{
+            if(kind==='set')return line===`OK settings set key=${key} value=${value}`;
+            if(kind==='preview')return line==='OK settings sound_preview';
+            if(kind==='test')return line==='OK settings test';
+            if(kind==='identity_set')return line==='OK settings name name_hex='+description.hex;
+            return kind==='tx_set'?parseCoreSetting(line,'tx'):parseNetworkSetting(line,kind.slice(0,-4));
+          });
+          acknowledged=true;
+          if(kind==='set'){
+            // Notification channels, GPS source and mute affect other fields.
+            // Refresh the same authoritative cache used by the dedicated forms.
+            await this._loadDeviceSettings(session);
+            const after=await this._consoleRead(session,'settings get '+key,{kind:'get',key});
+            if(after.value!==value)throw failure('PROTOCOL');
+          }else if(kind==='tx_set'){
+            const after=(await this._consoleRead(session,'settings tx',{kind:'tx'})).value;
+            if(ack.value.value!==value||after.value!==value||after.min!==before.min||after.max!==before.max)throw failure('PROTOCOL');
+          }else if(kind==='identity_set'){
+            const after=(await this._consoleRead(session,'settings identity',{kind:'identity'})).value;
+            if(after.name!==value)throw failure('PROTOCOL');
+          }else if(kind==='radio_set'||kind==='advert_set'){
+            const readKind=kind.slice(0,-4);
+            const after=(await this._consoleRead(session,'settings '+readKind,{kind:readKind})).value;
+            if(Object.keys(values).some(k=>ack.value[k]!==values[k]||after[k]!==values[k])||
+                kind==='radio_set'&&['tx_dbm','repeat'].some(k=>ack.value[k]!==before[k]||after[k]!==before[k]))throw failure('PROTOCOL');
+          }
+          this._assertCurrent(session);
+          return ack.line;
+        }catch(error){
+          const uncertain=['TIMEOUT','PROTOCOL','SERIAL_ERROR','DISCONNECTED'].includes(error.code);
+          if(acknowledged||uncertain||error.code==='RADIO_RESTORE'){
+            if(this._current(session))this._stateChanged({verified:false,...(issued?{deviceSettings:null}:{})});
+            if(issued)throw failure('SETTINGS_UNCERTAIN');
+          }
+          throw error;
+        }
+      },{mutate:description.write||mutate});
+    }
     async _loadDeviceSettings(session) {
       const caps = await this._settingsExchange(session, 'settings caps', parseSettingsCaps);
       const settings = await this._settingsExchange(session, 'settings get', line => parseDeviceSettings(line,caps));
@@ -1120,5 +1297,5 @@
       }, {mutate:true});
     }
   }
-  return Object.freeze({ ConsoleClient, ConsoleError, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, SOUND_SETTING_KEYS, ADVANCED_SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, notificationStatus, soundOutputStatus, parseCoreSetting });
+  return Object.freeze({ ConsoleClient, ConsoleError, consoleCommandPolicy, validateCredentials, parseStatus, parseInfo, encodeReply, decodeReply, parseSettingsCaps, parseDeviceSettings, parseAdcPreview, parseAdcService, parseAdcManual, adcMultiplier, measuredMilliVolts, parseNetworkSetting, networkValuesValid, ADVERT_INTERVALS, EXTENDED_FIELDS, SETTING_KEYS, SOUND_SETTING_KEYS, ADVANCED_SETTING_KEYS, parseSettingSchema, parseSettingValue, settingValueValid, settingOptions, notificationStatus, soundOutputStatus, parseCoreSetting });
 }));

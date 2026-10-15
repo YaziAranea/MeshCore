@@ -2,7 +2,7 @@
 (() => {
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
   let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null,adcManualSupported=false;
-  let activePage='connection';
+  let activePage='connection',consoleLease=false;
   function renderPages(){
     for(const panel of document.querySelectorAll('[data-pages]'))panel.classList.toggle('page-hidden',!panel.dataset.pages.split(' ').includes(activePage));
     for(const tab of document.querySelectorAll('[data-page-target]')){const selected=tab.dataset.pageTarget===activePage;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}
@@ -146,7 +146,7 @@
     $('connect').textContent=choosing?'Выберите порт…':acknowledgedLoss?'Переподключить USB':'Выбрать USB-порт';
     const phases={opening:'Открываем USB-порт…',negotiating:'Проверяем локальный CLI…',ready:running||s.busy?'Выполняется операция…':'USB-компаньон подключён',uncertain:'Результат неизвестен — требуется переподключение',disconnected:'Нода не подключена'};
     $('transport-state').textContent=mode==='api'?phases[s.phase]||'Нода не подключена':s.busy?'Выполняется операция…':s.verified?'Консоль SmartUI подключена':s.connected?'Порт открыт; консоль не подтверждена':'Нода не подключена';
-    $('transport-help').textContent=s.connected?'Настройки читаются напрямую по USB. Телефон и сопряжение для настройки не нужны.':mode==='api'?'Для ноды в режиме USB-компаньона. Если режим Bluetooth, выберите «Настройки (консоль)».':'Для ноды в режиме Bluetooth или Wi-Fi, в том числе без экрана. Подключение — USB-кабелем.';
+    $('transport-help').textContent=s.connected?'Настройки читаются напрямую по USB. Телефон и сопряжение для настройки не нужны.':mode==='api'?'Для ноды в режиме USB-компаньона. Если режим Bluetooth, выберите «Сервисная USB-консоль (нода BLE/Wi-Fi)».':'Для ноды в режиме Bluetooth или Wi-Fi, в том числе без экрана. Подключение — USB-кабелем.';
     connectionMeta.textContent=binaryState.hello?'SmartUI '+(binaryState.hello.firmware||'—')+' · '+(binaryState.hello.write==='1'?'Изменения разрешены':'Только чтение')+(connectionState?' · Режим: '+connectionState.mode:''):'';
     for(const id of ['api-settings-load','api-sound-read','api-command-send'])$(id).disabled=!available();
     $('api-notify-test').disabled=!writable()||!settings||!['sound','vibration','board_led','unread_led'].some(key=>caps?.[key]==='1');
@@ -186,6 +186,7 @@
     renderNetworkControls();
     renderNodeOverview();
     renderPages();
+    window.dispatchEvent(new CustomEvent('smartui-helper-state'));
   }
   async function run(operation){
     if(running)return;running=true;renderShell();
@@ -229,7 +230,7 @@
   function numeric(value,max=0xffffffff){if(!/^\d+$/.test(value)||Number(value)>max)throw new api.CliError('PROTOCOL');return Number(value);}
   const networkReady=()=>{
     const state=legacy.getState();
-    return !networkRunning&&(mode==='api'?available():state.connected&&state.verified&&!state.busy&&!state.testPassed);
+    return !networkRunning&&!consoleLease&&(mode==='api'?available():state.connected&&state.verified&&!state.busy&&!state.testPassed);
   };
   const networkWritable=()=>networkReady()&&(mode==='api'?binaryState.hello?.write==='1':!legacy.getState().status?.readOnly);
   function networkNote(text,kind='info'){$('radio-status').textContent=text;$('radio-status').dataset.kind=kind;}
@@ -592,6 +593,77 @@
     });
   };
   window.addEventListener('beforeunload',()=>{$('api-password').value='';});
+  // The command tree shares the existing session and locks all competing forms.
+  // It never opens a second port or changes the selected transport implicitly.
+  function consoleContext(){
+    const s=legacy.getState(),binary=mode==='api';
+    const currentCaps=binary?{...caps,wifi:wifiState?.supported,ble_pin:binaryState.hello?.ble_pin}:{...s.settingsCaps,sound_preview:Number(s.soundPreviewSupported),schema:Number(Boolean(s.settingSchemas&&Object.keys(s.settingSchemas).length)),wifi:Number(Boolean(s.info?.capabilities?.includes('WiFi'))),ble_pin:Number(Boolean(s.info?.ble_pin))};
+    const currentSchemas=binary?schemas:s.settingSchemas||{};
+    for(const key of ['fem_lna','fem_pa','bridge','agc_reset'])if(currentCaps[key]===undefined&&currentSchemas[key])currentCaps[key]=Number(currentSchemas[key].supported);
+    return {transport:binary?'companion':'service',session:binary?client.session:legacy.client._session,
+      connected:binary?binaryState.connected&&!binaryState.uncertain&&binaryState.phase==='ready':s.connected&&s.verified,
+      busy:Boolean(consoleLease||running||networkRunning||choosing||(binary?binaryState.busy:s.busy||s.testPassed)),
+      write:binary?binaryState.hello?.write==='1':!s.status?.readOnly,
+      control:binary?binaryState.hello?.control==='1':true,compact:binary?binaryState.hello?.console==='1':true,meshcore:binary?binaryState.hello?.meshcore==='1':true,ranges:{tx:txState},
+      caps:currentCaps,schemas:currentSchemas,settings:binary?settings:s.deviceSettings,
+      firmware:binary?binaryState.hello?.firmware:s.info?.firmware,board:binary?identityState?.name:s.info?.board};
+  }
+  function consoleServiceReply(step,reply){
+    if(step.mutates)return step.kind==='preview'?'OK sound_preview':'OK';
+    if(step.kind==='setting'&&step.operation==='get'){
+      const value=SmartUiConsole.parseSettingValue(reply,step.key);if(value===null)throw new api.CliError('PROTOCOL');return '> '+(step.invert?1-value:value);
+    }
+    if(step.kind==='identity'){const value=SmartUiConsole.parseCoreSetting(reply,'identity');if(!value)throw new api.CliError('PROTOCOL');return '> '+value.name;}
+    if(step.kind==='tx'){const value=SmartUiConsole.parseCoreSetting(reply,'tx');if(!value)throw new api.CliError('PROTOCOL');return '> '+value.value;}
+    if(step.kind==='caps'){
+      let value;if(step.source==='schema'){const schema=SmartUiConsole.parseSettingSchema(reply,step.key);if(schema)value=Number(schema.supported);}
+      else if(step.source==='cap'){const match=new RegExp('^OK settings caps key='+step.key+' value=([01])$').exec(reply);if(match)value=Number(match[1]);}
+      else value=SmartUiConsole.parseSettingsCaps(reply)?.[step.key];
+      if(value===undefined)throw new api.CliError('PROTOCOL');return '> '+value;
+    }
+    return reply;
+  }
+  window.SmartUiConsoleBridge={
+    getContext:consoleContext,confirm:legacy.confirmAction,
+    acquire(session){const current=consoleContext();if(current.busy||!current.connected||session!==current.session)throw new api.CliError('BUSY');consoleLease=true;running=true;legacy.setExternalBusy(true);renderShell();},
+    async release(){consoleLease=false;running=false;legacy.setExternalBusy(false);renderShell();},
+    async execute(step){
+      if(!consoleLease)throw new api.CliError('BUSY');
+      if(mode==='console'){
+        const reply=await legacy.client.executeConsoleCommand(step.wire,{mutate:step.mutates});
+        if(step.mutates){if(step.kind==='tx'){txState=await readCore('tx');if(radioState){radioState={...radioState,tx_dbm:txState.value};showNetworkState();}showCore();}if(step.kind==='identity'){identityState=await readCore('identity');showCore();}if(step.kind==='advert'){advertState=await readNetwork('advert');showNetworkState();}}
+        return {reply:consoleServiceReply(step,reply),verified:Boolean(step.mutates&&step.readback)};
+      }
+      api.developerCommand(step.wire);
+      let acknowledged=false;
+      try{
+        if(step.mutates&&step.schemaKey){
+          const schema=SmartUiConsole.parseSettingSchema(await client.execute('ui schema '+step.schemaKey),step.schemaKey,'ui');
+          if(!schema)throw new api.CliError('PROTOCOL');
+          if(!schema.supported||!SmartUiConsole.settingValueValid(schema,step.expectedValue))throw Object.assign(new Error('Значение не разрешено схемой подключённой ноды.'),{safe:true});
+        }
+        if(step.mutates&&step.kind==='tx'){const range=await readCore('tx');if(step.expectedValue<range.min||step.expectedValue>range.max)throw Object.assign(new Error('Мощность вне диапазона подключённой платы.'),{safe:true});}
+        const reply=await client.execute(step.wire,{mutate:step.mutates});
+        if(step.mutates&&reply!==(step.kind==='preview'?'OK sound_preview':'OK'))throw new api.CliError('PROTOCOL');
+        acknowledged=step.mutates;
+        let readback=null;
+        if(step.mutates&&step.readback){
+          readback=await client.execute(step.readback);
+          if(typeof step.expectedValue==='string'){if(readback!=='> '+step.expectedValue)throw new api.CliError('PROTOCOL');}
+          else if(step.expectedValue!==undefined){const match=/^> (-?\d+(?:\.\d+)?)$/.exec(readback);if(!match||Math.abs(Number(match[1])-step.expectedValue)>0.000002)throw new api.CliError('PROTOCOL');}
+        }
+        if(step.mutates){await loadSettings();if(step.kind==='tx'){txState=await readCore('tx');if(radioState){radioState={...radioState,tx_dbm:txState.value};showNetworkState();}showCore();}if(step.kind==='identity'){identityState=await readCore('identity');showCore();}if(step.kind==='advert'){advertState=await readNetwork('advert');showNetworkState();}}
+        return {reply,readback,verified:Boolean(step.mutates&&step.readback)};
+      }catch(error){if((acknowledged||error?.code==='PROTOCOL')&&binaryState.connected)client.update({uncertain:true,phase:'uncertain'});throw error;}
+    },
+    navigate(destination){
+      if(consoleLease)return;
+      const pages={pin:'connection',connection:'connection',wifi:'wifi',adc:'device',pins:'sound',profile:'device',radio:'radio'};
+      hidePin();activePage=pages[destination]||'connection';renderPages();
+      const target=destination==='adc'?$(mode==='api'?'api-adc':'adc-fields'):destination==='pin'?$('node-pin-show'):null;
+      if(target){const details=target.tagName==='DETAILS'?target:target.closest('details');if(details)details.open=true;target.scrollIntoView({block:'center',behavior:'smooth'});if(target.tagName==='BUTTON')target.focus();}
+    }
+  };
   const tabs=[...document.querySelectorAll('[data-page-target]')];
   for(const tab of tabs){tab.onclick=()=>{hidePin();activePage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
   renderPages();

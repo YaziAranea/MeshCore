@@ -100,6 +100,60 @@
     .settings-filter { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:16px 0; }
     .settings-filter input[type="text"] { flex:1 1 220px; width:auto; }
     #api-command { font-family:ui-monospace,Consolas,monospace; }
+    #command-console{padding:0;overflow:hidden;background:var(--bg)}
+    #command-console .command-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:22px 24px;border-bottom:1px solid var(--edge);background:var(--panel)}
+    #command-console .command-head h2{margin:0}
+    #command-console .command-head .hint{margin:6px 0 0}
+    #command-console .command-work{display:grid;grid-template-columns:minmax(0,1fr) 290px}
+    #command-console .command-map{padding:22px;min-width:0}
+    #command-console .command-search{margin-bottom:22px}
+    #command-console .command-search input{min-height:42px;font-size:14px}
+    #command-console .command-tree{display:grid;grid-template-columns:42px 92px minmax(0,1fr);gap:14px;align-items:center;min-height:350px}
+    #command-console .command-origin{width:40px;height:40px;border:1px solid var(--edge);border-radius:10px;background:var(--panel);display:grid;place-items:center;font:12px ui-monospace,Consolas,monospace;color:var(--accent);position:relative}
+    #command-console .command-origin:after{content:'';position:absolute;left:39px;top:19px;width:15px;border-top:1px solid var(--edge)}
+    #command-console .command-groups{display:grid;gap:10px;border-left:1px solid var(--edge);padding-left:8px}
+    #command-console .command-groups button{background:var(--bg);border-color:transparent;min-height:43px;padding:6px;font-size:12px;text-align:left;border-radius:6px}
+    #command-console .command-groups button[aria-pressed=true]{color:var(--accent);background:#21324a;border-color:#425f8d}
+    #command-console .command-leaves{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;align-content:center;min-width:0}
+    #command-console .command-leaf{min-height:82px;padding:10px;text-align:left;display:flex;flex-direction:column;justify-content:center;gap:5px;background:var(--panel);border-color:var(--edge);border-radius:8px;overflow-wrap:anywhere}
+    #command-console .command-leaf strong{font-weight:600;font-size:13px}
+    #command-console .command-leaf small{font-weight:400;font-size:11px;color:var(--muted)}
+    #command-console .command-leaf[aria-pressed=true]{border-color:var(--accent);background:#21324a;box-shadow:inset 3px 0 var(--accent)}
+    #command-console .command-leaf[data-available=false] strong{color:var(--muted)}
+    #command-console .command-inspector{padding:24px 20px;border-left:1px solid var(--edge);background:var(--panel);min-width:0}
+    #command-console .command-inspector h3{font-size:23px;line-height:1.2}
+    #command-console .command-description{font-size:13px;color:var(--muted);min-height:54px}
+    #command-console .command-kind{display:inline-block;font-size:11px;padding:3px 7px;border:1px solid var(--edge);border-radius:4px;margin-bottom:15px}
+    #command-console .command-kind[data-write=true]{color:var(--warn)}
+    #command-console .command-parameter{display:grid;gap:7px;font-size:13px;margin:14px 0}
+    #command-console .command-code{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface);border:1px solid var(--edge);border-radius:7px;padding:13px;font:12px/1.8 ui-monospace,Consolas,monospace;margin:14px 0}
+    #command-console .command-inspector .buttons{gap:8px}
+    #command-console .command-inspector .buttons button{font-size:12px;padding:8px 10px;flex:1;min-width:0}
+    #command-console .command-inspector .buttons .primary{flex-basis:100%}
+    #command-console .command-reason{font-size:12px;color:var(--muted);min-height:38px}
+    #command-console .command-terminal{border-top:1px solid var(--edge);padding:20px 24px;background:var(--surface)}
+    #command-console .command-terminal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+    #command-console .command-terminal-head h3{font-size:16px;margin:0}
+    #command-console .command-terminal-head button{font-size:12px;min-height:44px;padding:5px 9px}
+    #command-console .command-terminal-head .buttons{margin:0}
+    #command-console .command-journal{max-height:300px;min-height:96px;overflow:auto;overscroll-behavior:contain;font:12px/1.7 ui-monospace,Consolas,monospace;padding-right:8px;margin-bottom:14px}
+    #command-console .command-line{display:grid;grid-template-columns:65px 1fr;gap:12px;overflow-wrap:anywhere;white-space:pre-wrap}
+    #command-console .command-line time{color:var(--muted)}
+    #command-console .command-line[data-kind=command]{color:var(--accent)}
+    #command-console .command-line[data-kind=error]{color:var(--error)}
+    #command-console .command-entry{display:flex;gap:10px;align-items:stretch}
+    #command-console textarea{font:14px/1.6 ui-monospace,Consolas,monospace;color:var(--text);border:1px solid #546780;background:var(--bg);border-radius:8px;padding:12px;resize:vertical;min-height:52px;width:100%;min-width:0}
+    #command-console .command-entry button{font-size:13px;align-self:stretch;flex:0 0 auto;min-width:110px;white-space:nowrap}
+    #command-console .command-state{font-size:13px;color:var(--muted);margin-top:10px;white-space:pre-wrap}
+    #command-console .command-state[data-kind=error]{color:var(--error)}
+    #command-console .command-editor{padding:20px 24px;border-top:1px solid var(--edge);background:var(--panel)}
+    #command-console .command-editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+    #command-console .command-editor-grid label{display:grid;gap:6px;font-size:13px}
+    #command-console .command-editor-grid .wide{grid-column:1/-1}
+    #command-console .command-editor .hint{font-size:12px}
+    #command-console .command-empty{font-size:13px;color:var(--muted);grid-column:1/-1}
+    @media(max-width:1180px){#command-console .command-work{grid-template-columns:1fr}#command-console .command-inspector{border-left:0;border-top:1px solid var(--edge);display:grid;grid-template-columns:1fr 1fr;gap:0 24px}#command-console .command-inspector-header{grid-column:1/-1}#command-console .command-description{min-height:0}#command-console .command-inspector .buttons{align-self:start}#command-console .command-tree{min-height:300px}}
+    @media(max-width:560px){#command-console .command-head,#command-console .command-map,#command-console .command-inspector,#command-console .command-terminal,#command-console .command-editor{padding:18px 16px}#command-console .command-tree{display:block;min-height:0}#command-console .command-origin{display:none}#command-console .command-groups{display:flex;flex-wrap:wrap;gap:6px;border:0;padding:0;margin-bottom:15px}#command-console .command-groups button{border:1px solid var(--edge);min-height:44px;padding:8px}#command-console .command-leaf{min-height:82px}#command-console .command-inspector{display:block}#command-console .command-entry{flex-direction:column}#command-console textarea,#command-console .command-search input{font-size:16px}#command-console .command-editor-grid{grid-template-columns:1fr}#command-console .command-line{grid-template-columns:1fr;gap:0;margin-bottom:7px}#command-console .command-line time{font-size:10px}#command-console .command-head .status-pill{max-width:100%;overflow-wrap:anywhere}}
     #api-command-result { padding:16px; background:var(--surface); border-radius:12px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
     #api-feedback { margin-bottom:16px; }
     .radio-workspace { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(230px,1fr); gap:22px; margin-top:20px; }
@@ -156,7 +210,7 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ваша нода. Ваши настройки.</h1><p class="subtitle">Подключите ноду и выберите нужный раздел.<br>Изменения сохраняются только по вашей команде.</p></div>
-    <div><span class="tag">Помощник 2.7 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><span class="tag">Помощник 2.8 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
   <aside class="app-rail">
     <p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p>
@@ -168,15 +222,16 @@
       <button type="button" role="tab" id="tab-device" data-page-target="device" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="3" width="12" height="18" rx="3"/><path d="M9 6h6M10 17h4"/></svg>Устройство</button>
       <button type="button" role="tab" id="tab-wifi" data-page-target="wifi" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0M8.5 16a5.5 5.5 0 0 1 7 0"/><circle cx="12" cy="20" r="1"/></svg>Wi-Fi</button>
       <button type="button" role="tab" id="tab-phrases" data-page-target="phrases" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3v-3H3V6a2 2 0 0 1 2-2Z"/><path d="M7 9h10M7 13h7"/></svg>Быстрые фразы</button>
-      <button type="button" role="tab" id="tab-service" data-page-target="service" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>Консоль и файлы</button>
+      <button type="button" role="tab" id="tab-console" data-page-target="console" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="m4 7 5 5-5 5m9 0h7"/></svg>Консоль и макросы</button>
+      <button type="button" role="tab" id="tab-service" data-page-target="service" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>Файлы и совместимость</button>
     </nav>
     <p class="rail-foot">Один файл. Один USB-порт.<br>Данные остаются у вас.</p>
   </aside>
-  <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Настройки (консоль)</option><option value="api">Настройки (USB-компаньон)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
+  <section class="transport-dock" aria-label="Режим и подключение"><div><label for="helper-mode">Как работаем с нодой</label><select id="helper-mode"><option value="console">Сервисная USB-консоль (нода BLE/Wi-Fi)</option><option value="api">USB-компаньон (нода USB)</option></select></div><div id="connection-actions"></div><p id="transport-state" class="state" role="status">Нода не подключена</p><p id="transport-help" class="hint">На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.</p></section>
   <div id="feedback" role="status" aria-live="polite">Подключите ноду, чтобы начать. Интернет для работы не нужен.</div>
   <div id="unsupported" class="notice warning" hidden>В этом браузере нет доступа к USB-порту. Откройте скачанный HTML-файл в актуальном Chrome или Edge на компьютере. На телефоне работа не заявлена.</div>
   <details id="connection-help" class="notice" data-pages="connection"><summary>Если подключение не получается</summary><p><strong>Выберите подходящий вход:</strong> для режима Bluetooth или Wi-Fi на ноде — «Настройки (консоль)»; для режима USB — «Настройки (USB-компаньон)». Оба работают через USB-кабель. Закройте веб-флешер, PuTTY и другие программы, использующие USB-порт.</p>
-  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>В SmartUI 0.08–0.17 перезапустите ноду, затем в первые 8 секунд работы прошивки выполните долгое нажатие пользовательской кнопки. В режиме USB-компаньона это сохраняет Bluetooth и возвращает текстовую USB-консоль. Контакты и настройки не стираются. При ошибке сохранения режим останется прежним.</p><p class="hint">Нажимайте пользовательскую кнопку после запуска прошивки. Не удерживайте ESP BOOT во время перезапуска: это вход в загрузчик, не в помощник. В режимах Bluetooth/Wi-Fi дополнительное действие не требуется. Старые версии таким способом не проверены.</p></details>
+  <details class="notice"><summary>Нет экрана, а нода работает USB-компаньоном?</summary><p>Выберите «USB-компаньон (нода USB)» и подключите порт. В разделе «Подключение» можно прочитать PIN или переключить ноду в Bluetooth. Для первоначальной настройки телефон не нужен.</p><p class="hint">Если вместо этого выбрать сервисную USB-консоль, нода в режиме USB-компаньона не ответит: это разные протоколы. Выбор пункта в Helper сам по себе режим ноды не меняет.</p></details>
   <div class="notice"><strong>Heltec V3 и Wireless Paper:</strong> сначала разбудите ноду кнопкой, затем открывайте порт. USB–UART не сообщает прошивке об открытии консоли. В SmartUI 0.06 полученные USB-данные удерживают ESP32 бодрствующим 120 секунд; мастер Wi-Fi и режим USB-компаньона не дают уснуть. У V4.3 с native USB CDC автосон отключён, как в upstream.</div>
   </details>
   <div class="grid">
@@ -337,10 +392,19 @@
 /* SMARTUI_HELPER_PRESETS */
 </script>
 <script>
+/* SMARTUI_HELPER_CONSOLE_CATALOG */
+</script>
+<script>
+/* SMARTUI_HELPER_CONSOLE_RUNNER */
+</script>
+<script>
 /* SMARTUI_HELPER_APP */
 </script>
 <script>
 /* SMARTUI_HELPER_DASHBOARD */
+</script>
+<script>
+/* SMARTUI_HELPER_CONSOLE */
 </script>
 </body>
 </html>
