@@ -146,8 +146,14 @@ class PublicReleasePolicyTests(unittest.TestCase):
         profile = source.split("[env:SmartUI_ProMicro_headless]", 1)[1].split("[env:", 1)[0]
         self.assertIn("extends = env:ProMicro_ra62_companion_radio_ble", profile)
         self.assertIn("-D SMARTUI_HEADLESS=1", profile)
-        self.assertIn("-UMESHCORE_UI_VERSION", profile)
-        self.assertIn('MESHCORE_UI_VERSION=\'"ProMicro Headless SmartUI 0.20"\'', profile)
+        self.assertNotIn("-UMESHCORE_UI_VERSION", profile)
+        self.assertIn('build_unflags = -D MESHCORE_UI_VERSION=\'"ProMicro SmartUI 0.20"\'', profile)
+        # Bare -D would remove both tuples in PlatformIO ProcessUnFlags.
+        # The old value must match exactly and the replacement stays in flags.
+        flags = profile.split("build_flags =", 1)[1]
+        self.assertIn('MESHCORE_UI_VERSION=\'"ProMicro Headless SmartUI 0.20"\'', flags)
+        parent = (ROOT / "variants/promicro/platformio.ini").read_text(encoding="utf-8")
+        self.assertIn('-D MESHCORE_UI_VERSION=\'"ProMicro SmartUI 0.20"\'', parent)
         from validate_release_uf2 import EXPECTED
         name = "ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2"
         self.assertEqual(EXPECTED[name], b"ProMicro Headless SmartUI 0.20")

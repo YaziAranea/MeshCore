@@ -214,7 +214,9 @@ def verify_boot_metadata(output):
     assert "SmartUI-source:" in prefix and "MESHCORE_UI_VERSION" in prefix
     assert "DISPLAY_CLASS" not in prefix and "SMARTUI_HEADLESS" not in prefix
     config = (ROOT / "platformio.smartui-headless.ini").read_text(encoding="utf-8")
-    headless_marker = re.search(r'MESHCORE_UI_VERSION\s*=\s*\'"([^"\n]+)"\'', config).group(1)
+    profile = config.split("[env:SmartUI_ProMicro_headless]", 1)[1].split("[env:", 1)[0]
+    flags = profile.split("build_flags =", 1)[1]
+    headless_marker = re.search(r'MESHCORE_UI_VERSION\s*=\s*\'"([^"\n]+)"\'', flags).group(1)
     cases = (("promicro-headless", headless_marker, 1),
              ("promicro-screen", board_marker("ProMicro RA62"), 0),
              ("t114-screen", board_marker("T114"), 0),
