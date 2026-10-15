@@ -206,6 +206,54 @@ struct UIScreen { virtual int render(DisplayDriver&)=0; virtual ~UIScreen()=defa
     return records
 
 
+def verify_boot_metadata(output):
+    """Link the actual setup prefix without any UI code, as a headless boot does."""
+    source = (ROOT / "examples/companion_radio/main.cpp").read_text(encoding="utf-8")
+    prefix = source.split("void setup() {", 1)[1].split("  Serial.begin(115200);", 1)[0]
+    # Both markers belong before hardware initialization and display branches.
+    assert "SmartUI-source:" in prefix and "MESHCORE_UI_VERSION" in prefix
+    assert "DISPLAY_CLASS" not in prefix and "SMARTUI_HEADLESS" not in prefix
+    config = (ROOT / "platformio.smartui-headless.ini").read_text(encoding="utf-8")
+    headless_marker = re.search(r'MESHCORE_UI_VERSION\s*=\s*\'"([^"\n]+)"\'', config).group(1)
+    cases = (("promicro-headless", headless_marker, 1),
+             ("promicro-screen", board_marker("ProMicro RA62"), 0),
+             ("t114-screen", board_marker("T114"), 0),
+             ("legacy-unversioned", None, 1))
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "SmartUiBuildInfo.h").write_bytes((ROOT / "src/helpers/SmartUiBuildInfo.h").read_bytes())
+    linux = None if shutil.which("g++") else subprocess.check_output(
+        ["wsl", "--exec", "wslpath", "-a", output.resolve().as_posix()], text=True).strip()
+    for optimization in ("-O2", "-Ofast"):
+        for name, marker, headless in cases:
+            slug = "boot_" + name + optimization
+            cpp, binary = output / (slug + ".cpp"), output / slug
+            code = '#include <cstddef>\n#define SMARTUI_BUILD_SHA "12345678+dirty"\n'
+            code += f"#define SMARTUI_HEADLESS {headless}\n"
+            if marker is not None:
+                code += "#define MESHCORE_UI_VERSION " + json.dumps(marker) + "\n"
+            code += '#include "SmartUiBuildInfo.h"\nvoid setup() {\n' + prefix + "\n}\n"
+            # This negative control must disappear; merely putting a literal in
+            # this translation unit must not make the retention check pass.
+            code += 'const char* unusedSplash() { return "unused-splash-marker-control"; }\n'
+            code += "int main() { setup(); }\n"
+            cpp.write_text(code, encoding="utf-8")
+            flags = ["-std=c++17", optimization, "-flto", "-ffunction-sections", "-fdata-sections",
+                     "-Wl,--gc-sections", "-Wall", "-Wextra", "-Werror"]
+            if linux is None:
+                compile_cmd, run_cmd = ["g++", *flags, str(cpp), "-o", str(binary)], [str(binary)]
+            else:
+                compile_cmd = ["wsl", "--exec", "g++", *flags, linux + "/" + cpp.name, "-o", linux + "/" + binary.name]
+                run_cmd = ["wsl", "--exec", linux + "/" + binary.name]
+            subprocess.run(compile_cmd, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            subprocess.run(run_cmd, check=True, capture_output=True)
+            raw = binary.read_bytes()
+            assert b"SmartUI-source:12345678+dirty\0" in raw, f"source identity stripped: {name}/{optimization}"
+            assert b"unused-splash-marker-control" not in raw, "negative control did not exercise linker GC"
+            if marker is not None:
+                assert marker.encode("utf-8") + b"\0" in raw, f"boot profile marker stripped: {name}/{optimization}"
+    print("PASS setup metadata: 8 optimized/LTO builds, headless/display/legacy, no UI linked")
+
+
 def paint(kind, image, record, color):
     """Driver-faithful glyph pixels at the C++-recorded native coordinates."""
     font, size, bold, text = (record[key] for key in ("font", "size", "bold", "text"))
@@ -277,6 +325,7 @@ def render_splash_preview(kind, font, out=None):
 
 
 def main(out, preview):
+    verify_boot_metadata(out / "boot-metadata")
     source = UI_PATH.read_text(encoding="utf-8")
     method, helpers, release = production_code(source)
     actual = {name: execute_cpp(kind, method, helpers, release, out, board_marker(name), name)
@@ -304,6 +353,7 @@ def main(out, preview):
               "render_sha256": hashlib.sha256(method.encode()).hexdigest(),
               "binary_markers": {name: board_marker(name) for name, *_ in BOARDS},
               "marker_retention": "all six exact markers present under -O2 -flto -ffunction-sections -fdata-sections -Wl,--gc-sections",
+              "boot_marker_retention": "8 setup-prefix builds, headless/display/legacy, -O2/-Ofast with LTO and linker GC; no UI linked",
               "scope": "actual SplashScreen render and role helpers; exact bitmap/OLED/E213 metrics and pixels; recording stubs, not whole firmware or hardware"}
     (out / "REPORT.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tile_w, tile_h, gap = 520, 310, 16

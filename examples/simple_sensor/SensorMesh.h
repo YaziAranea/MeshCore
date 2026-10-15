@@ -168,6 +168,7 @@ private:
   bool region_load_active;
 
   bool telemHasChanged(ClientInfo* c);
+  void snapshotTelemetry(ClientInfo* c);
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
   uint8_t handleRequest(ClientInfo* from, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len);
   mesh::Packet* createSelfAdvert();

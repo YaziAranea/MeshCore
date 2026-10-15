@@ -104,14 +104,14 @@ int main() {
 
   DynamicConfigSerializer custom;
   for (int i = 0; i < 12; ++i) {
-    char key[8]; snprintf(key, sizeof(key), "k%d", i);
+    char key[16]; snprintf(key, sizeof(key), "k%d", i);
     assert(custom.setByKey(key, "x"));
   }
   CaptureStream many; assert(custom.saveSerial(many));
   DynamicConfigSerializer restored;
   ReplayStream many_input(many.text().c_str()); assert(restored.loadSerial(many_input));
   for (int i = 0; i < 12; ++i) {
-    char key[8]; snprintf(key, sizeof(key), "k%d", i);
+    char key[16]; snprintf(key, sizeof(key), "k%d", i);
     assert(restored.getByKey(key, value, sizeof(value)) && !strcmp(value, "x"));
   }
   struct Guard { char before = 'A'; char output[2] = {}; char after = 'Z'; } guard;

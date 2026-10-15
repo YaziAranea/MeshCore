@@ -94,6 +94,8 @@ class PublicReleasePolicyTests(unittest.TestCase):
                         "Heltec_v3_repeater", "heltec_v4_room_server", "ProMicro_sensor"):
             self.assertIn("- " + profile, workflow)
         self.assertIn("node --test tools/usb-helper/test_ui.js", workflow)
+        uf2_build = workflow.split("  build-uf2:", 1)[1].split("  validate-uf2:", 1)[0]
+        self.assertIn('pio run -e "${{ matrix.environment }}"\n', uf2_build)
         self.assertNotIn('python tools/prune_superseded_helper_assets.py', publish)
         self.assertLess(publish.index('gh release upload "$tag"'), publish.index('assert local.keys() == assets.keys()'))
         self.assertIn("python -B -m unittest discover -s tools/smartui-cli/tests -v", workflow)

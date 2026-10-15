@@ -13,11 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def source_code():
     source = (ROOT / "examples/simple_sensor/SensorMesh.cpp").read_text(encoding="utf-8")
-    capacity = re.search(r"telemetry\((MAX_PACKET_PAYLOAD - \d+)\)", source)[1]
+    capacity = re.search(r"telemetry\((MAX_PACKET_PAYLOAD[^\n]+)\)\s*$", source, re.M)[1]
+    core = (ROOT / "src/MeshCore.h").read_text(encoding="utf-8")
+    constants = "\n".join(re.findall(r"^#define (?:MAX_PACKET_PAYLOAD|CIPHER_MAC_SIZE|CIPHER_BLOCK_SIZE)\s+\d+.*$", core, re.M))
+    mesh_source = (ROOT / "src/Mesh.cpp").read_text(encoding="utf-8")
+    datagram = function(mesh_source, "Packet* Mesh::createDatagram")
+    datagram_guard = datagram[datagram.index("{") + 1:datagram.index("  Packet* packet")]
     definitions = "\n".join(re.findall(r"^#define REQ_TYPE_.*$", source, re.M))
     helpers = source[source.index("static bool isScalarTelemType"):source.index("/* ------------------ end Cayenne")]
     methods = "\n".join(function(source, signature) for signature in (
-        "bool SensorMesh::telemHasChanged", "uint8_t SensorMesh::handleRequest"))
+        "bool SensorMesh::telemHasChanged", "void SensorMesh::snapshotTelemetry", "uint8_t SensorMesh::handleRequest"))
     return r'''
 #include <cassert>
 #include <cmath>
@@ -28,7 +33,12 @@ def source_code():
 #include "helpers/sensors/LPPDataHelpers.h"
 using std::abs;
 using std::isnan;
-constexpr int MAX_PACKET_PAYLOAD = 176;
+''' + constants + r'''
+constexpr int PAYLOAD_TYPE_TXT_MSG = 2, PAYLOAD_TYPE_REQ = 0, PAYLOAD_TYPE_RESPONSE = 1;
+bool acceptsDatagram(uint8_t type, size_t data_len) {
+''' + datagram_guard + r'''
+  return true;
+}
 constexpr int TELEM_CHANNEL_SELF = 1;
 constexpr int PERM_ACL_ROLE_MASK = 3, PERM_ACL_READ_ONLY = 1, PERM_ACL_ADMIN = 3;
 struct ClientInfo {
@@ -68,6 +78,7 @@ struct SensorMesh {
   Random* getRNG() { return &random_source; }
   int querySeriesData(uint32_t, uint32_t, MinMaxAvg*, int) { return 0; }
   bool telemHasChanged(ClientInfo*);
+  void snapshotTelemetry(ClientInfo*);
   uint8_t handleRequest(ClientInfo*, uint32_t, uint8_t, uint8_t*, size_t);
 };
 ''' + definitions + "\n" + helpers + "\n" + methods + r'''
@@ -75,6 +86,8 @@ int main() {
   SensorMesh mesh;
   ClientInfo client;
   assert(mesh.telemetry.capacity + 8 <= sizeof(mesh.reply_data));
+  assert(acceptsDatagram(PAYLOAD_TYPE_RESPONSE, mesh.telemetry.capacity + 8));
+  assert(!acceptsDatagram(PAYLOAD_TYPE_RESPONSE, mesh.telemetry.capacity + 9));
   assert(LPPData::getDataSize(LPP_RELATIVE_HUMIDITY) == 1);
   assert(LPPData::getMultiplier(LPP_RELATIVE_HUMIDITY) == 2);
   const uint8_t delta[] = {1, LPP_TEMPERATURE, 0, 10, 2, LPP_RELATIVE_HUMIDITY, 4};
@@ -112,6 +125,9 @@ int main() {
   assert(client.extra.sensor.expiry_timestamp == 160 && client.extra.sensor.min_deltas_len == sizeof(delta));
   mesh.telemetry.bytes = {1,LPP_TEMPERATURE,0,210,2,LPP_RELATIVE_HUMIDITY,100};
   assert(mesh.telemHasChanged(&client));
+  assert(mesh.telemHasChanged(&client)); // An unsent update remains pending.
+  assert(client.extra.sensor.prev_telem[3] == 0);
+  mesh.snapshotTelemetry(&client);
   assert(!memcmp(client.extra.sensor.prev_telem, mesh.telemetry.bytes.data(), sizeof(delta)));
   assert(!mesh.telemHasChanged(&client));
   mesh.telemetry.bytes[6] = 106;

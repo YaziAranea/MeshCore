@@ -179,26 +179,31 @@ bool SensorMesh::telemHasChanged(ClientInfo* c) {
 
     i += 2 + sz;  // skip
   }
-  if (changed) {
-    // take snapshot of all _monitored_ telem values, for next cycle
-    i = 0;
-    while (i + 2 < c->extra.sensor.min_deltas_len) {
-      uint8_t ch = c->extra.sensor.min_deltas[i];    // Get channel #
-      uint8_t t = c->extra.sensor.min_deltas[i + 1];     // Get data type
-      uint8_t sz = LPPData::getDataSize(t);
-
-      c->extra.sensor.prev_telem[i] = ch;
-      c->extra.sensor.prev_telem[i + 1] = t;
-
-      // Preserve the encoded value without a lossy float-to-integer round trip.
-      const uint8_t* value = findTelemData(buf, size, ch, t);
-      if (value) memcpy(&c->extra.sensor.prev_telem[i + 2], value, sz);
-      else memset(&c->extra.sensor.prev_telem[i + 2], 0, sz);
-
-      i += 2 + sz;  // skip
-    }
-  }
   return changed;
+}
+
+void SensorMesh::snapshotTelemetry(ClientInfo* c) {
+  if (c->extra.sensor.min_deltas_len > sizeof(c->extra.sensor.min_deltas) ||
+      !validTelemDeltas(c->extra.sensor.min_deltas, c->extra.sensor.min_deltas_len)) return;
+  const uint8_t* buf = telemetry.getBuffer();
+  uint8_t size = telemetry.getSize();
+  // Advance the comparison baseline only after the packet has been queued.
+  uint8_t i = 0;
+  while (i + 2 < c->extra.sensor.min_deltas_len) {
+    uint8_t ch = c->extra.sensor.min_deltas[i];    // Get channel #
+    uint8_t t = c->extra.sensor.min_deltas[i + 1];     // Get data type
+    uint8_t sz = LPPData::getDataSize(t);
+
+    c->extra.sensor.prev_telem[i] = ch;
+    c->extra.sensor.prev_telem[i + 1] = t;
+
+    // Preserve the encoded value without a lossy float-to-integer round trip.
+    const uint8_t* value = findTelemData(buf, size, ch, t);
+    if (value) memcpy(&c->extra.sensor.prev_telem[i + 2], value, sz);
+    else memset(&c->extra.sensor.prev_telem[i + 2], 0, sz);
+
+    i += 2 + sz;  // skip
+  }
 }
 
 uint8_t SensorMesh::handleRequest(ClientInfo* from, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len) {
@@ -855,7 +860,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
      : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
       region_map(key_store), temp_map(key_store),
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this, getRxPowerSavingControl()),
-      telemetry(MAX_PACKET_PAYLOAD - 8)
+      telemetry(MAX_PACKET_PAYLOAD - CIPHER_MAC_SIZE - (CIPHER_BLOCK_SIZE - 1) - 8)
 {
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
@@ -1137,6 +1142,7 @@ void SensorMesh::loop() {
             } else {
               sendFloodScoped(scope, reply, 0, _prefs.path_hash_mode + 1);
             }
+            snapshotTelemetry(c);
           }
         }
       }

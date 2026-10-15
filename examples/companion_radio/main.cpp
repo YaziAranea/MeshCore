@@ -818,6 +818,13 @@ void setup() {
   const volatile char* build_identity = "SmartUI-source:" SMARTUI_BUILD_SHA;
   for (size_t i = 0; i < sizeof("SmartUI-source:" SMARTUI_BUILD_SHA); ++i)
     (void)build_identity[i];
+#ifdef MESHCORE_UI_VERSION
+  // Headless builds never render a splash, so retain the board/profile marker
+  // here as well. Every byte must survive LTO and linker garbage collection.
+  const volatile char* release_metadata = MESHCORE_UI_VERSION;
+  for (size_t i = 0; i < sizeof(MESHCORE_UI_VERSION); ++i)
+    (void)release_metadata[i];
+#endif
   Serial.begin(115200);
   board.begin();
 
