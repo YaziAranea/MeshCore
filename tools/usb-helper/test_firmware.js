@@ -40,23 +40,37 @@ function fixture(id='v3', merged=false, source, version=VERSION) {
     if(merged) {bytes[0]=0xe9;app.copy(bytes,0x10000);}
   }
   const name = profile.id + (profile.format==='uf2'?'.uf2':merged?'-merged.bin':'-update.bin');
-  const record = {name,bytes:bytes.length,sha256:sha(bytes),board:profile.label,environment:profile.environment,source_commit:COMMIT,image_kind:profile.format==='uf2'?'nrf52840-uf2-bootloader':merged?'esp32-fresh-install-merged':'esp32-application-update',flash_offset:profile.format==='uf2'?null:merged?'0x00000':'0x10000'};
+  const record = {name,bytes:bytes.length,sha256:sha(bytes),board:profile.manifestBoard||profile.label,environment:profile.environment,source_commit:COMMIT,image_kind:profile.format==='uf2'?'nrf52840-uf2-bootloader':merged?'esp32-fresh-install-merged':'esp32-application-update',flash_offset:profile.format==='uf2'?null:merged?'0x00000':'0x10000',...(profile.headless?{headless:true}:{})};
   const manifest = {schema_version:2,commit:COMMIT,version,firmware:[record]};
   return {profile,bytes,name,record,manifest, args(){return {name,bytes:this.bytes,manifestText:JSON.stringify(manifest),target:id,cryptoProvider:webcrypto};}};
 }
 
-test('preflight validates all seven profiles and reconstructs split UF2 markers', async()=>{
-  assert.equal(PROFILES.length,7);
+test('0.20 preflight validates all eight profiles and reconstructs split UF2 markers', async()=>{
+  assert.equal(PROFILES.length,8);
   for(const profile of PROFILES) {
-    const f=fixture(profile.id);
+    const f=fixture(profile.id,false,undefined,'0.20');
     const result=await verify({...f.args(),info:{board:profile.reported,build:COMMIT.slice(0,8)}});
-    assert.equal(result.board,profile.label);assert.equal(result.matchedConnectedBoard,true);assert.equal(result.sameBuild,true);
+    assert.equal(result.board,profile.label);assert.equal(result.matchedConnectedBoard,!profile.id.startsWith('promicro'));assert.equal(result.sameBuild,true);
     assert.match(result.integrityNotice,/не подлинность|а не подлинность/);
   }
 });
 
+test('headless ProMicro needs matching variant, release, manifest and unique embedded marker',async()=>{
+  const f=fixture('promicro-headless',false,undefined,'0.20'),info={board:'ProMicro DIY',build:COMMIT.slice(0,8)};
+  assert.equal(reportedProfile(info),null,'Shared manufacturer must not select a display variant');
+  await assert.rejects(verify({...f.args(),info,target:''}),/вручную/);
+  await assert.rejects(verify({...f.args(),info,target:'promicro'}),/другой платы/);
+  await assert.rejects(verify({...fixture('v3',false,undefined,'0.20').args(),info}),/другой платы/);
+  f.record.headless=false;await assert.rejects(verify(f.args()),/без экрана/);f.record.headless=true;
+  await assert.rejects(verify(fixture('promicro-headless',false,undefined,'0.19').args()),/не поддерживается/);
+  f.bytes=uf2(PROFILES.find(p=>p.id==='promicro'),'0.20');f.record.bytes=f.bytes.length;f.record.sha256=sha(f.bytes);
+  await assert.rejects(verify(f.args()),/метка платы/);
+  const ordinary=fixture('promicro',false,undefined,'0.20');ordinary.record.headless=true;
+  await assert.rejects(verify(ordinary.args()),/без экрана/);
+});
+
 test('0.17 preflight accepts all seven profiles and rejects mismatched version markers',async()=>{
-  for(const profile of PROFILES){
+  for(const profile of PROFILES.filter(p=>!p.headless)){
     for(const merged of (profile.format==='bin'?[false,true]:[false])){
       const f=fixture(profile.id,merged,undefined,'0.17');
       const result=await verify(f.args());
@@ -69,7 +83,7 @@ test('0.17 preflight accepts all seven profiles and rejects mismatched version m
 });
 
 test('preflight retains 0.09 through 0.12 release compatibility for all six profiles', async()=>{
-  const legacyProfiles=PROFILES.filter(profile=>profile.id!=='v4r8');
+  const legacyProfiles=PROFILES.filter(profile=>profile.id!=='v4r8'&&!profile.headless);
   assert.equal(legacyProfiles.length,6);
   for(const version of ['0.09','0.10','0.11','0.12']) for(const profile of legacyProfiles) {
     const result=await verify(fixture(profile.id,false,undefined,version).args());

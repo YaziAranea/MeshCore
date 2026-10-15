@@ -62,7 +62,7 @@ def main() -> None:
     sources = [
         FIXTURE / "transport_selector_test.cpp",
         ROOT / "src/helpers/ArduinoSerialInterface.cpp",
-        ROOT / "src/helpers/esp32/SerialWifiInterface.cpp",
+        ROOT / "src/helpers/wifi/SerialWifiInterface.cpp",
     ]
     includes = [FIXTURE / "mocks", ROOT / "test/mocks", ROOT / "src"]
 

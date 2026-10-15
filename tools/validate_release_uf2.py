@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the three nRF52 UF2 artifacts for SmartUI 0.19."""
+"""Validate the four nRF52 UF2 artifacts for SmartUI 0.20."""
 
 from __future__ import annotations
 
@@ -17,9 +17,10 @@ APP_START = 0x26000
 APP_END = 0xD4000  # Preserve the extra-FS region shared by these profiles.
 
 EXPECTED = {
-    "T096_UI_0.19.uf2": b"T096 SmartUI 0.19",
-    "T114_UI_0.19.uf2": b"T114 SmartUI 0.19",
-    "ProMicro_RA62_UI_0.19.uf2": b"ProMicro SmartUI 0.19",
+    "T096_UI_0.20.uf2": b"T096 SmartUI 0.20",
+    "T114_UI_0.20.uf2": b"T114 SmartUI 0.20",
+    "ProMicro_RA62_UI_0.20.uf2": b"ProMicro SmartUI 0.20",
+    "ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2": b"ProMicro Headless SmartUI 0.20",
 }
 
 
@@ -80,7 +81,7 @@ def main() -> int:
         nargs="?",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "firmware",
-        help="directory containing the three SmartUI experimental UF2 files",
+        help="directory containing the four SmartUI release UF2 files",
     )
     args = parser.parse_args()
 

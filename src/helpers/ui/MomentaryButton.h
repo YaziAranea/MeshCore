@@ -26,11 +26,11 @@ class MomentaryButton {
 public:
   MomentaryButton(int8_t pin, int long_press_mills=0, bool reverse=false, bool pulldownup=false, bool multiclick=true);
   MomentaryButton(int8_t pin, int long_press_mills, int analog_threshold);
-  void begin();
+  virtual void begin();
   void reconfigure();
   void resetState(bool suppress_current_press = false);
   void preferImmediateClickUntil(unsigned long until);
-  int check(bool repeat_click=false);  // returns one of BUTTON_EVENT_*
+  virtual int check(bool repeat_click=false);  // returns one of BUTTON_EVENT_*
   void cancelClick();  // suppress next BUTTON_EVENT_CLICK (if already in DOWN state)
   uint8_t getPin() { return _pin; }
   int rawLevel() const;

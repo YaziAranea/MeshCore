@@ -9,7 +9,7 @@
 
 #include "ContactInfo.h"
 
-#define MAX_SEARCH_RESULTS   8
+#define MAX_SEARCH_RESULTS   24
 
 #define MSG_SEND_FAILED       0
 #define MSG_SEND_SENT_FLOOD   1
@@ -117,6 +117,12 @@ protected:
   // Protocol v14: another node asks this one to run a CLI command. Remote execution is not
   // supported here, so there is no reply buffer; the default drops it.
   virtual void onCliCommandMessage(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) { }
+  // Compatibility hook: SmartUI queues remote commands for the app and leaves
+  // reply empty. Other companions may implement the upstream v14 reply path.
+  virtual void onCLICommandRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text, char* reply) {
+    (void)reply;
+    onCliCommandMessage(contact, pkt, sender_timestamp, text);
+  }
   virtual void onSignedMessageRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const uint8_t *sender_prefix, const char *text) = 0;
   virtual uint32_t calcFloodTimeoutMillisFor(uint32_t pkt_airtime_millis) const = 0;
   virtual uint32_t calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t path_len) const = 0;

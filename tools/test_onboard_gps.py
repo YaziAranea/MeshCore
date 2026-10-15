@@ -29,6 +29,7 @@ extern int pin_values[64];
 extern unsigned pin_writes[64];
 inline uint32_t millis() { return now_ms; }
 inline void delay(unsigned ms) { now_ms += ms; }
+inline void yield() { ++now_ms; }
 enum {OUTPUT=1, INPUT=0, HIGH=1, LOW=0};
 inline void pinMode(int,int) {}
 inline void digitalWrite(int pin,int value) { if(pin>=0 && pin<64) {pin_values[pin]=value;++pin_writes[pin];} }

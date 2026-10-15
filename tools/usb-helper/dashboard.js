@@ -24,6 +24,33 @@
   $('connection-actions').append($('connect').parentElement);
   const dock=document.querySelector('.transport-dock');dock.id='connection-dock';
   const connectionMeta=document.createElement('p');connectionMeta.id='api-connection-meta';connectionMeta.className='hint';connectionMeta.hidden=true;dock.append(connectionMeta);
+  const nodeCard=document.createElement('section');nodeCard.id='node-overview';nodeCard.className='card wide node-overview';nodeCard.dataset.pages='connection';nodeCard.hidden=true;
+  nodeCard.innerHTML=`<div class="node-overview-main"><p class="panel-kicker">Ваша нода · локально по USB</p><h2 id="node-overview-title">Нода подключена</h2><p id="node-overview-name" class="node-name"></p><p id="node-overview-description" class="hint"></p><dl class="node-facts"><div><dt>Прошивка</dt><dd id="node-overview-firmware">—</dd></div><div><dt>Питание</dt><dd id="node-overview-battery">—</dd></div><div><dt>Подключение приложения</dt><dd id="node-overview-mode">—</dd></div><div><dt>Настройки</dt><dd id="node-overview-confirmed">Не прочитано</dd></div></dl><div class="buttons"><button type="button" data-node-page="radio">Имя и радио</button><button type="button" data-node-page="sound">Звук и выводы</button><button type="button" data-node-page="device">Аккумулятор и настройки</button></div></div><div class="node-pin-panel"><p class="panel-kicker">Подключить телефон</p><h3>Bluetooth PIN</h3><p class="hint">Текущий код сопряжения. Чтение не меняет PIN или режим ноды.</p><output id="node-pin-value" class="node-pin-value" aria-live="polite" aria-label="Bluetooth PIN скрыт">••• •••</output><div class="buttons"><button id="node-pin-show" type="button" disabled>Показать PIN</button><button id="node-pin-hide" type="button" hidden>Скрыть</button></div><p id="node-pin-status" class="hint" role="status">PIN не запрашивался.</p></div>`;
+  grid.prepend(nodeCard);
+  let pinShown=false,pinTimer=null,pinFailure='',pinEpoch=0;
+  function hidePin(){++pinEpoch;clearTimeout(pinTimer);pinTimer=null;pinShown=false;$('node-pin-value').textContent='••• •••';$('node-pin-value').setAttribute('aria-label','Bluetooth PIN скрыт');$('node-pin-hide').hidden=true;}
+  $('node-pin-hide').onclick=()=>{hidePin();$('node-pin-status').textContent='PIN скрыт. Для показа прочитайте его заново.';};
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)hidePin();});
+  for(const button of nodeCard.querySelectorAll('[data-node-page]'))button.onclick=()=>{hidePin();activePage=button.dataset.nodePage;renderPages();};
+  function renderNodeOverview(){
+    const state=legacy.getState(),isApi=mode==='api';
+    const connected=isApi?binaryState.connected:state.connected&&state.verified;
+    const currentCaps=isApi?caps:state.settingsCaps,currentSettings=isApi?settings:state.deviceSettings;
+    nodeCard.hidden=!connected||!currentCaps;
+    if(!connected||(isApi&&binaryState.uncertain))hidePin();
+    const headless=currentCaps&&Number(currentCaps.display)===0;
+    nodeCard.dataset.headless=String(Boolean(headless));
+    $('node-overview-title').textContent=headless?'Управление без экрана':'Нода подключена';
+    $('node-overview-name').textContent=identityState?.name||'Локальная нода';
+    $('node-overview-description').textContent=headless?'Нода сообщает: активного экрана нет. Все доступные настройки — здесь; оформление экрана скрыто. Возможности определены прошивкой.':'Экран активен. Helper и меню ноды используют одни настройки; сохранение проверяется чтением обратно.';
+    $('node-overview-firmware').textContent='SmartUI '+(isApi?binaryState.hello?.firmware||'—':state.info?.firmware||'—');
+    const mv=Number(currentSettings?.battery_mv);$('node-overview-battery').textContent=mv>0?(mv/1000).toFixed(3)+' В · замер ноды':'Замер не подтверждён';
+    $('node-overview-mode').textContent=({ble:'Bluetooth',usb:'USB-компаньон',wifi:'Wi-Fi'}[isApi?connectionState?.mode:state.status?.mode])||'Не прочитано';
+    $('node-overview-confirmed').textContent=(isApi?binaryState.uncertain:false)?'Требуется повторное подключение':currentSettings?'Прочитано с ноды':'Не подтверждено';
+    const pinSupported=isApi?binaryState.hello?.ble_pin==='1':state.info?.ble_pin===true;
+    $('node-pin-show').disabled=!pinSupported||!(isApi?available():state.connected&&state.verified&&!state.busy&&!state.testPassed&&!running&&!networkRunning);
+    if(!pinShown)$('node-pin-status').textContent=pinFailure||(!pinSupported?'Показ PIN требует SmartUI 0.20+ с ble_pin=1.':isApi&&binaryState.uncertain?'Сеанс не подтверждён. Переподключитесь.':'Только по нажатию. Скроется через 30 секунд; в журнал не попадёт.');
+  }
   // Constant application markup only. Device text is inserted with textContent.
   const workspace=document.createElement('div');workspace.id='api-workspace';workspace.className='wide';workspace.hidden=true;
   workspace.innerHTML=`
@@ -119,7 +146,7 @@
     $('connect').textContent=choosing?'Выберите порт…':acknowledgedLoss?'Переподключить USB':'Выбрать USB-порт';
     const phases={opening:'Открываем USB-порт…',negotiating:'Проверяем локальный CLI…',ready:running||s.busy?'Выполняется операция…':'USB-компаньон подключён',uncertain:'Результат неизвестен — требуется переподключение',disconnected:'Нода не подключена'};
     $('transport-state').textContent=mode==='api'?phases[s.phase]||'Нода не подключена':s.busy?'Выполняется операция…':s.verified?'Консоль SmartUI подключена':s.connected?'Порт открыт; консоль не подтверждена':'Нода не подключена';
-    $('transport-help').textContent=mode==='api'?'На ноде выберите USB-компаньон. Локальные команды CMD66, без чтения сообщений.':'На ноде выберите Bluetooth или Wi-Fi. Помощник подключается USB-кабелем; телефон и сопряжение не нужны.';
+    $('transport-help').textContent=s.connected?'Настройки читаются напрямую по USB. Телефон и сопряжение для настройки не нужны.':mode==='api'?'Для ноды в режиме USB-компаньона. Если режим Bluetooth, выберите «Настройки (консоль)».':'Для ноды в режиме Bluetooth или Wi-Fi, в том числе без экрана. Подключение — USB-кабелем.';
     connectionMeta.textContent=binaryState.hello?'SmartUI '+(binaryState.hello.firmware||'—')+' · '+(binaryState.hello.write==='1'?'Изменения разрешены':'Только чтение')+(connectionState?' · Режим: '+connectionState.mode:''):'';
     for(const id of ['api-settings-load','api-sound-read','api-command-send'])$(id).disabled=!available();
     $('api-notify-test').disabled=!writable()||!settings||!['sound','vibration','board_led','unread_led'].some(key=>caps?.[key]==='1');
@@ -157,6 +184,7 @@
       ?'Окно активно · осталось по данным ноды: '+Math.ceil(adcService.remaining_ms/1000)+' с. Проверяем каждые 5 секунд.'
       :adcService.external?'Окно выключено. Обычная защита питания действует.':'Окно выключено. Нода не подтвердила питание USB.';
     renderNetworkControls();
+    renderNodeOverview();
     renderPages();
   }
   async function run(operation){
@@ -172,6 +200,22 @@
   });
   const rec=async(command,prefix,mutate=false)=>api.record(await client.execute(command,{mutate}),prefix);
   const exact=async(command,expected)=>{if(await client.execute(command,{mutate:true})!==expected)throw new api.CliError('PROTOCOL');};
+  $('node-pin-show').onclick=()=>{
+    if($('node-pin-show').disabled)return;
+    hidePin();pinFailure='';
+    const epoch=pinEpoch;
+    run(async()=>{try{const isApi=mode==='api',session=client.session;
+      const reply=isApi?await client.execute('get pin'):await legacy.client.readBLEPin();
+      if(isApi&&(session!==client.session||!binaryState.connected))throw new api.CliError('CLOSED');
+      if(isApi?!/^> [1-9][0-9]{5}$/.test(reply):! /^[1-9][0-9]{5}$/.test(reply))throw new api.CliError('PROTOCOL');
+      if(epoch!==pinEpoch||document.hidden||activePage!=='connection')return;
+      const value=isApi?reply.slice(2):reply;pinShown=true;$('node-pin-value').textContent=value.slice(0,3)+' '+value.slice(3);
+      $('node-pin-value').setAttribute('aria-label','Bluetooth PIN '+value);
+      $('node-pin-hide').hidden=false;$('node-pin-status').textContent='Прочитан с ноды. Используйте при сопряжении телефона; через 30 секунд код скроется.';
+      pinTimer=setTimeout(()=>{hidePin();renderNodeOverview();},30000);
+    }catch(error){pinFailure=error.safe?error.message:'PIN не прочитан. Проверьте подключение.';throw error;}
+    });
+  };
   async function readAdcService(action=''){
     const session=client.session;
     try{
@@ -378,7 +422,7 @@
       const meta=SmartUiConsole.EXTENDED_FIELDS.find(f=>f.key===key),schema=schemas[key];
       if(key!=='bridge'&&!schema&&(meta&&!fields.some(row=>row[0]===key)||cap&&caps[cap]!=='1'))continue;
       const max=key==='melody'?numeric(caps.melody_max,255):maxDefault;
-      const supported=schema?schema.supported:!cap||caps[cap]==='1',current=supported?Number(settings[key]):null;
+      const supported=Boolean((schema?schema.supported:!cap||caps[cap]==='1')&&(meta?.group!=='display'||caps.display==='1')),current=supported?Number(settings[key]):null;
       if(supported&&!(schema?SmartUiConsole.settingValueValid(schema,current):Number.isInteger(current)&&current>=min&&current<=max))throw new api.CliError('PROTOCOL');
       const row=document.createElement('div');row.className='setting-row';row.dataset.key=key;row.dataset.advanced=String(SmartUiConsole.ADVANCED_SETTING_KEYS.includes(key));row.dataset.search=(label+' '+key).toLowerCase();row.dataset.supported=String(supported);const caption=document.createElement('label');caption.htmlFor='api-setting-'+key;caption.textContent=label;
       const options=schema?SmartUiConsole.settingOptions({key},schema,Object.fromEntries(melodyNames)):Array.from({length:max-min+1},(_,i)=>[i+min,key==='sound_quiet'?(i?'Выключен':'Включён'):key==='melody'?(melodyNames.has(i+min)?(i+min)+' · '+melodyNames.get(i+min):'Мелодия '+(i+min)):max===1?(i?'Включено':'Выключено'):String(i+min)]);
@@ -422,7 +466,7 @@
   async function wifiStatus(){wifiState=await rec('ui wifi status','OK ui wifi');if(!['supported','configured','associated'].every(key=>['0','1'].includes(wifiState[key]))||!(wifiState.ip==='none'||/^(?:\d{1,3}\.){3}\d{1,3}$/.test(wifiState.ip)&&wifiState.ip.split('.').every(n=>Number(n)<=255)))throw new api.CliError('PROTOCOL');const names={idle:'Нет незавершённой настройки',ssid:'Ожидает имя сети',password:'Ожидает пароль',ready:'Можно начать проверку',testing:'Проверка идёт — запросите результат через несколько секунд',test_ok:'Проверка успешна. Сеть ещё не сохранена',saved:'Сеть сохранена',cancelled:'Проверка отменена',failed:'Проверка не прошла; старые настройки сохранены',timeout:'Время проверки истекло'};$('api-wifi-state').textContent=names[wifiState.state]||'Состояние не распознано';renderShell();}
   $('helper-mode').onchange=()=>{
     if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing){$('helper-mode').value=mode;return;}
-    mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
+    hidePin();mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
     $('refresh').hidden=mode==='api';renderPages();renderShell();
   };
   const originalConnect=$('connect').onclick,originalDisconnect=$('disconnect').onclick;
@@ -549,7 +593,7 @@
   };
   window.addEventListener('beforeunload',()=>{$('api-password').value='';});
   const tabs=[...document.querySelectorAll('[data-page-target]')];
-  for(const tab of tabs){tab.onclick=()=>{activePage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
+  for(const tab of tabs){tab.onclick=()=>{hidePin();activePage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
   renderPages();
   renderShell();
 })();

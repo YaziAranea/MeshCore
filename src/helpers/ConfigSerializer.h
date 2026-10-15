@@ -17,7 +17,9 @@
 class ConfigSerializer {
   bool _first;
   int8_t _depth;
+  bool _dirty = false;
 
+protected:
   enum OP { READ, WRITE };
 
   class Context {
@@ -28,6 +30,8 @@ class ConfigSerializer {
     char pending;
     char rd_buf[CONFIG_MAX_TOKEN_LEN];
     char _keys[CONFIG_MAX_DEPTH][CONFIG_MAX_KEYLEN];
+    uint8_t _token_depth = 0;
+    bool _object_token = false;
 
   public:
     bool success = true;
@@ -36,7 +40,17 @@ class ConfigSerializer {
     Stream* file() const { return _f; }
     int readNext();
     const char* getToken() const { return rd_buf; }
-    bool keyMatch(int8_t depth, const char* key) { return strcmp(key, _keys[depth]) == 0; }
+    void setReadToken(uint8_t depth, bool object) { _token_depth = depth; _object_token = object; }
+    uint8_t tokenDepth() const { return _token_depth; }
+    bool objectToken() const { return _object_token; }
+    bool pathMatch(int8_t depth, const char* key) {
+      return depth >= 0 && depth <= _token_depth && strcmp(key, _keys[depth]) == 0;
+    }
+    bool keyMatch(int8_t depth, const char* key) {
+      if (!pathMatch(depth, key)) return false;
+      if (depth != _token_depth || _object_token) { success = false; return false; }
+      return true;
+    }
     void setKey(uint8_t depth, const char* key) { strcpy(_keys[depth], key);  }
     void putText(const char* text) {
       const size_t expected = strlen(text);
@@ -53,13 +67,14 @@ class ConfigSerializer {
     void putValue(T value, int format) {
       if (_f->print(value, format) == 0) success = false;
     }
+    const char* getKey(uint8_t depth) { return _keys[depth]; }
   };
 
   Context* _context = NULL;
+  int8_t getDepth() const { return _depth; }
 
   void writeComma();
 
-protected:
   ConfigSerializer() { }
 
   void def(const char* key, char* value, size_t max_len);  // max_len inclusive of null
@@ -77,7 +92,12 @@ protected:
 
   virtual void structure() = 0;
 
+  void markDirty() { _dirty = true; }
+
 public:
   bool loadSerial(Stream& s);
   bool saveSerial(Stream& s);
+
+  virtual bool isDirty() const { return _dirty; }
+  virtual void clearDirty() { _dirty = false; }
 };

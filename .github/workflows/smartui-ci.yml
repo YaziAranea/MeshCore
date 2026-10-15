@@ -3,13 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-0.19
+      - smartui-0.20
       # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.19 as Latest after all seven-board checks pass
+        description: Publish public SmartUI 0.20 as Latest after all eight-profile checks pass
         required: false
         type: boolean
         default: false
@@ -41,15 +41,19 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.19.uf2
+            uf2_name: T096_UI_0.20.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.19.uf2
+            uf2_name: T114_UI_0.20.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.19.uf2
+            uf2_name: ProMicro_RA62_UI_0.20.uf2
+          - board: ProMicro FakeTec RA62 Headless
+            artifact_id: promicro-ra62-headless
+            environment: SmartUI_ProMicro_headless
+            uf2_name: ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2
 
     steps:
       - name: Check out source
@@ -118,7 +122,7 @@ jobs:
           retention-days: 14
 
   validate-uf2:
-    name: Validate and package the three nRF52 UF2 files
+    name: Validate and package the four nRF52 UF2 files
     needs: build-uf2
     runs-on: ubuntu-latest
 
@@ -167,19 +171,19 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.19
+            stem: Heltec_V3_UI_0.20
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.19
+            stem: Heltec_V4.3_UI_0.20
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.19
+            stem: Paper_UI_0.20
           - board: Heltec V4 R8 OLED FEM ON
             artifact_id: heltec-v4-r8-oled-fem
             environment: heltec_v4_r8_companion_radio_ble_femon_smartui
-            stem: Heltec_V4_R8_UI_0.19
+            stem: Heltec_V4_R8_UI_0.20
 
     steps:
       - name: Check out source
@@ -347,7 +351,7 @@ jobs:
         with:
           name: smartui-v3-validation-support
           path: validation-support
-      - name: Validate all eleven images and build manifest, checksums and all-board ZIP
+      - name: Validate all twelve images and build manifest, checksums and all-board ZIP
         run: |
           chmod +x validation-support/mkspiffs
           python tools/test_release_source_guard.py
@@ -356,7 +360,7 @@ jobs:
             --firmware-dir firmware --commit "$GITHUB_SHA" \
             --mkspiffs validation-support/mkspiffs \
             --sdkconfig validation-support/sdk/profile/include/sdkconfig.h
-      - name: Upload the complete nineteen-asset release
+      - name: Upload the complete twenty-asset release
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: smartui-public-release
@@ -365,7 +369,7 @@ jobs:
           retention-days: 30
 
   build-display-compatibility:
-    name: Shared display compatibility — ${{ matrix.environment }}
+    name: Shared firmware compatibility — ${{ matrix.environment }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -376,9 +380,12 @@ jobs:
           - Heltec_t1_companion_radio_usb
           - SmartUI_ProMicro_headless
           - SmartUI_Paper_headless
+          - Heltec_v3_repeater
+          - heltec_v4_room_server
+          - ProMicro_sensor
 
-    # Compile-only representatives of shared display backends. These boards
-    # are not added to the supported SmartUI release or its downloadable files.
+    # Compile-only coverage for shared display backends and non-companion
+    # radio/settings paths. Extra targets do not add public release assets.
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -407,7 +414,7 @@ jobs:
       - name: Install pinned PlatformIO
         run: python -m pip install --disable-pip-version-check "platformio==${PLATFORMIO_CORE_VERSION}"
 
-      - name: Compile shared-backend representative
+      - name: Compile shared-firmware representative
         run: pio run -e "${{ matrix.environment }}"
 
   native-tests:
@@ -535,6 +542,13 @@ jobs:
           python tools/test_nrf_ble_queue.py
           python tools/test_smartui_sleep_policy.py
 
+      - name: Check Companion 1.18 preferences migration and packet bounds with sanitizers
+        env:
+          SMARTUI_TEST_SANITIZE: "1"
+        run: |
+          python tools/test_companion_v118_prefs.py
+          python tools/test_sensor_telemetry_bounds.py
+
       - name: Check offline USB helper protocol and deterministic package
         run: |
           node tools/usb-helper/test_core.js
@@ -648,12 +662,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-public-release:
-    name: Publish SmartUI 0.19
-    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.19'
+    name: Publish SmartUI 0.20
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.20'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-public-release-smartui-0.19
+      group: publish-public-release-smartui-0.20
       cancel-in-progress: false
     permissions:
       contents: write
@@ -672,7 +686,7 @@ jobs:
           name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.19 release page
+      - name: Create or resume the SmartUI 0.20 release page
         shell: bash
         run: |
           set -euo pipefail
@@ -684,9 +698,9 @@ jobs:
           }
           # Recheck live visibility before any tag, release or asset mutation.
           check_public_target
-          tag="smartui-0.19"
-          title="Smart UI 0.19"
-          notes="release/RELEASE_NOTES_SmartUI_0.19_RU.md"
+          tag="smartui-0.20"
+          title="Smart UI 0.20"
+          notes="release/RELEASE_NOTES_SmartUI_0.20_RU.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.
@@ -812,7 +826,7 @@ jobs:
             exit 1
           fi
 
-          # New releases remain drafts until all 19 expected assets have arrived.
+          # New releases remain drafts until all 20 expected assets have arrived.
           # Keep this visible as a normal public Release with explicit test limits.
           # This public release becomes Latest only after the complete bundle passes.
           gh api "repos/${GITHUB_REPOSITORY}/releases/${release_id}" > "$release_json"
@@ -827,7 +841,7 @@ jobs:
           local = {p.name: p for p in Path("release").iterdir() if p.is_file()}
           remote = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assets = {a["name"]: a for a in remote["assets"]}
-          assert len(local) == 19, f"Expected 19 local assets, got {len(local)}"
+          assert len(local) == 20, f"Expected 20 local assets, got {len(local)}"
           assert len(remote["assets"]) == len(assets), "Duplicate asset names"
           assert local.keys() == assets.keys(), "Release assets differ from validated bundle"
           for name, path in local.items():

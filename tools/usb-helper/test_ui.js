@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.6.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.7.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -145,6 +145,7 @@ function installSerialMock({ supported, readOnly, manualTest, info, replies, loc
       switch (command) {
         case 'help': this.emit('Commands: ' + (this.info ? 'info | ' : '') + 'status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | ' + (this.replies ? 'reply get N | reply set N HEX | ' : '') + 'help\r\n'+(this.settings?'Settings protocol: 1\r\n':'')+'Credential input is not echoed. WiFi is saved only after a passed test.'); break;
         case 'info': this.emit(this.info || "Unknown command. Type 'help'."); break;
+        case 'get pin': this.emit(this.info?.includes(' ble_pin=1 ')?'BLEPin v=1 pin=654321':'ERR ble_pin unsupported'); break;
         case 'status': {
           const online = this.mode === 'WiFi' && this.configured;
           this.emit('Mode=' + this.mode + ' companion=idle via=none USB-service=on WiFi-config=' + (this.configured ? 'yes' : 'no') + ' link=' + (online ? 'associated' : 'down') + ' IP=' + (online ? '192.168.1.77' : 'none') + ' approval=none storage=' + (this.localRecovery ? 'recovery-required' : 'ok'));
@@ -661,7 +662,24 @@ test('firmware preflight stays offline without serial access and displays merged
 
 const DEVICE_INFO='SmartUI=0.08 core=1.17.1 build=12345678 upstream=a27e78e4 capabilities=BLE,USB board=ProMicro RA62';
 const RELEASE_DEVICE_INFO=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.15');
-test('0.08 through 0.19 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+
+test('headless service console reads PIN explicitly without changing connection or retaining secret',async()=>{
+  const info=DEVICE_INFO.replace('SmartUI=0.08','SmartUI=0.20').replace(' board=',' ble_pin=1 board=');
+  const f=await fixture({settings:true,info,clock:true});
+  try{const p=f.page;await connect(p);await tab(p,'connection');
+    assert.equal(await p.locator('#node-overview').getAttribute('data-headless'),'true');
+    assert.equal(await p.locator('#node-pin-show').isEnabled(),true);
+    const before=await p.evaluate(()=>__serialMock.commands.length);assert.equal(await p.evaluate(()=>__serialMock.commands.includes('get pin')),false);
+    await p.locator('#node-pin-show').click();await p.waitForFunction(()=>document.getElementById('node-pin-value').textContent==='654 321');
+    assert.deepEqual(await p.evaluate(n=>__serialMock.commands.slice(n),before),['get pin']);
+    assert.doesNotMatch(await p.locator('#events').textContent(),/654321|654 321/);
+    await tab(p,'device');assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');
+    await tab(p,'connection');await p.locator('#node-pin-show').click();await p.waitForFunction(()=>document.getElementById('node-pin-value').textContent==='654 321');
+    await p.clock.fastForward(30001);assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');
+    assert.equal(await p.evaluate(()=>__serialMock.mode),'BLE');
+  }finally{await f.close();}
+});
+test('0.08 through 0.20 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
@@ -675,7 +693,8 @@ test('0.08 through 0.19 retain verified melody names; unknown firmware or change
     {version:'0.17',maximum:30,named:true},
     {version:'0.18',maximum:30,named:true},
     {version:'0.19',maximum:30,named:true},
-    {version:'0.20',maximum:30,named:false},
+    {version:'0.20',maximum:30,named:true},
+    {version:'0.21',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},

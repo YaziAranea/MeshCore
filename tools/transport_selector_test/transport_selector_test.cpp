@@ -10,7 +10,7 @@
 
 #include "helpers/ArduinoSerialInterface.h"
 #include "helpers/MultiSerialInterface.h"
-#include "helpers/esp32/SerialWifiInterface.h"
+#include "helpers/wifi/SerialWifiInterface.h"
 
 std::unordered_map<int, std::weak_ptr<MockWiFiClientState>>
     g_mock_wifi_clients;

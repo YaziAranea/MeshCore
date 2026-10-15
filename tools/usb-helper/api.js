@@ -16,6 +16,7 @@
     MESHCORE_UNSUPPORTED:'Нода не сообщает meshcore=1 в ui hello. Эти команды оригинального MeshCore недоступны; используйте поддержанные ui-команды.',
     CONSOLE_UNSUPPORTED:'Нода не сообщает console=1 в ui hello. Для коротких команд и справки нужна SmartUI 0.15; прежние ui-команды остаются доступны.',
     CONTROL_UNSUPPORTED:'Нода не сообщает control=1 в ui hello. Эта короткая команда недоступна в текущей прошивке.',
+    PIN_UNSUPPORTED:'Эта прошивка не поддерживает безопасное чтение BLE PIN. Нужна SmartUI 0.20 или новее с ble_pin=1.',
     HELP_UNAVAILABLE:'Справка в прошивке удалена. Используйте документацию клиента и schema KEY.',
     DENIED:'Нода разрешает только чтение. Изменение не выполнено.',
     FAILED:'Команда отклонена. Изменение не подтверждено.',
@@ -47,6 +48,7 @@
   }
   const fail=code=>new CliError(code);
   const legacyReads=['board','ver','get name','get radio'];
+  const pinReads=['get pin','get ble.pin'];
   const meshcoreReads=['get freq','get tx','get af','get dutycycle','get rxdelay','get multi.acks',
     'get path.hash.mode','get radio.rxgain','get tz.offset','get wifi.status','get wifi.ip'];
   const meshcoreSet=/^set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|(?:af|dutycycle|rxdelay|tz\.offset) [-+]?(?:\d+(?:\.\d*)?|\.\d+)|radio\.rxgain (?:on|off)|radio [-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?(?:\d+(?:\.\d*)?|\.\d+),[-+]?\d+,[-+]?\d+)$/u;
@@ -76,7 +78,7 @@
     }else if(command.startsWith('set name ')){
       if(!meshcoreSet.test(command))throw fail('INPUT');
     }else if(/[^\x20-\x7e]/.test(command)||
-      !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||meshcoreSet.test(command)||isFriendly(command)))throw fail('INPUT');
+      !(command.startsWith('ui ')||legacyReads.includes(command)||meshcoreReads.includes(command)||pinReads.includes(command)||meshcoreSet.test(command)||isFriendly(command)))throw fail('INPUT');
     return command;
   }
   // The interactive helper is intentionally narrower than the SDK: no PIN,
@@ -235,6 +237,7 @@
       if(!this.state.connected||!this.state.hello)throw fail('CLOSED');
       if(this.state.uncertain)throw fail('UNCERTAIN');
       validateCommand(command);
+      if(pinReads.includes(command)&&this.state.hello.ble_pin!=='1')throw fail('PIN_UNSUPPORTED');
       if(needsControl(command)&&this.state.hello.control!=='1')throw fail('CONTROL_UNSUPPORTED');
       if(/^help(?: |$)/.test(command)&&this.state.hello.control==='1')throw fail('HELP_UNAVAILABLE');
       if(isFriendly(command)&&this.state.hello.console!=='1')throw fail('CONSOLE_UNSUPPORTED');

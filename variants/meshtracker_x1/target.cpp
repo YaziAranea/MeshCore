@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "target.h"
 #include <helpers/sensors/MicroNMEALocationProvider.h>
+#include <helpers/sensors/AirohaSleep.h>
 
 MeshTrackerX1Board board;
 
@@ -9,7 +10,7 @@ RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BU
 WRAPPER_CLASS radio_driver(radio, board);
 
 VolatileRTCClock rtc_clock;
-MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
+MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock, -1, -1);
 MeshTrackerX1SensorManager sensors = MeshTrackerX1SensorManager(nmea);
 
 #ifdef DISPLAY_CLASS
@@ -26,71 +27,41 @@ mesh::LocalIdentity radio_new_identity() {
 }
 
 void MeshTrackerX1SensorManager::start_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = true;       // gps_active is unchanged (true for GPS sleep, false for GPS off)
-    _nmea->syncTime();     // Clear GPS data and force sync time
-    _nmea->setNextSleep(); // Next time to off
-  } else {
-    gps_active = true;
-    gps_wake = true;
-  }
-
-  // this init sequence comes from seeed examples and deals with all gps pins
-  pinMode(GPS_EN, OUTPUT);
+  // Board owns the Airoha power/reset pins; provider owns logical freshness.
+  if (!gps_active || gps_wake) return;
+  gps_wake = true;
+  _nmea->begin();
+  _nmea->syncTime();
+  _nmea->setNextSleep();
   digitalWrite(GPS_EN, HIGH);
   delay(10);
-  pinMode(GPS_VRTC_EN, OUTPUT);
-  digitalWrite(GPS_VRTC_EN, HIGH);
-  delay(10);
-
-  pinMode(GPS_RESET, OUTPUT);
-  digitalWrite(GPS_RESET, HIGH);
-  delay(10);
-  digitalWrite(GPS_RESET, LOW);
-
-  pinMode(GPS_SLEEP_INT, OUTPUT);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
-  pinMode(GPS_RTC_INT, OUTPUT);
+  digitalWrite(GPS_RTC_INT, HIGH);
+  delay(5);
   digitalWrite(GPS_RTC_INT, LOW);
 }
 
 void MeshTrackerX1SensorManager::sleep_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
-    _nmea->stopTimeSync(); // Stop time sync
-    _nmea->setNextWake();  // Next time to on
-  } else {
-    gps_active = false;
-    gps_wake = false; // When GPS is off, wake is false to be sure
-  }
-
-  digitalWrite(GPS_VRTC_EN, HIGH);   // keep RTC alive for faster fix on wake
-  digitalWrite(GPS_EN, LOW);
-  digitalWrite(GPS_RESET, LOW);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
+  gps_wake = false;
+  digitalWrite(GPS_VRTC_EN, HIGH);   // retain RTC for a warm fix
   digitalWrite(GPS_RTC_INT, LOW);
+  airohaEnterSleep(_nmea);
+  _nmea->stop();
+  _nmea->stopTimeSync();
+  _nmea->setNextWake();
+  digitalWrite(GPS_EN, LOW);
 }
 
 void MeshTrackerX1SensorManager::stop_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
-    _nmea->stopTimeSync(); // Stop time sync
-    _nmea->setNextWake();  // Next time to on
-  } else {
-    gps_active = false;
-    gps_wake = false; // When GPS is off, wake is false to be sure
-  }
-
-  digitalWrite(GPS_VRTC_EN, LOW);
-  digitalWrite(GPS_EN, LOW);
-  digitalWrite(GPS_RESET, LOW);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
-  digitalWrite(GPS_RTC_INT, LOW);
+  gps_active = false;
+  sleep_gps();
 }
 
 bool MeshTrackerX1SensorManager::begin() {
   // init GPS
   Serial1.begin(GPS_BAUD_RATE);
+  digitalWrite(GPS_RESET, HIGH);
+  delay(10);
+  digitalWrite(GPS_RESET, LOW);
 
   // init SPA06-003 barometer
   baro_ok = spa06.begin(SPA06_003_DEFAULT_ADDR, &Wire) || spa06.begin(0x76, &Wire);
@@ -119,7 +90,8 @@ bool MeshTrackerX1SensorManager::querySensors(uint8_t requester_permissions, Cay
 void MeshTrackerX1SensorManager::loop() {
   static long next_gps_update = 0;
 
-  // PowerSaving
+  // User intent remains separate from a temporary PowerSaving sleep.
+  if (gps_active && !gps_wake && !_nmea->isPowerSavingEnabled()) start_gps();
   if (_nmea->isPowerSavingEnabled() && gps_active) {
     // Handle change in PowerSaving mode
     _nmea->updatePowerSavingSettings(gps_wake);
@@ -181,8 +153,7 @@ const char* MeshTrackerX1SensorManager::getSettingValue(int i) const {
 bool MeshTrackerX1SensorManager::setSettingValue(const char* name, const char* value) {
   if (strcmp(name, "gps") == 0) {
     if (strcmp(value, "0") == 0) {
-      gps_active = false; // Disabled by CLI or App
-      sleep_gps(); // sleep for faster fix !
+      stop_gps();
     } else {
       gps_active = true; // Enabled by CLI or App
       start_gps();

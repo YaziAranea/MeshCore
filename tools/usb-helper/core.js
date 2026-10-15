@@ -27,6 +27,8 @@
   });
   const MESSAGES = Object.freeze({
     BUSY: 'Дождитесь завершения текущей операции.',
+    PIN_UNSUPPORTED: 'Эта прошивка не сообщает ble_pin=1. Для чтения PIN нужна SmartUI 0.20 или новее.',
+    PIN_UNAVAILABLE: 'Нода не сообщает действующий BLE PIN. Код не показан; настройки не менялись.',
     DISCONNECTED: 'USB-соединение закрыто.',
     NOT_CONNECTED: 'Сначала подключите устройство.',
     NOT_VERIFIED: 'Сервисная консоль не подтверждена. Переподключитесь; на устройстве выберите BLE или WiFi.',
@@ -147,9 +149,9 @@
     // Accept only the advertised, bounded ASCII record, never arbitrary serial
     // text. Board names may contain spaces but no markup/control characters.
     if (typeof line !== 'string' || line.length > 383) return null;
-    const match = /^SmartUI=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) core=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) build=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) upstream=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) capabilities=(BLE(?:,USB)?(?:,WiFi)?|USB(?:,WiFi)?|WiFi) board=([A-Za-z0-9][A-Za-z0-9 ._()+:/-]{0,95})$/.exec(line);
-    if (!match || match[6].trim() !== match[6]) return null;
-    return { firmware: match[1], core: match[2], build: match[3], upstream: match[4], capabilities: match[5].split(','), board: match[6] };
+    const match = /^SmartUI=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) core=([A-Za-z0-9][A-Za-z0-9._+-]{0,31}) build=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) upstream=([A-Za-z0-9][A-Za-z0-9._+-]{0,39}) capabilities=(BLE(?:,USB)?(?:,WiFi)?|USB(?:,WiFi)?|WiFi)(?: ble_pin=([01]))? board=([A-Za-z0-9][A-Za-z0-9 ._()+:/-]{0,95})$/.exec(line);
+    if (!match || match[7].trim() !== match[7]) return null;
+    return { firmware: match[1], core: match[2], build: match[3], upstream: match[4], capabilities: match[5].split(','), ...(match[6]===undefined?{}:{ble_pin:match[6]==='1'}), board: match[7] };
   }
 
   const SETTING_CAPS = Object.freeze({sound_quiet:'sound',volume:'sound',melody:'sound',board_led:'board_led',unread_led:'unread_led',vibration:'vibration',gps:'gps',battery_protection:'battery_protection',muted:null});
@@ -1033,6 +1035,23 @@
         if(error){if(error==='READ_ONLY'){session.readOnly=true;if(this._state.status)this._setStatus({...this._state.status,readOnly:true});}return rejected(error);}
         const value=parseNetworkSetting(line,kind);if(value)return success(value);
         if(line.startsWith('OK settings'))return rejected('PROTOCOL');
+      });
+    }
+    async readBLEPin() {
+      if(this._state.info?.ble_pin!==true)throw failure('PIN_UNSUPPORTED');
+      return this._operate(async session=>{
+        try {
+          return await this._exchange(session,'get pin',line=>{
+            const match=/^BLEPin v=1 pin=([1-9][0-9]{5})$/.exec(line);
+            if(match)return success(match[1]);
+            if(line==='ERR ble_pin unsupported')return rejected('PIN_UNSUPPORTED');
+            if(line==='ERR ble_pin unavailable')return rejected('PIN_UNAVAILABLE');
+            if(line.startsWith('BLEPin ')||line.startsWith('ERR ble_pin '))return rejected('PROTOCOL');
+          });
+        }catch(error){
+          if(['TIMEOUT','PROTOCOL','SERIAL_ERROR','DISCONNECTED'].includes(error.code)&&this._current(session))this._stateChanged({verified:false});
+          throw error;
+        }
       });
     }
     async loadNetworkSetting(kind) {

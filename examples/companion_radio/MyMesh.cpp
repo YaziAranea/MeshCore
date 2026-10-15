@@ -507,10 +507,10 @@ float MyMesh::getAirtimeBudgetFactor() const {
 }
 
 int MyMesh::getInterferenceThreshold() const {
-  return 0; // disabled for now, until currentRSSI() problem is resolved
+  return _prefs.interference_threshold;
 }
 bool MyMesh::getCADEnabled() const {
-  return false; // hardware CAD before TX (disabled by default, until configurable)
+  return _prefs.cad_enabled != 0;
 }
 
 static bool validateCompanionRadioParams(float freq, float bw, uint8_t sf, uint8_t cr) {
@@ -571,11 +571,11 @@ int MyMesh::calcRxDelay(float score, uint32_t air_time) const {
 }
 
 uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * 0.5f);
+  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
 }
 uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * 0.2f);
+  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 5*t + 1);
 }
 
@@ -698,6 +698,7 @@ void MyMesh::onDiscoveredContact(ContactInfo &contact, bool is_new, uint8_t path
     p->path_len = mesh::Packet::copyPath(p->path, path, path_len);
   }
 
+  if (_listener) _listener->onDiscoveredContact(contact, is_new, path_len, path);
   if (!is_new) scheduleContactsSave(); // only contacts already in contacts[] are dirty
 }
 
@@ -888,6 +889,11 @@ void MyMesh::onContactPathUpdated(const ContactInfo &contact) {
 }
 
 ContactInfo*  MyMesh::processAck(const uint8_t *data) {
+  if (_listener) {
+    uint32_t ack_crc;
+    memcpy(&ack_crc, data, sizeof(ack_crc));
+    _listener->onACKRecv(ack_crc);
+  }
   // see if matches any in a table
   for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
     if (expected_ack_table[i].ack != 0 &&
@@ -975,6 +981,10 @@ void MyMesh::queueMessage(const ContactInfo &from, uint8_t txt_type, mesh::Packe
     }
   }
 #endif
+  if (_listener) {
+    _listener->onMessageRecv(pkt, from, txt_type, sender_timestamp, text);
+    _listener->onQueueSizeChanged(offline_queue_len);
+  }
 }
 
 bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
@@ -1116,6 +1126,12 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
                 ui_generation, NULL, 0);
   }
 #endif
+  if (_listener) {
+    ChannelDetails details = {};
+    if (!getChannel(channel_idx, details)) strcpy(details.name, "Unknown");
+    _listener->onChannelMessageRecv(pkt, details, text);
+    _listener->onQueueSizeChanged(offline_queue_len);
+  }
 }
 
 void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint16_t data_type,
@@ -1151,11 +1167,14 @@ void MyMesh::onChannelDataRecv(const mesh::GroupChannel &channel, mesh::Packet *
     frame[0] = PUSH_CODE_MSG_WAITING; // send push 'tickle'
     _serial->writeFrame(frame, 1);
   }
+  if (_listener) _listener->onChannelDataRecv(pkt, channel, data_type, data, data_len);
 }
 
 uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_timestamp, const uint8_t *data,
                                  uint8_t len, uint8_t *reply) {
+  if (len == 0) return 0;
   if (data[0] == REQ_TYPE_GET_TELEMETRY_DATA) {
+    if (len < 2) return 0;
     uint8_t permissions = 0;
     uint8_t cp = contact.flags >> 1; // LSB used as 'favourite' bit (so only use upper bits)
 
@@ -1198,20 +1217,26 @@ uint8_t MyMesh::onContactRequest(const ContactInfo &contact, uint32_t sender_tim
       memcpy(&reply[4], telemetry.getBuffer(), tlen);
       return 4 + tlen;
     }
+  } else if (_listener) {
+    return _listener->onUnhandledRequest(contact, sender_timestamp, data, len, reply);
   }
-  return 0; // unknown
+  return 0;
 }
 
 void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, uint8_t len) {
+  if (len < 4 || len > MAX_PACKET_PAYLOAD) return;
   uint32_t tag;
   memcpy(&tag, data, 4);
 
   if (pending_login && memcmp(&pending_login, contact.id.pub_key, 4) == 0) { // check for login response
+    // Keep the pending request intact when a truncated response cannot be
+    // interpreted. The modern response includes byte 12 (firmware version).
+    if (len < 5 || (data[4] == RESP_SERVER_LOGIN_OK && len < 13)) return;
     // yes, is response to pending sendLogin()
     pending_login = 0;
 
     int i = 0;
-    if (memcmp(&data[4], "OK", 2) == 0) { // legacy Repeater login OK response
+    if (len >= 6 && memcmp(&data[4], "OK", 2) == 0) { // legacy Repeater login OK response
       out_frame[i++] = PUSH_CODE_LOGIN_SUCCESS;
       out_frame[i++] = 0; // legacy: is_admin = false
       memcpy(&out_frame[i], contact.id.pub_key, 6);
@@ -1273,6 +1298,15 @@ void MyMesh::onContactResponse(const ContactInfo &contact, const uint8_t *data, 
     memcpy(&out_frame[i], &data[4], len - 4);
     i += (len - 4);
     _serial->writeFrame(out_frame, i);
+  } else {
+    const bool handled = _listener && len > 4 &&
+        _listener->onUnhandledResponse(contact, tag, data + 4, len - 4);
+    if (!handled && static_cast<size_t>(len) + 2 <= MAX_FRAME_SIZE) {
+      out_frame[0] = PUSH_CODE_BINARY_RESPONSE;
+      out_frame[1] = 0;
+      memcpy(out_frame + 2, data, len);
+      _serial->writeFrame(out_frame, static_cast<size_t>(len) + 2);
+    }
   }
 }
 
@@ -1325,6 +1359,7 @@ void MyMesh::onControlDataRecv(mesh::Packet *packet) {
   } else {
     MESH_DEBUG_PRINTLN("onControlDataRecv(), data received while app offline");
   }
+  if (_listener) _listener->onControlDataRecv(packet);
 }
 
 void MyMesh::onRawDataRecv(mesh::Packet *packet) {
@@ -1345,6 +1380,7 @@ void MyMesh::onRawDataRecv(mesh::Packet *packet) {
   } else {
     MESH_DEBUG_PRINTLN("onRawDataRecv(), data received while app offline");
   }
+  if (_listener) _listener->onRawDataRecv(packet);
 }
 
 void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code, uint8_t flags,
@@ -1375,6 +1411,7 @@ void MyMesh::onTraceRecv(mesh::Packet *packet, uint32_t tag, uint32_t auth_code,
   } else {
     MESH_DEBUG_PRINTLN("onTraceRecv(), data received while app offline");
   }
+  if (_listener) _listener->onTraceRecv(packet, tag, auth_code, flags, path_snrs, path_hashes, path_len);
 }
 
 uint32_t MyMesh::calcFloodTimeoutMillisFor(uint32_t pkt_airtime_millis) const {
@@ -1394,6 +1431,7 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _ui(ui), _iter(0) {
   _iter_started = false;
   _cli_rescue = false;
+  cli_command[0] = 0;
   offline_queue_len = 0;
   app_target_ver = 0;
   clearPendingReqs();
@@ -1423,6 +1461,8 @@ MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMe
 
   // defaults
   _prefs.airtime_factor = 1.0;
+  _prefs.tx_delay_factor = 0.5f;
+  _prefs.direct_tx_delay_factor = 0.2f;
   strcpy(_prefs.node_name, "NONAME");
   _prefs.freq = LORA_FREQ;
   _prefs.sf = LORA_SF;
@@ -1543,6 +1583,12 @@ bool MyMesh::begin(bool has_display) {
 
   // sanitise bad pref values
   _prefs.rx_delay_base = constrain(_prefs.rx_delay_base, 0, 20.0f);
+  // The native nRF52 build uses -Ofast; inspect IEEE bits, not isfinite().
+  if (!finiteLoRaFloat(_prefs.tx_delay_factor)) _prefs.tx_delay_factor = 0.5f;
+  if (!finiteLoRaFloat(_prefs.direct_tx_delay_factor)) _prefs.direct_tx_delay_factor = 0.2f;
+  _prefs.tx_delay_factor = constrain(_prefs.tx_delay_factor, 0, 2.0f);
+  _prefs.direct_tx_delay_factor = constrain(_prefs.direct_tx_delay_factor, 0, 2.0f);
+  _prefs.cad_enabled = constrain(_prefs.cad_enabled, 0, 1);
   _prefs.airtime_factor = constrain(_prefs.airtime_factor, 0, 9.0f);
   _prefs.freq = constrain(_prefs.freq, 150.0f, 2500.0f);
   _prefs.bw = constrain(_prefs.bw, 7.8f, 500.0f);
@@ -2014,6 +2060,14 @@ bool MyMesh::executeLocalCli(void* context, const char* command, char* reply, si
     written = snprintf(reply, capacity, "SmartUI %s; firmware=%s", SMARTUI_VERSION, FIRMWARE_VERSION);
   } else if (strcmp(command, "get name") == 0) {
     written = snprintf(reply, capacity, "> %.31s", self._prefs.node_name);
+  } else if (strcmp(command, "get pin") == 0 || strcmp(command, "get ble.pin") == 0) {
+#if defined(BLE_PIN_CODE) && !defined(SMARTUI_DISABLE_BLE)
+    const uint32_t pin = self.getBLEPin();
+    written = pin ? snprintf(reply, capacity, "> %06lu", static_cast<unsigned long>(pin))
+                  : snprintf(reply, capacity, "> 0");
+#else
+    written = snprintf(reply, capacity, "Error: unsupported");
+#endif
   } else if (strcmp(command, "get radio") == 0) {
     written = snprintf(reply, capacity, "> %.3f,%.3f,%u,%u",
         static_cast<double>(self._prefs.freq), static_cast<double>(self._prefs.bw),
@@ -2267,9 +2321,9 @@ void MyMesh::handleStandardCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
     } else if (data_type == DATA_TYPE_RESERVED) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (payload_len > MAX_CHANNEL_DATA_LENGTH) {
+    } else if (payload_len > MAX_GROUP_DATA_LENGTH) {
       MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA payload too long: %u > %u",
-                         (unsigned)payload_len, (unsigned)MAX_CHANNEL_DATA_LENGTH);
+                         (unsigned)payload_len, (unsigned)MAX_GROUP_DATA_LENGTH);
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else if (sendGroupData(channel.channel, path, path_len, data_type, payload,
                              static_cast<int>(payload_len))) {
@@ -2545,6 +2599,7 @@ void MyMesh::handleStandardCmdFrame(size_t len) {
           (void)ui_generation;
           (void)ui_flags;
 #endif
+          if (_listener) _listener->onQueueSizeChanged(offline_queue_len);
         });
   } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS && len >= 11) {
     int i = 1;

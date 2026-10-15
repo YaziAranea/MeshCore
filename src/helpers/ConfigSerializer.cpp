@@ -1,4 +1,5 @@
 #include "ConfigSerializer.h"
+#include <stdlib.h>   // atoi/atol/atof (Arduino.h pulls this in on-device, native builds do not)
 
 bool ConfigSerializer::saveSerial(Stream& s) {
   Context context(&s, OP::WRITE);
@@ -41,6 +42,7 @@ static bool is_value_char(char c) {
 #define EXPECT_COMMA_OR_CLOSE  5
 #define EXPECT_COMMA_OR_KEY    6
 #define EXPECT_COMMA_OR_KEY_OR_CLOSE  7
+#define EXPECT_KEY_OR_CLOSE          8
 
 int ConfigSerializer::Context::readNext() {
   char c;
@@ -57,14 +59,21 @@ int ConfigSerializer::Context::readNext() {
 
   switch (rd_mode) {
     case EXPECT_OPEN_BRACE:
-      if (c == '{') { rd_mode = EXPECT_KEY; return TOK_START_OBJ; }
+      if (c == '{') { rd_mode = EXPECT_KEY_OR_CLOSE; return TOK_START_OBJ; }
       if (is_whitespace(c)) return TOK_WHITESPACE;
       return TOK_ERROR;
 
     case EXPECT_COMMA_OR_KEY_OR_CLOSE:
       if (c == '}') { rd_mode = EXPECT_COMMA_OR_KEY_OR_CLOSE; return TOK_END_OBJ; }
+      if (is_whitespace(c)) return TOK_WHITESPACE;
+      if (c == ',') { rd_mode = EXPECT_KEY; return TOK_WHITESPACE; }
+      return TOK_ERROR;
     case EXPECT_COMMA_OR_KEY:
       if (c == ',') { rd_mode = EXPECT_KEY; return TOK_WHITESPACE; }
+      return TOK_ERROR;
+    case EXPECT_KEY_OR_CLOSE:
+      if (rd_len == 0 && c == '}') { rd_mode = EXPECT_COMMA_OR_KEY_OR_CLOSE; return TOK_END_OBJ; }
+      // Empty objects are valid only immediately after '{', never after ','.
     case EXPECT_KEY:
       if (rd_len > 0 && c == ':') { rd_buf[rd_len] = 0; rd_len = 0; rd_mode = EXPECT_VAL_OR_OBJ; return TOK_KEY; }
       if (rd_len == 0 && is_whitespace(c)) return TOK_WHITESPACE;
@@ -74,7 +83,7 @@ int ConfigSerializer::Context::readNext() {
     case EXPECT_VAL_OR_OBJ:
       if (rd_len == 0 && is_whitespace(c)) return TOK_WHITESPACE;
       if (rd_len == 0 && c == '"') { rd_mode = EXPECT_STRING_VAL; return TOK_WHITESPACE; }
-      if (rd_len == 0 && c == '{') { rd_mode = EXPECT_KEY; return TOK_START_OBJ; }
+      if (rd_len == 0 && c == '{') { rd_mode = EXPECT_KEY_OR_CLOSE; return TOK_START_OBJ; }
       if (is_value_char(c) && rd_len < CONFIG_MAX_TOKEN_LEN-1) { rd_buf[rd_len++] = c; return TOK_WHITESPACE; }
       if (rd_len > 0 && (c == ',' || c == '}' || is_whitespace(c))) { pending = c; rd_buf[rd_len] = 0; rd_len = 0; rd_mode = EXPECT_COMMA_OR_CLOSE; return TOK_VALUE;  }
       return TOK_ERROR;
@@ -122,7 +131,9 @@ bool ConfigSerializer::loadSerial(Stream& s) {
         break;
       }
       _depth = 1;  // re-run the structure() hierarchy again (looking for specific key, at specific depth)
+      context.setReadToken(sp, false);
       structure();
+      if (!context.success) break;
     } else if (next_tok == TOK_START_OBJ) {
       if (!root_started) {
         if (sp != 0 || root_closed) {
@@ -133,6 +144,12 @@ bool ConfigSerializer::loadSerial(Stream& s) {
       } else if (root_closed || sp == 0) {
         context.success = false;
         break;
+      }
+      if (sp > 0) {
+        context.setReadToken(sp, true);
+        _depth = 1;
+        structure();
+        if (!context.success) break;
       }
       if (sp < CONFIG_MAX_DEPTH - 1) {
         sp++;
@@ -371,7 +388,11 @@ void ConfigSerializer::def(const char* key, ConfigSerializer& sub_obj) {
     sub_obj.structure();   // recurse into sub object
     _context->putText("}");
   } else {
-    if (_context->keyMatch(_depth, key)) {
+    if (_context->pathMatch(_depth, key)) {
+      if (_context->tokenDepth() == _depth) {
+        if (!_context->objectToken()) _context->success = false;
+        return;
+      }
       sub_obj._context = _context;  // inherit the Context
       sub_obj._depth = _depth + 1;
       sub_obj.structure();   // recurse into sub object

@@ -24,6 +24,8 @@ def main():
             prefix = [compiler] if compiler else ["wsl", "--exec", "g++"]
             subprocess.run(prefix + flags + [path(p) for p in sources] + ["-o", path(output)], check=True)
             subprocess.run([str(output)] if compiler else ["wsl", "--exec", path(output)], check=True)
+    from test_common_radio_prefs_commands import main as test_common_radio_prefs
+    test_common_radio_prefs()
 
 if __name__ == "__main__":
     main()

@@ -133,6 +133,14 @@
     #events li,#api-log li { padding:8px 0; border-top:1px solid var(--edge); overflow-wrap:anywhere; }
     .event-time { margin-right:10px; color:var(--muted); font-variant-numeric:tabular-nums; }
     #firmware-result { white-space:pre-wrap; overflow-wrap:anywhere; }
+    .node-overview { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(230px,1fr); gap:28px; border-color:#49628a; background:linear-gradient(125deg,#1b293d,#181e29 62%); }
+    .node-name { color:var(--blue); font-size:18px; overflow-wrap:anywhere; }
+    .node-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin:24px 0; }
+    .node-facts dt { color:var(--muted); font-size:12px; }
+    .node-facts dd { margin:4px 0 0; font-size:14px; overflow-wrap:anywhere; }
+    .node-pin-panel { background:var(--surface); border:1px solid var(--edge); border-radius:14px; padding:22px; align-self:start; }
+    .node-pin-value { display:block; margin:20px 0; color:var(--text); font:600 32px/1.2 ui-monospace,Consolas,monospace; letter-spacing:3px; white-space:nowrap; }
+    @media(max-width:1000px) { .node-overview { grid-template-columns:1fr; } .node-pin-panel { max-width:440px; } }
     footer { display:flex; flex-wrap:wrap; gap:8px 24px; padding:24px 0; font-size:12px; }
     code { font:13px ui-monospace,Consolas,monospace; color:var(--blue); }
     dialog { width:calc(100% - 36px); max-width:520px; padding:28px; background:var(--panel); color:var(--text); border:1px solid #526a8d; border-radius:20px; box-shadow:0 20px 80px #0008; }
@@ -148,7 +156,7 @@
 <main>
   <header>
     <div><p class="eyebrow">MESHCORE · SMART UI</p><h1>Ваша нода. Ваши настройки.</h1><p class="subtitle">Подключите ноду и выберите нужный раздел.<br>Изменения сохраняются только по вашей команде.</p></div>
-    <div><span class="tag">Помощник 2.6 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
+    <div><span class="tag">Помощник 2.7 · MeshCore</span><p class="local-badge">Без аккаунта и облака.</p></div>
   </header>
   <aside class="app-rail">
     <p class="rail-brand"><svg class="mesh-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 6 6 25h20L16 6Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="6" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="6" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/><circle cx="26" cy="25" r="4" fill="#111722" stroke="currentColor" stroke-width="2"/></svg>SmartUI</p>

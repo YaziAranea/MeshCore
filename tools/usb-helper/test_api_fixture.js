@@ -48,7 +48,8 @@ function installApiMock(options={}) {
         }
       }
       let text;
-      if(cmd==='ui hello')text='OK ui hello version=1 firmware='+(options.firmware||'0.14')+' max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'')+(options.console!==undefined?' console='+options.console:'')+(options.control!==undefined?' control='+options.control:'');
+      if(cmd==='ui hello')text='OK ui hello version=1 firmware='+(options.firmware||'0.14')+' max_command=156 max_reply=156 write='+(options.readonly?'0':'1')+' sync=0 events=0'+(options.meshcore!==undefined?' meshcore='+options.meshcore:'')+(options.console!==undefined?' console='+options.console:'')+(options.control!==undefined?' control='+options.control:'')+(options.blePin!==undefined?' ble_pin='+options.blePin:'');
+      else if(['get pin','get ble.pin'].includes(cmd))text=options.pinReply??(options.blePin===1?'> 654321':'Error: unsupported');
       else if(options.console===1&&options.control!==1&&/^help(?: |$)/.test(cmd))text='> get volume; set volume 1..10; get tx; set tx DBM; help sound 2';
       else if(options.console===1&&cmd==='melodies')text='> current='+this.settings.melody+' max='+this.caps.melody_max+(options.control===1?'':'; melody N');
       else if(options.meshcore===1&&cmd.startsWith('get ')&&Object.hasOwn(this.meshcore,cmd.slice(4)))text='> '+this.meshcore[cmd.slice(4)];

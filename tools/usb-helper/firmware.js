@@ -10,6 +10,7 @@
     {id:'t096', label:'T096 FEM ON', environment:'Heltec_t096_companion_radio_ble_femon', reported:'Heltec T096', marker:'T096', format:'uf2'},
     {id:'t114', label:'T114', environment:'Heltec_t114_companion_radio_ble', reported:'Heltec T114', marker:'T114', format:'uf2'},
     {id:'promicro', label:'ProMicro RA62', environment:'ProMicro_ra62_companion_radio_ble', reported:'ProMicro DIY', marker:'ProMicro', format:'uf2'},
+    {id:'promicro-headless', label:'ProMicro RA62 без экрана', manifestBoard:'ProMicro RA62', environment:'SmartUI_ProMicro_headless', reported:'ProMicro DIY', marker:'ProMicro Headless', format:'uf2', firstRelease:'0.20', headless:true},
     {id:'v3', label:'Heltec V3 OLED', environment:'Heltec_v3_companion_radio_ble_smartui', reported:'Heltec V3', marker:'V3', format:'bin'},
     {id:'v43', label:'Heltec V4.3 OLED FEM ON', environment:'heltec_v4_3_companion_radio_ble_femon_smartui', reported:'Heltec V4.3 OLED', marker:'V4.3', format:'bin'},
     {id:'v4r8', label:'Heltec V4 R8 OLED FEM ON', environment:'heltec_v4_r8_companion_radio_ble_femon_smartui', reported:'Heltec V4 R8 OLED', marker:'V4 R8', format:'bin', firstRelease:'0.13'},
@@ -17,7 +18,11 @@
   ].map(Object.freeze));
   function fail(message) { const error = new Error(message); error.safe = true; throw error; }
   function requireThat(value, message) { if (!value) fail(message); }
-  function reportedProfile(info) { return info && PROFILES.find(profile => profile.reported === info.board) || null; }
+  function reportedProfile(info) {
+    const matches=info?PROFILES.filter(profile=>profile.reported===info.board):[];
+    // A shared manufacturer name cannot establish screen vs headless firmware.
+    return matches.length===1?matches[0]:null;
+  }
   function supportsRelease(profile, version) {
     if (!profile.firstRelease) return true;
     const parts = /^(\d+)\.(\d+)(?:\.\d+)?(?:[-+][A-Za-z0-9._+-]+)?$/.exec(version);
@@ -75,12 +80,15 @@
     requireThat(records.length === 1, 'Файл отсутствует в манифесте либо указан несколько раз.');
     const record = records[0];
     const profile = PROFILES.find(item => item.environment === record.environment);
-    requireThat(profile && record.board === profile.label && record.source_commit === manifest.commit && Number.isSafeInteger(record.bytes) && record.bytes === bytes.length && typeof record.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(record.sha256), 'Плата, исходный commit или размер файла не соответствуют манифесту.');
+    requireThat(profile && record.board === (profile.manifestBoard||profile.label) && record.source_commit === manifest.commit && Number.isSafeInteger(record.bytes) && record.bytes === bytes.length && typeof record.sha256 === 'string' && /^[a-fA-F0-9]{64}$/.test(record.sha256), 'Плата, исходный commit или размер файла не соответствуют манифесту.');
+    requireThat(profile.headless?record.headless===true:record.headless===undefined||record.headless===false, 'Вариант с экраном или без экрана не соответствует манифесту.');
     requireThat(supportsRelease(profile, manifest.version), 'Эта плата не поддерживается в указанной версии SmartUI.');
     const reported = reportedProfile(info);
+    const reportedCandidates=info?PROFILES.filter(item=>item.reported===info.board):[];
     const selected = PROFILES.find(item => item.id === target);
     requireThat(reported || selected, 'Плата ноды неизвестна. Укажите точную модель вручную.');
     requireThat((!reported || reported.id === profile.id) && (!selected || selected.id === profile.id), 'Файл предназначен для другой платы.');
+    requireThat(!reportedCandidates.length||reportedCandidates.some(item=>item.id===profile.id), 'Файл предназначен для другой платы.');
     requireThat(name.endsWith('.' + profile.format), 'Формат BIN/UF2 не соответствует плате.');
     const sha256 = await digest(bytes,cryptoProvider);
     requireThat(sha256 === record.sha256.toLowerCase(), 'SHA-256 не совпал с манифестом: файл повреждён или выбран другой релиз.');

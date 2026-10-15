@@ -20,11 +20,12 @@ ROOT = Path(__file__).resolve().parents[1]
 UI_PATH = ROOT / "examples/companion_radio/ui-new/UITask.cpp"
 
 
-def resolved_profiles():
+def resolved_profiles(include_headless=False):
     """Resolve the release environments, including inherited flags/unflags."""
     config = configparser.ConfigParser(interpolation=None, strict=False,
                                        inline_comment_prefixes=(";",))
-    config.read([ROOT / "platformio.ini", *sorted((ROOT / "variants").glob("*/platformio.ini"))],
+    config.read([ROOT / "platformio.ini", ROOT / "platformio.smartui-headless.ini",
+                 *sorted((ROOT / "variants").glob("*/platformio.ini"))],
                 encoding="utf-8")
 
     def resolve(section, option, stack=()):
@@ -52,6 +53,8 @@ def resolved_profiles():
 
     profiles = []
     for env in (*NRF_ENVS, *ESP_ENVS):
+        if not include_headless and env == "SmartUI_ProMicro_headless":
+            continue
         section = "env:" + env
         removed = set(operations(resolve(section, "build_unflags")))
         flags = {}
@@ -65,7 +68,8 @@ def resolved_profiles():
         for name in ("UI_BLE_PIN_PAGE", "BLE_PIN_PERSIST_RANDOM", "SMARTUI_CONNECTION_SELECTOR"):
             assert flags.get(name) == "1", (env, name, flags.get(name))
         profiles.append((env, flags))
-    assert len(profiles) == 7 and len({env for env, _ in profiles}) == 7
+    expected = 8 if include_headless else 7
+    assert len(profiles) == expected and len({env for env, _ in profiles}) == expected
     return profiles
 
 
@@ -88,7 +92,7 @@ def production_defines(source, flags):
     definitions = "\n".join(f"#define {name} {value}" for name, value in flags.items()
                               if name.startswith(("UI_", "HELTEC_", "PIN_", "AUTO_", "BLE_PIN"))
                               or name in ("PROMICRO", "ST7789", "ENV_INCLUDE_GPS",
-                                          "SMARTUI_CONNECTION_SELECTOR", "LED_STATE_ON")) + "\n"
+                                          "SMARTUI_CONNECTION_SELECTOR", "SMARTUI_HEADLESS", "LED_STATE_ON")) + "\n"
     header = UI_PATH.with_suffix(".h").read_text(encoding="utf-8")
     header = header[header.index("#ifndef LED_STATE_ON"):header.index("class UITask :")]
     defaults = source[source.index("#ifndef AUTO_OFF_MILLIS"):source.index("class HomeScreen :")]

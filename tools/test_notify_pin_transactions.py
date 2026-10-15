@@ -305,7 +305,7 @@ def main():
         options = ["-std=c++17", "-O1", "-Wall", "-Wextra"]
         if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
             options += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-pie", "-no-pie"]
-        for env, flags in resolved_profiles():
+        for env, flags in resolved_profiles(include_headless=True):
             flags = dict(flags)
             for macro, variant in (("HELTEC_T096", "heltec_t096"), ("HELTEC_T114", "heltec_t114"),
                                    ("PROMICRO", "promicro")):

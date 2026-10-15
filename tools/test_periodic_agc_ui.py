@@ -185,6 +185,9 @@ def prefs_code():
     utils = (ROOT/'src/Utils.cpp').read_text(encoding='utf-8')
     hex_methods = '\n'.join(function(utils, marker) for marker in (
         'static uint8_t hexVal(', 'bool Utils::fromHex('))
+    radio = (ROOT/'src/helpers/CommonRadioPrefsKeys.cpp').read_text(encoding='utf-8')
+    radio_keys = '\n'.join(function(radio, marker) for marker in (
+        'bool CommonRadioPrefs::getByKey(', 'bool CommonRadioPrefs::setByKey('))
     return r'''
 #include <cassert>
 #include <cstdio>
@@ -194,8 +197,9 @@ def prefs_code():
 #include "examples/companion_radio/NodePrefs.h"
 #include "Utils.h"
 #include "helpers/ConfigSerializer.cpp"
+#include "helpers/DynamicConfigSerializer.cpp"
 namespace mesh {
-''' + hex_methods + '\n}\n' + streams + r'''
+''' + hex_methods + '\n}\n' + radio_keys + '\n' + streams + r'''
 int main() {
   NodePrefs saved;
   assert(saved.agc_reset_enabled==0);

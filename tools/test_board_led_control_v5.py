@@ -261,7 +261,7 @@ def main() -> None:
     # and only for the published SmartUI build.
     ble = (ROOT / "src/helpers/nrf52/SerialBLEInterface.cpp").read_text(encoding="utf-8")
     ble_begin = function(ble, "void SerialBLEInterface::begin")
-    assert "#if defined(PROMICRO) && defined(SMARTUI_RELEASE_LABEL)" in ble_begin
+    assert "#if defined(DISABLE_BLE_LED) || (defined(PROMICRO) && defined(SMARTUI_RELEASE_LABEL))" in ble_begin
     assert ble_begin.count("Bluefruit.autoConnLed(false);") == 1
     assert ble_begin.index("Bluefruit.autoConnLed(false);") < ble_begin.index("Bluefruit.begin();")
     assert "Advertising.stop" not in ble_begin and "Advertising.start" not in ble_begin

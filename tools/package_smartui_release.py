@@ -29,12 +29,12 @@ from smartui_source_guard import build_override_reason, checkout_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.19"
-TAG = "smartui-0.19"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.19_RU.md"
-ARCHIVE_NAME = "SmartUI_0.19_all-boards.zip"
+VERSION = "0.20"
+TAG = "smartui-0.20"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.20_RU.md"
+ARCHIVE_NAME = "SmartUI_0.20_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
-ASSET_COUNT = 19
+ASSET_COUNT = 20
 DISTRIBUTION = "public"
 PUBLICATION = {
     "draft": False, "prerelease": False, "make_latest": True,
@@ -44,6 +44,7 @@ NRF_ENVS = (
     "Heltec_t096_companion_radio_ble_femon",
     "Heltec_t114_companion_radio_ble",
     "ProMicro_ra62_companion_radio_ble",
+    "SmartUI_ProMicro_headless",
 )
 ESP_ENVS = (
     "Heltec_v3_companion_radio_ble_smartui",
@@ -52,7 +53,7 @@ ESP_ENVS = (
     "heltec_v4_r8_companion_radio_ble_femon_smartui",
 )
 ESP_PAIRS = (v3.PAIR, *esp32.EXPECTED)
-BOARD_NAMES = ("T096 FEM ON", "T114", "ProMicro RA62",
+BOARD_NAMES = ("T096 FEM ON", "T114", "ProMicro RA62", "ProMicro RA62",
                "Heltec V3 OLED", "Heltec V4.3 OLED FEM ON", "Wireless Paper FULL",
                "Heltec V4 R8 OLED FEM ON")
 FIRMWARE_NAMES = tuple(uf2.EXPECTED) + tuple(
@@ -125,14 +126,14 @@ def resolve_commit(explicit: str | None = None) -> str:
 
 
 def input_files(build_dir: Path, firmware_dir: Path | None = None) -> list[tuple[Path, str]]:
-    require(len(NRF_ENVS) == len(uf2.EXPECTED) == 3
+    require(len(NRF_ENVS) == len(uf2.EXPECTED) == 4
             and len(ESP_ENVS) == len(ESP_PAIRS) == 4
-            and len(BOARD_NAMES) == 7,
-            "release profile mappings must contain exactly three nRF and four ESP32 boards")
+            and len(BOARD_NAMES) == 8,
+            "release profile mappings must contain exactly four nRF and four ESP32 profiles")
     if firmware_dir is not None:
         require(firmware_dir.is_dir(), f"firmware directory missing: {firmware_dir}")
         actual = {p.name for p in firmware_dir.iterdir() if p.suffix in {".uf2", ".bin"}}
-        require(actual == set(FIRMWARE_NAMES), "firmware directory must contain exactly the eleven release images")
+        require(actual == set(FIRMWARE_NAMES), "firmware directory must contain exactly the twelve release images")
         files = [(firmware_dir / name, name) for name in FIRMWARE_NAMES]
     else:
         files = [(build_dir / env / "firmware.uf2", name)
@@ -142,8 +143,8 @@ def input_files(build_dir: Path, firmware_dir: Path | None = None) -> list[tuple
                 (build_dir / env / "firmware-merged.bin", pair.stem + "-merged.bin"),
                 (build_dir / env / "firmware.bin", pair.stem + "-update.bin"),
             ))
-    require(len(files) == 11 and {name for _, name in files} == set(FIRMWARE_NAMES),
-            "seven-board release contract must contain exactly eleven firmware images")
+    require(len(files) == 12 and {name for _, name in files} == set(FIRMWARE_NAMES),
+            "seven-board release contract must contain exactly twelve firmware images")
     for source, _ in files:
         require(source.is_file() and not source.is_symlink() and source.stat().st_size > 0,
                 f"regular nonempty build artifact missing: {source}")
@@ -155,7 +156,7 @@ def firmware_metadata(name: str, commit: str) -> dict:
         index = tuple(uf2.EXPECTED).index(name)
         return {"board": BOARD_NAMES[index], "environment": NRF_ENVS[index],
                 "source_commit": commit, "image_kind": "nrf52840-uf2-bootloader",
-                "flash_offset": None}
+                "flash_offset": None, "headless": NRF_ENVS[index] == "SmartUI_ProMicro_headless"}
     index = next(i for i, pair in enumerate(ESP_PAIRS) if name.startswith(pair.stem + "-"))
     fresh = name.endswith("-merged.bin")
     if index == 0:
@@ -190,7 +191,7 @@ def firmware_metadata(name: str, commit: str) -> dict:
             if fresh else
             "App-only update preserves existing SPIFFS identity/settings; never flash it at 0x00000."
         )
-    return {"board": BOARD_NAMES[index + 3], "environment": ESP_ENVS[index],
+    return {"board": BOARD_NAMES[index + len(NRF_ENVS)], "environment": ESP_ENVS[index],
             "source_commit": commit,
             "image_kind": "esp32-fresh-install-merged" if fresh else "esp32-application-update",
             "flash_offset": "0x00000" if fresh else "0x10000", "storage": storage}
@@ -244,8 +245,8 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
     require(notes.is_file() and not notes.is_symlink(), f"release notes missing: {notes}")
     text = notes.read_text(encoding="utf-8-sig")
     validate_release_notes(text)
-    require(len(files) == 11 and {name for _, name in files} == set(FIRMWARE_NAMES),
-            "packaging requires the exact eleven-image seven-board set")
+    require(len(files) == 12 and {name for _, name in files} == set(FIRMWARE_NAMES),
+            "packaging requires the exact twelve-image seven-board set")
     with tempfile.TemporaryDirectory(prefix="smartui-seven-board-release-") as folder:
         stage = Path(folder)
         for source, name in files:
@@ -265,10 +266,11 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
         manifest = {
             "schema_version": 2, "version": VERSION, "tag": TAG, "commit": commit,
             "distribution": DISTRIBUTION,
-            "meshcore_core_version": "1.17.1",
+            "meshcore_core_version": "1.18.0",
+            "meshcore_core_commit": "81dbae592ffad40b4212bc0b37e82b38da08f4bc",
             "powersaving_upstream_commit": "a27e78e4da1389055b6dd16ce473112d25c8a5cd",
             "embedded_source_identity_verified": True,
-            "experimental": False, "board_count": 7, "firmware_count": 11,
+            "experimental": False, "board_count": 7, "profile_count": 8, "firmware_count": 12,
             "asset_count": ASSET_COUNT,
             "publication": dict(PUBLICATION),
             "developer_kit": record(kit_path, source_commit=commit, cli_version=1,
@@ -291,7 +293,7 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
                 zipped.writestr(info, path.read_bytes(), compresslevel=9)
         verify_archive(archive, archive_payloads)
         require(len(list(stage.iterdir())) == ASSET_COUNT,
-                "release must contain exactly nineteen assets")
+                "release must contain exactly twenty assets")
         shutil.copytree(stage, output)
     return {"directory": str(output), "tag": TAG, "commit": commit,
             "assets": [record(path) for path in sorted(output.iterdir())]}
@@ -301,7 +303,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("output", type=Path, help="new release directory (must not exist)")
     parser.add_argument("--build-dir", type=Path, default=ROOT / ".pio/build")
-    parser.add_argument("--firmware-dir", type=Path, help="CI directory with exactly eleven release-named images")
+    parser.add_argument("--firmware-dir", type=Path, help="CI directory with exactly twelve release-named images")
     parser.add_argument("--commit", help="must equal the clean checkout's full HEAD SHA")
     parser.add_argument("--mkspiffs", type=Path, help="pinned PlatformIO mkspiffs used by the V3 build")
     parser.add_argument("--sdkconfig", type=Path, help="ESP32-S3 Arduino SDK configuration from the V3 build")

@@ -25,6 +25,24 @@ const controlReads=['get sound','get mute','get night_quiet','get connection','c
 const controlWrites=['set sound on','set sound off','set mute on','set mute off','set night_quiet on','set night_quiet off',
   'sound preview','test','set connection ble','set connection usb','set connection wifi','reply set 1 Привет, мир!','reply reset 1'];
 
+test('BLE PIN read needs explicit capability, remains readonly and never enters audit values',async()=>{
+  for(const blePin of [undefined,0,2]){
+    const f=await connected({meshcore:1,blePin});try{
+      const before=f.port.commands.length;
+      await assert.rejects(f.client.execute('get pin'),{code:'PIN_UNSUPPORTED'});
+      await assert.rejects(f.client.execute('get ble.pin'),{code:'PIN_UNSUPPORTED'});
+      assert.equal(f.port.commands.length,before);
+    }finally{await f.client.disconnect();}
+  }
+  const f=await connected({meshcore:1,blePin:1,readonly:true});try{
+    assert.equal(f.port.commands.includes('get pin'),false);
+    assert.equal(await f.client.execute('get pin'),'> 654321');
+    assert.equal(await f.client.execute('get ble.pin'),'> 654321');
+    assert.doesNotMatch(JSON.stringify(f.events),/654321/);
+    for(const command of ['get pin','get ble.pin','ui pin','set pin 654321'])assert.throws(()=>api.developerCommand(command),{code:'INPUT'});
+  }finally{await f.client.disconnect();}
+});
+
 test('control marker gates new syntax before I/O and retires only new-firmware help',async()=>{
   for(const control of [undefined,0,2]){
     const f=await connected({console:1,meshcore:1,control});try{
@@ -180,7 +198,7 @@ test('friendly failures are redacted and no write is ever repeated after missing
 test('friendly command grammar rejects secrets, unknown verbs, controls and non-ASCII digits',()=>{
   for(const command of [...friendlyReads,...friendlyWrites])assert.ok(api.encodeCommand('00',command));
   for(const command of ['set volume ５','set vibration yes','set fem 1','set adc NaN','set adc Infinity',
-    'set adc 1e2','help reboot','get wifi.password','get pin','set battery_mv 4000','adc service erase',
+    'set adc 1e2','help reboot','get wifi.password','get pin extra','set battery_mv 4000','adc service erase',
     'help sound\nreboot','melody -1','get volume extra'])assert.throws(()=>api.encodeCommand('00',command),{code:'INPUT'},command);
 });
 

@@ -17,6 +17,8 @@ struct ConnectionControllerHooks {
   bool (*isCliRescue)() = nullptr;
   bool (*isStorageQuarantined)() = nullptr;
   const char* (*getBoardName)() = nullptr;
+  // Active pairing code, read only on an explicit local USB request.
+  uint32_t (*getBLEPin)() = nullptr;
   const char* (*getQuickReply)(uint8_t slot) = nullptr;
   bool (*setQuickReply)(uint8_t slot, const char* text) = nullptr;
   // The service returns one bounded ASCII line without CR/LF. It must enforce

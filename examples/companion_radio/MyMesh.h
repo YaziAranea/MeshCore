@@ -9,11 +9,11 @@
 #define FIRMWARE_VER_CODE 14
 
 #ifndef FIRMWARE_BUILD_DATE
-#define FIRMWARE_BUILD_DATE "14 Aug 2026"
+#define FIRMWARE_BUILD_DATE "15 Oct 2026"
 #endif
 
 #ifndef FIRMWARE_VERSION
-#define FIRMWARE_VERSION "v1.17.1"
+#define FIRMWARE_VERSION "v1.18.0"
 #endif
 
 #ifndef UI_PHONE_GPS
@@ -174,6 +174,22 @@ struct LinkTestStatus {
 
 class MyMesh : public BaseChatMesh, public DataStoreHost {
 public:
+  class Listener {
+  public:
+    virtual void onMessageRecv(mesh::Packet*, const ContactInfo&, uint8_t, uint32_t, const char*) { }
+    virtual void onChannelMessageRecv(mesh::Packet*, ChannelDetails&, const char*) { }
+    virtual void onQueueSizeChanged(int) { }
+    virtual void onDiscoveredContact(ContactInfo&, bool, uint8_t, const uint8_t*) { }
+    virtual void onControlDataRecv(const mesh::Packet*) { }
+    virtual void onChannelDataRecv(mesh::Packet*, const mesh::GroupChannel&, uint16_t, const uint8_t*, size_t) { }
+    virtual void onACKRecv(uint32_t) { }
+    virtual uint8_t onUnhandledRequest(const ContactInfo&, uint32_t, const uint8_t*, uint8_t, uint8_t*) { return 0; }
+    virtual bool onUnhandledResponse(const ContactInfo&, uint32_t, const uint8_t*, uint8_t) { return false; }
+    virtual void onTraceRecv(mesh::Packet*, uint32_t, uint32_t, uint8_t, const uint8_t*, const uint8_t*, uint8_t) { }
+    virtual void onRawDataRecv(mesh::Packet*) { }
+    virtual ~Listener() { }
+  };
+
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store, AbstractUITask* ui=NULL);
 
   // Returns false when identity storage or radio startup fails. Callers must
@@ -181,6 +197,9 @@ public:
   bool begin(bool has_display);
   bool isRadioStartupError() const { return _radio_startup_error; }
   void startInterface(BaseSerialInterface &serial);
+  // Extensions only. SmartUI's richer UI hooks remain separate to avoid
+  // duplicate messages, notifications and unread-generation transitions.
+  void setListener(Listener* listener) { _listener = listener; }
 
   const char *getNodeName();
   NodePrefs *getNodePrefs();
@@ -332,7 +351,9 @@ public:
   bool savePrefs() {
     _prefs.node_lat = isPhoneGpsEnabled() ? 0.0 : sensors.node_lat;
     _prefs.node_lon = isPhoneGpsEnabled() ? 0.0 : sensors.node_lon;
-    return _store->savePrefs(_prefs);
+    if (!_store->savePrefs(_prefs)) return false;
+    _prefs.clearDirty();
+    return true;
   }
 
   const char* getPrefsSaveErrorText() const {
@@ -450,6 +471,7 @@ private:
   uint32_t pending_req;   // pending _BINARY_REQ
   BaseSerialInterface *_serial;
   AbstractUITask* _ui;
+  Listener* _listener = nullptr;
 
   ContactsIterator _iter;
   uint32_t _iter_filter_since;

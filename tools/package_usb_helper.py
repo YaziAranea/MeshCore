@@ -8,8 +8,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "tools/usb-helper"
-HTML_NAME = "SmartUI_USB_Helper_2.6.html"
-ZIP_NAME = "SmartUI_USB_Helper_2.6.zip"
+HTML_NAME = "SmartUI_USB_Helper_2.7.html"
+ZIP_NAME = "SmartUI_USB_Helper_2.7.zip"
 
 
 def digest(data):
@@ -37,14 +37,29 @@ def package(output):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     html = render()
+    readme = (SOURCE / "README_RU.md").read_text(encoding="utf-8")
+    # The repository README lives under tools/usb-helper; the archive's copy
+    # lives at its root. Keep both locations' document links functional.
+    for name in ("docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
+                 "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.20_RU.md"):
+        readme = readme.replace(f"](../../{name})", f"]({name})")
     payloads = {
         HTML_NAME: html,
-        "README_RU.md": (SOURCE / "README_RU.md").read_bytes(),
+        "README_RU.md": readme.encode("utf-8"),
         "PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "docs/CONSOLE_COMMANDS_RU.md": (ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes(),
         "docs/CLI_BOARD_MATRIX_RU.md": (ROOT / "docs/CLI_BOARD_MATRIX_RU.md").read_bytes(),
         "docs/EXTERNAL_BUZZER_RU.md": (ROOT / "docs/EXTERNAL_BUZZER_RU.md").read_bytes(),
         "docs/SMARTUI_CLI_RU.md": (ROOT / "docs/SMARTUI_CLI_RU.md").read_bytes(),
+        "docs/SUPPORTED_BOARDS_RU.md": (ROOT / "docs/SUPPORTED_BOARDS_RU.md").read_bytes(),
+        "docs/MIGRATION_1.18_RU.md": (ROOT / "docs/MIGRATION_1.18_RU.md").read_bytes(),
+        "docs/FLASHING_RU.md": (ROOT / "docs/FLASHING_RU.md").read_bytes(),
+        "docs/PROMICRO_GPS_RU.md": (ROOT / "docs/PROMICRO_GPS_RU.md").read_bytes(),
+        "docs/BUILD_RU.md": (ROOT / "docs/BUILD_RU.md").read_bytes(),
+        "docs/VERIFY_RU.md": (ROOT / "docs/VERIFY_RU.md").read_bytes(),
+        "variants/promicro/variant.cpp": (ROOT / "variants/promicro/variant.cpp").read_bytes(),
+        "tools/usb-helper/README_RU.md": "# USB Helper 2.7\n\n[Инструкция, возможности и подключение](../../README_RU.md).\n".encode("utf-8"),
+        "RELEASE_NOTES_SmartUI_0.20_RU.md": (ROOT / "RELEASE_NOTES_SmartUI_0.20_RU.md").read_bytes(),
         "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
         "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
@@ -58,7 +73,16 @@ def package(output):
         "screenshots/adc-service-mobile.png": (SOURCE / "screenshots/adc-service-mobile.png").read_bytes(),
         "screenshots/console-desktop.png": (SOURCE / "screenshots/console-desktop.png").read_bytes(),
         "screenshots/console-mobile.png": (SOURCE / "screenshots/console-mobile.png").read_bytes(),
+        "screenshots/headless-desktop.png": (SOURCE / "screenshots/headless-desktop.png").read_bytes(),
+        "screenshots/headless-mobile.png": (SOURCE / "screenshots/headless-mobile.png").read_bytes(),
     }
+    # Linked historical context and wiring illustrations remain readable offline.
+    for name in ("docs/AUDIT_FIXES_0.06_RU.md", "RELEASE_NOTES_v2.1.0-dev.1_RU.md",
+                 "RELEASE_NOTES_v2.1.0-dev_RU.md", "RELEASE_NOTES_v2.1.0-beta.2_RU.md",
+                 "docs/assets/ui/wireless-paper-ble-pin.png", "docs/assets/ui/ui006-all-six.png",
+                 "docs/assets/ui/ui-overview-three-boards.png", "docs/assets/ui/v4-3-oled-clock.png",
+                 "docs/assets/ui/wireless-paper-wood-clock.png"):
+        payloads[name] = (ROOT / name).read_bytes()
     checksums = "".join(f"{digest(raw)}  {name}\n" for name, raw in sorted(payloads.items()))
     payloads["SHA256SUMS.txt"] = checksums.encode("ascii")
     html_path = output / HTML_NAME

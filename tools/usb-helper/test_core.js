@@ -11,6 +11,27 @@ const SSID_PROMPT = 'SSID input is hidden; enter SSID, then Enter:';
 const PASSWORD_PROMPT = "Password input is hidden; enter 8..64 bytes, blank for open WiFi, or 'cancel':";
 const HELP = 'Commands: status | mode ble | mode usb | mode wifi | wifi setup | wifi status | wifi save | wifi cancel | wifi forget | help\r\nCredential input is not echoed. WiFi is saved only after a passed test.';
 const HELP_INFO = HELP.replace('Commands: status', 'Commands: info | status');
+
+test('console BLE PIN is opt-in, parsed strictly and never retained in state/events',async()=>{
+  for(const marker of ['', ' ble_pin=0']){
+    const f=await connected({info:INFO.replace(' board=',marker+' board=')});try{
+      const before=f.port.commands.length;
+      await assert.rejects(f.instance.readBLEPin(),code('PIN_UNSUPPORTED'));
+      assert.equal(f.port.commands.length,before);
+    }finally{await f.instance.disconnect();}
+  }
+  for(const reply of ['BLEPin v=1 pin=654321','ERR ble_pin unavailable','BLEPin v=1 pin=12345']){
+    const f=await connected({info:INFO.replace(' board=',' ble_pin=1 board='),onCommand(command,port){if(command==='get pin'){port.reply(reply);return false;}}});
+    try{
+      assert.equal(f.port.commands.includes('get pin'),false);
+      if(reply==='BLEPin v=1 pin=654321')assert.equal(await f.instance.readBLEPin(),'654321');
+      else await assert.rejects(f.instance.readBLEPin(),code(reply.startsWith('ERR')?'PIN_UNAVAILABLE':'PROTOCOL'));
+      assert.doesNotMatch(JSON.stringify(f.instance.state),/654321/);
+      assert.doesNotMatch(JSON.stringify(f.seen),/654321/);
+      assert.equal(f.port.commands.filter(c=>c==='get pin').length,1);
+    }finally{await f.instance.disconnect();}
+  }
+});
 const HELP_REPLIES = HELP_INFO.replace('wifi forget | help', 'wifi forget | reply get N | reply set N HEX | help');
 const INFO = 'SmartUI=0.06 core=PS22b17 build=1234abcd upstream=5ad64e00 capabilities=BLE,USB,WiFi board=Heltec V3';
 const SETTINGS_CAPS = {v:1,adc:1,sound:1,board_led:1,unread_led:1,vibration:0,gps:0,battery_protection:1,display:0,melody_max:30,adc_min:3.675,adc_max:6.125};

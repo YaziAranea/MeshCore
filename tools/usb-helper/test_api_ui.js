@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.6.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.7.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -23,6 +23,52 @@ async function connect(page){await page.locator('#connect').click();await page.w
 async function tab(page,name){await page.locator('[data-page-target="'+name+'"]').click();assert.equal(await page.locator('[data-page-target="'+name+'"]').getAttribute('aria-selected'),'true');}
 
 async function ready(page){await page.waitForFunction(()=>!document.getElementById('api-settings-load').disabled);}
+
+test('headless overview uses capabilities, reads PIN only on click and clears it without writes',async()=>{
+  const full=fullSettingsFixture();full.caps.display=0;
+  for(const key of ['msg_popup','ui_font','ui_theme','ui_top_color','ui_bottom_color','backlight_timeout'])full.schemas[key].supported=0;
+  const f=await fixture({console:1,control:1,meshcore:1,blePin:1,firmware:'0.20',wifi:false,readonly:true,clock:true,...full});
+  try{const p=f.page;await connect(p);await tab(p,'connection');
+    assert.equal(await p.locator('#node-overview').getAttribute('data-headless'),'true');
+    assert.equal(await p.locator('#node-overview-title').textContent(),'Управление без экрана');
+    assert.equal(await p.locator('#node-overview-firmware').textContent(),'SmartUI 0.20');
+    assert.equal(await p.locator('#node-pin-show').isEnabled(),true,'Readonly does not deny a PIN read');
+    assert.equal(await p.evaluate(()=>__apiMock.commands.includes('get pin')),false);
+    await p.locator('#node-pin-show').click();await p.waitForFunction(()=>document.getElementById('node-pin-value').textContent==='654 321');
+    assert.doesNotMatch(await p.locator('#api-log').textContent(),/654321|654 321/);
+    await p.clock.fastForward(30001);assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');
+    await tab(p,'device');assert.equal(await p.locator('#api-setting-ui_theme').isVisible(),false);
+    await p.locator('#api-settings-unavailable').check();assert.equal(await p.locator('#api-setting-ui_theme').isDisabled(),true);
+    await tab(p,'connection');
+    await p.locator('.node-overview-main').evaluate(section=>{const p=document.createElement('p');p.className='hint';p.textContent='Симуляция USB · не физическая плата';section.prepend(p);});
+    for(const [size,width,height]of [['desktop',1440,1000],['mobile',390,844]]){await p.setViewportSize({width,height});await geometry(p);await p.screenshot({path:path.join(output,'helper-2.7-headless-'+size+'.png'),fullPage:true});}
+    await p.locator('#node-pin-show').click();await p.waitForFunction(()=>document.getElementById('node-pin-value').textContent==='654 321');
+    await p.locator('#disconnect').click();assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');
+    assert.equal(await p.locator('#node-overview').isVisible(),false);
+    const commands=await p.evaluate(()=>__apiMock.commands);assert.equal(commands.filter(c=>c==='get pin').length,2);assert.equal(commands.some(c=>/^set |^ui (set|mode (ble|usb|wifi))/.test(c)),false);
+  }finally{await f.close();}
+});
+
+test('display capability wins over board assumptions and PIN errors never expose a raw reply',async()=>{
+  const f=await fixture({console:1,meshcore:1,blePin:1,firmware:'0.20',pinReply:'> invalid-secret',...fullSettingsFixture()});
+  try{const p=f.page;await connect(p);await tab(p,'connection');
+    assert.equal(await p.locator('#node-overview').getAttribute('data-headless'),'false');
+    await p.locator('#node-pin-show').click();await p.waitForFunction(()=>document.getElementById('node-pin-status').textContent.includes('Некорректный'));
+    assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');assert.doesNotMatch(await p.locator('body').textContent(),/invalid-secret/);
+    assert.equal(await p.locator('#node-pin-show').isDisabled(),true);
+  }finally{await f.close();}
+});
+
+test('late PIN response cannot reveal after leaving connection page',async()=>{
+  const f=await fixture({console:1,meshcore:1,blePin:1,firmware:'0.20'});
+  try{const p=f.page;await connect(p);await tab(p,'connection');
+    await p.evaluate(()=>{const reply=__apiMock.reply.bind(__apiMock);__apiMock.reply=(tag,text)=>{if(text==='> 654321')__apiMock.pendingPin=()=>reply(tag,text);else reply(tag,text);};});
+    await p.locator('#node-pin-show').click();await p.waitForFunction(()=>Boolean(__apiMock.pendingPin));
+    await tab(p,'device');await p.evaluate(()=>__apiMock.pendingPin());await ready(p);
+    await tab(p,'connection');assert.equal(await p.locator('#node-pin-value').textContent(),'••• •••');
+    assert.equal(await p.locator('#node-pin-hide').isVisible(),false);
+  }finally{await f.close();}
+});
 
 test('CLI optional buzzer enables and disables through firmware pin schema while refreshing dependent caps',async()=>{
   const schemas={tone_pin:{supported:1,min:-1,max:48,step:1,options:'-1,13,14'}};

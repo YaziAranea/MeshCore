@@ -2,6 +2,7 @@
 #include "t1000e_sensors.h"
 #include "target.h"
 #include <helpers/sensors/MicroNMEALocationProvider.h>
+#include <helpers/sensors/AirohaSleep.h>
 
 T1000eBoard board;
 
@@ -10,7 +11,7 @@ RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BU
 WRAPPER_CLASS radio_driver(radio, board);
 
 VolatileRTCClock rtc_clock;
-MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
+MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock, -1, -1);
 T1000SensorManager sensors = T1000SensorManager(nmea);
 
 #ifdef DISPLAY_CLASS
@@ -80,81 +81,42 @@ mesh::LocalIdentity radio_new_identity() {
 }
 
 void T1000SensorManager::start_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = true;       // gps_active is unchanged (true for GPS sleep, false for GPS off)
-    _nmea->syncTime();     // Clear GPS data and force sync time
-    _nmea->setNextSleep(); // Next time to off
-  } else {
-    gps_active = true;
-    gps_wake = true;
-  }
-
-  //_nmea->begin();
-  // this init sequence should be better 
-  // comes from seeed examples and deals with all gps pins
-  pinMode(GPS_EN, OUTPUT);
+  // Board owns the Airoha power/reset pins; provider owns logical freshness.
+  if (!gps_active || gps_wake) return;
+  gps_wake = true;
+  _nmea->begin();
+  _nmea->syncTime();
+  _nmea->setNextSleep();
   digitalWrite(GPS_EN, HIGH);
   delay(10);
-  pinMode(GPS_VRTC_EN, OUTPUT);
-  digitalWrite(GPS_VRTC_EN, HIGH);
-  delay(10);
-       
-  pinMode(GPS_RESET, OUTPUT);
-  digitalWrite(GPS_RESET, HIGH);
-  delay(10);
-  digitalWrite(GPS_RESET, LOW);
-       
-  pinMode(GPS_SLEEP_INT, OUTPUT);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
-  pinMode(GPS_RTC_INT, OUTPUT);
+  digitalWrite(GPS_RTC_INT, HIGH);
+  delay(5);
   digitalWrite(GPS_RTC_INT, LOW);
-  pinMode(GPS_RESETB, INPUT_PULLUP);
 }
 
 void T1000SensorManager::sleep_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
-    _nmea->stopTimeSync(); // Stop time sync
-    _nmea->setNextWake();  // Next time to on
-  } else {
-    gps_active = false;
-    gps_wake = false; // When GPS is off, wake is false to be sure
-  }
-
-  digitalWrite(GPS_VRTC_EN, HIGH);
-  digitalWrite(GPS_EN, LOW);
-  digitalWrite(GPS_RESET, HIGH);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
+  gps_wake = false;
+  digitalWrite(GPS_VRTC_EN, HIGH);   // retain RTC for a warm fix
   digitalWrite(GPS_RTC_INT, LOW);
-  pinMode(GPS_RESETB, OUTPUT);
-  digitalWrite(GPS_RESETB, LOW);
-  //_nmea->stop();
+  airohaEnterSleep(_nmea);
+  _nmea->stop();
+  _nmea->stopTimeSync();
+  _nmea->setNextWake();
+  digitalWrite(GPS_EN, LOW);
 }
 
 void T1000SensorManager::stop_gps() {
-  if (_nmea->isPowerSavingEnabled()) {
-    gps_wake = false;      // gps_active is unchanged (true) even the GPS sleep (e.g: off)
-    _nmea->stopTimeSync(); // Stop time sync
-    _nmea->setNextWake();  // Next time to on
-  } else {
-    gps_active = false;
-    gps_wake = false; // When GPS is off, wake is false to be sure
-  }
-
-  digitalWrite(GPS_VRTC_EN, LOW);
-  digitalWrite(GPS_EN, LOW);
-  digitalWrite(GPS_RESET, HIGH);
-  digitalWrite(GPS_SLEEP_INT, HIGH);
-  digitalWrite(GPS_RTC_INT, LOW);
-  pinMode(GPS_RESETB, OUTPUT);
-  digitalWrite(GPS_RESETB, LOW);
-  //_nmea->stop();
+  gps_active = false;
+  sleep_gps();
 }
 
 
 bool T1000SensorManager::begin() {
   // init GPS
   Serial1.begin(115200);
+  digitalWrite(GPS_RESET, HIGH);
+  delay(10);
+  digitalWrite(GPS_RESET, LOW);
   return true;
 }
 
@@ -173,7 +135,8 @@ bool T1000SensorManager::querySensors(uint8_t requester_permissions, CayenneLPP&
 void T1000SensorManager::loop() {
   static long next_gps_update = 0;
 
-  // PowerSaving
+  // User intent remains separate from a temporary PowerSaving sleep.
+  if (gps_active && !gps_wake && !_nmea->isPowerSavingEnabled()) start_gps();
   if (_nmea->isPowerSavingEnabled() && gps_active) {
     // Handle change in PowerSaving mode
     _nmea->updatePowerSavingSettings(gps_wake);
@@ -235,8 +198,7 @@ const char* T1000SensorManager::getSettingValue(int i) const {
 bool T1000SensorManager::setSettingValue(const char* name, const char* value) {
   if (strcmp(name, "gps") == 0) {
     if (strcmp(value, "0") == 0) {
-      gps_active = false; // Disabled by CLI or App
-      sleep_gps(); // sleep for faster fix !
+      stop_gps();
     } else {
       gps_active = true; // Enabled by CLI or App
       start_gps();

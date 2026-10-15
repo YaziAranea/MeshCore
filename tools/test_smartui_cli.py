@@ -701,6 +701,10 @@ def type3_integration():
     methods = "\n".join(scope(base, signature) for signature in (
         "void BaseChatMesh::onPeerDataRecv(", "mesh::Packet* BaseChatMesh::composeMsgPacket(",
         "int  BaseChatMesh::sendMessage(", "int  BaseChatMesh::sendCommandData("))
+    base_header = (ROOT / "src/helpers/BaseChatMesh.h").read_text(encoding="utf-8")
+    methods += "\n" + scope(base_header, "virtual void onCLICommandRecv(").replace(
+        "virtual void onCLICommandRecv(", "void BaseChatMesh::onCLICommandRecv(")
+    defines += "\n" + re.search(r"^#define CLI_REPLY_DELAY_MILLIS\s+[^\n]+", base, re.M)[0]
     methods += "\n" + "\n".join(scope(source, signature) for signature in (
         "void MyMesh::recordExpectedAck(", "void MyMesh::queueMessage(",
         "void MyMesh::onMessageRecv(", "void MyMesh::onCommandDataRecv(",

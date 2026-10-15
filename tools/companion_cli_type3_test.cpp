@@ -83,6 +83,7 @@ struct BaseChatMesh {
   virtual void onMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
   virtual void onCommandDataRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
   virtual void onCliCommandMessage(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
+  virtual void onCLICommandRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*, char*);
   virtual void onSignedMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const uint8_t*, const char*) = 0;
   void onPeerDataRecv(mesh::Packet*, uint8_t, int, const uint8_t*, uint8_t*, size_t);
   mesh::Packet* composeMsgPacket(const ContactInfo&, uint32_t, uint8_t, const char*, uint32_t&);
@@ -102,6 +103,11 @@ struct Serial {
   void writeFrame(const uint8_t* data, size_t len) { frames.emplace_back(data, data + len); }
 };
 struct MyMesh : BaseChatMesh {
+  struct Listener {
+    void onMessageRecv(mesh::Packet*, const ContactInfo&, uint8_t, uint32_t, const char*) { }
+    void onQueueSizeChanged(int) { }
+  };
+  Listener* _listener = nullptr;
   uint32_t before = 0x12345678;
   uint8_t cmd_frame[MAX_FRAME_SIZE + 1] = {}, out_frame[MAX_FRAME_SIZE + 1] = {};
   uint32_t after = 0x87654321;
@@ -212,7 +218,8 @@ int main() {
       assert(mesh.queued_flags == (plain ? UI_MSG_FLAG_DIRECT : UI_MSG_FLAG_NONE));
       assert(mesh.queued_generation == unsigned(plain));
       assert(mesh.rx_acks == unsigned(plain && !flood));
-      assert(mesh.path_returns == unsigned(flood && type != TXT_TYPE_CLI_COMMAND));
+      // Upstream 1.18 no longer sends an unsolicited path return for CLI_DATA.
+      assert(mesh.path_returns == unsigned(flood && plain));
       assert(mesh.datagrams == 0 && mesh.serial.frames.empty());
       assert(mesh.marks == 1 && mesh.status_notes == 1); ++cases;
     }
@@ -252,6 +259,13 @@ int main() {
   for (size_t len = 0; len <= 5; ++len) {
     MyMesh mesh; uint8_t data[8] = {}; data[4] = TXT_TYPE_CLI_COMMAND << 2; mesh::Packet packet;
     mesh.onPeerDataRecv(&packet, PAYLOAD_TYPE_TXT_MSG, 0, mesh.contacts[0].secret, data, len);
+    assert(mesh.queued.empty() && mesh.serial.frames.empty() && mesh.datagrams == 0);
+    guards(mesh); ++cases;
+  }
+  for (size_t len = 6; len < 9; ++len) {
+    MyMesh mesh; std::vector<uint8_t> data(len + 1, 0);
+    data[4] = TXT_TYPE_SIGNED_PLAIN << 2; mesh::Packet packet;
+    mesh.onPeerDataRecv(&packet, PAYLOAD_TYPE_TXT_MSG, 0, mesh.contacts[0].secret, data.data(), len);
     assert(mesh.queued.empty() && mesh.serial.frames.empty() && mesh.datagrams == 0);
     guards(mesh); ++cases;
   }

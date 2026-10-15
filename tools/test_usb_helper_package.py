@@ -14,6 +14,14 @@ import package_usb_helper as helper
 
 
 class HelperPackageTests(unittest.TestCase):
+    def test_source_readme_local_links_resolve_in_repository(self):
+        readme = helper.SOURCE / "README_RU.md"
+        for link in re.findall(r"\]\(([^)]+)\)", readme.read_text(encoding="utf-8")):
+            if "://" in link or link.startswith("#"):
+                continue
+            target = (readme.parent / link.split("#", 1)[0]).resolve()
+            self.assertTrue(target.is_file(), f"Broken repository README link: {link}")
+
     def test_public_melody_names_match_the_production_order(self):
         source = (helper.ROOT / "examples/companion_radio/ui-new/UITask.cpp").read_text(encoding="utf-8")
         tones = source.split("static const NotifyToneDef notify_tones[] = {", 1)[1].split("};", 1)[0]
@@ -30,8 +38,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn("navigator.serial.requestPort()", html)
         self.assertIn("connect-src 'none'", html)
         self.assertNotIn("localStorage", html)
-        self.assertIn("Помощник 2.6", html)
-        self.assertIn("Помощник 2.6 · MeshCore", html)
+        self.assertIn("Помощник 2.7", html)
+        self.assertIn("Помощник 2.7 · MeshCore", html)
         self.assertIn("SmartUiPresets", html)
         self.assertIn('id="preset-city"', html)
         self.assertIn('id="advert-interval"', html)
@@ -39,8 +47,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)
         self.assertIn("120 секунд", html)
-        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.6.html")
-        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.6.zip")
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.7.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.7.zip")
         self.assertIn("class CliClient", html)
         self.assertIn('id="helper-mode"', html)
         self.assertNotIn('id="api-inbox"', html)
@@ -66,19 +74,36 @@ class HelperPackageTests(unittest.TestCase):
                     "docs/CLI_BOARD_MATRIX_RU.md",
                     "docs/EXTERNAL_BUZZER_RU.md",
                     "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
+                    "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
+                    "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.20_RU.md",
+                    "docs/PROMICRO_GPS_RU.md", "docs/BUILD_RU.md", "docs/VERIFY_RU.md",
+                    "variants/promicro/variant.cpp", "tools/usb-helper/README_RU.md",
+                    "docs/AUDIT_FIXES_0.06_RU.md", "RELEASE_NOTES_v2.1.0-dev.1_RU.md",
+                    "RELEASE_NOTES_v2.1.0-dev_RU.md", "RELEASE_NOTES_v2.1.0-beta.2_RU.md",
+                    "docs/assets/ui/wireless-paper-ble-pin.png", "docs/assets/ui/ui006-all-six.png",
+                    "docs/assets/ui/ui-overview-three-boards.png", "docs/assets/ui/v4-3-oled-clock.png",
+                    "docs/assets/ui/wireless-paper-wood-clock.png",
                     "tools/usb-helper/PRESETS_SOURCE_RU.md",
                     "screenshots/settings-desktop.png", "screenshots/settings-mobile.png",
                     "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
                     "screenshots/city-desktop.png", "screenshots/city-mobile.png",
                 "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png",
-                "screenshots/console-desktop.png", "screenshots/console-mobile.png"})
+                "screenshots/console-desktop.png", "screenshots/console-mobile.png",
+                "screenshots/headless-desktop.png", "screenshots/headless-mobile.png"})
                 self.assertEqual(archive.read(helper.HTML_NAME), first[0].read_bytes())
                 self.assertEqual(archive.read("docs/CONSOLE_COMMANDS_RU.md"),
                                  (helper.ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes())
                 for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
                              "docs/EXTERNAL_BUZZER_RU.md",
+                             "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
+                             "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.20_RU.md",
                              "tools/smartui-cli/README.md"):
                     self.assertEqual(archive.read(name), (helper.ROOT / name).read_bytes())
+                # Includes the relocated root README and transitive references,
+                # so links cannot work on GitHub while silently breaking offline.
+                for name in archive.namelist():
+                    if not name.endswith(".md"):
+                        continue
                     for link in re.findall(r"\]\(([^)]+)\)", archive.read(name).decode("utf-8")):
                         if "://" in link or link.startswith("#"):
                             continue

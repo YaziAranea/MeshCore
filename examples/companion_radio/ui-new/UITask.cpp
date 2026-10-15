@@ -25,7 +25,7 @@
 #if defined(PIN_NEOPIXEL) && defined(NEOPIXEL_NUM) && NEOPIXEL_NUM > 0
   #include <Adafruit_NeoPixel.h>
 #endif
-#ifdef WIFI_SSID
+#if defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)
   #include <WiFi.h>
 #endif
 
@@ -8514,7 +8514,7 @@ public:
             drawRichTextCentered(display, display.width() / 2, 52, tmp);
             uiPopFont(display, small_font);
           }
-        #elif defined(WIFI_SSID)
+        #elif defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)
           IPAddress ip = WiFi.localIP();
           snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
           uint8_t small_font = uiPushCompactChromeFont(display);
@@ -8559,7 +8559,7 @@ public:
             display.setTextSize(1);
             display.drawTextCentered(display.width() / 2, 54, tmp);
           }
-        #elif defined(WIFI_SSID)
+        #elif defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)
           IPAddress ip = WiFi.localIP();
           snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
           display.setTextSize(1);

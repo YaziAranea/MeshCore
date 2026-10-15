@@ -49,11 +49,12 @@ class ExtendedCommands(unittest.TestCase):
 
 
 class Board:
-    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None, control=None):
+    def __init__(self, readonly=False, discovery="smartui_cli:1", meshcore=None, console=None, control=None, ble_pin=None):
         self.requests, self.closed = [], False
         self.readonly, self.discovery, self.error, self.timeout = readonly, discovery, None, False
         self.meshcore, self.name, self.tx = meshcore, "Тестовая нода", "20"
         self.console, self.control = console, control
+        self.ble_pin = ble_pin
 
     def close(self):
         self.closed = True
@@ -82,6 +83,10 @@ class Board:
                         text += f" console={self.console}"
                     if self.control is not None:
                         text += f" control={self.control}"
+                    if self.ble_pin is not None:
+                        text += f" ble_pin={self.ble_pin}"
+                elif self.meshcore == 1 and self.ble_pin == 1 and command in {"get pin", "get ble.pin"}:
+                    text = "> 654321"
                 elif self.console == 1 and is_friendly(command):
                     text = "OK" if mutates(command) else "> 7"
                     if command == "melody 1":
@@ -249,7 +254,7 @@ class CliTests(unittest.TestCase):
         for command in FRIENDLY_READS + FRIENDLY_WRITES:
             self.assertTrue(encode_command("00", command))
         for command in ("set volume ５", "set vibration yes", "set fem 1", "set adc NaN", "set adc Infinity",
-                        "set adc 1e2", "help reboot", "get wifi.password", "get pin", "set battery_mv 4000",
+                        "set adc 1e2", "help reboot", "get wifi.password", "get pin extra", "set battery_mv 4000",
                         "adc service erase", "help sound\nreboot", "melody -1", "get volume extra"):
             with self.subTest(command=command), self.assertRaises(CliError) as error:
                 encode_command("00", command)
@@ -514,6 +519,43 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(CliError):
             client.field("get", "volume")
         self.assertTrue(client.uncertain)
+
+
+class ActivePinRead(unittest.TestCase):
+    def test_explicit_read_during_readonly_without_mutation(self):
+        board = Board(readonly=True, meshcore=1, ble_pin=1)
+        client = CliClient(board.exchange, board.close)
+        client.connect()
+        self.assertFalse(any(b"get pin" in request for request in board.requests))
+        before = len(board.requests)
+        self.assertEqual(client.read_ble_pin(), "654321")
+        self.assertEqual(len(board.requests), before + 1)
+        self.assertEqual(client.execute("get ble.pin"), "> 654321")
+        self.assertFalse(mutates("get pin"))
+
+    def test_old_firmware_blocks_pin_request_without_io(self):
+        for capability in (None, 0):
+            board = Board(meshcore=1, ble_pin=capability)
+            client = CliClient(board.exchange, board.close)
+            client.connect()
+            before = len(board.requests)
+            with self.assertRaises(CliError) as failure:
+                client.read_ble_pin()
+            self.assertEqual(failure.exception.code, "ble_pin_unsupported")
+            self.assertEqual(len(board.requests), before)
+            self.assertFalse(client.uncertain)
+
+    def test_invalid_pin_response_never_leaks_into_error(self):
+        for reply in ("> 000000", "> 12345", "> 1234567", "> 654321 secret"):
+            board = Board(meshcore=1, ble_pin=1)
+            client = CliClient(board.exchange, board.close)
+            client.connect()
+            board.error = reply
+            with self.assertRaises(CliError) as failure:
+                client.read_ble_pin()
+            self.assertEqual(failure.exception.code, "protocol")
+            self.assertNotIn(reply, str(failure.exception))
+            self.assertTrue(client.uncertain)
 
 
 if __name__ == "__main__":

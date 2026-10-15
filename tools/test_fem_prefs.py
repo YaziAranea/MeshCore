@@ -10,6 +10,98 @@ from test_ui_sessions_v006 import function
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def room_startup_code():
+    source = (ROOT / "examples/simple_room_server/MyMesh.cpp").read_text(encoding="utf-8")
+    begin = function(source, "void MyMesh::begin(")
+    return r'''
+namespace room_startup {
+struct FILESYSTEM {};
+namespace mesh { struct Mesh { void begin() {} }; }
+struct RegionEntry {};
+struct FakeRegionMap {
+  void load(FILESYSTEM*) {}
+  RegionEntry* getDefaultRegion() { return nullptr; }
+  void getTransportKeysFor(const RegionEntry&, int*, int) {}
+};
+struct FakeACL { void load(FILESYSTEM*, int) {} };
+static bool saved_lna, saved_pa, prefs_loaded;
+struct FakeCLI {
+  NodePrefs* prefs;
+  void loadPrefs(FILESYSTEM*) {
+    prefs->radio_fem_rxgain = saved_lna;
+    prefs->radio_fem_txgain = saved_pa;
+    prefs_loaded = true;
+  }
+};
+struct FakeRadio {
+  void setParams(float, float, uint8_t, uint8_t) { assert(prefs_loaded); }
+  void setTxPower(int8_t) {}
+  void setRxBoostedGainMode(bool) {}
+} radio_driver;
+struct FakeBoard {
+  bool legacy_supported = true, lna = false, pa = false;
+  unsigned lna_calls = 0, pa_calls = 0, attach_calls = 0;
+  bool setLoRaFemLnaEnabled(bool enabled) {
+    assert(prefs_loaded); ++lna_calls;
+    if (legacy_supported) lna = enabled;
+    return legacy_supported;
+  }
+  bool setLoRaFemPaGainEnabled(bool enabled) {
+    assert(prefs_loaded); ++pa_calls;
+    if (legacy_supported) pa = enabled;
+    return legacy_supported;
+  }
+  void attachDynamicPrefs(KeyValueStore* custom) {
+    assert(prefs_loaded); ++attach_calls;
+    // Other upstream variants use their dynamic bridge instead of legacy FEM.
+    if (!legacy_supported) {
+      char value[8];
+      assert(custom->getByKey("fem_rxgain", value, sizeof(value)));
+      lna = atoi(value) != 0;
+      assert(custom->getByKey("fem_txgain", value, sizeof(value)));
+      pa = atoi(value) != 0;
+    }
+  }
+  void setAdcMultiplier(float) {}
+} board;
+class MyMesh : public mesh::Mesh {
+public:
+  NodePrefs _prefs;
+  FILESYSTEM* _fs = nullptr;
+  FakeCLI _cli{&_prefs};
+  FakeACL acl;
+  FakeRegionMap region_map;
+  int self_id = 0, default_scope = 0;
+  void updateAdvertTimer() {}
+  void updateFloodAdvertTimer() {}
+  void begin(FILESYSTEM* fs);
+};
+''' + begin + r'''
+void test() {
+  for (int legacy = 1; legacy >= 0; --legacy) {
+    for (int lna = 0; lna <= 1; ++lna) {
+      for (int pa = 0; pa <= 1; ++pa) {
+        FILESYSTEM fs;
+        MyMesh instance;
+        board = FakeBoard{};
+        board.legacy_supported = legacy;
+        // Opposite boot defaults prove the persisted settings are reapplied.
+        board.lna = !lna; board.pa = !pa;
+        instance._prefs.radio_fem_rxgain = !lna;
+        instance._prefs.radio_fem_txgain = !pa;
+        saved_lna = lna; saved_pa = pa; prefs_loaded = false;
+        instance.begin(&fs);
+        assert(board.lna == bool(lna) && board.pa == bool(pa));
+        assert(board.lna_calls == 1 && board.pa_calls == 1);
+        assert(board.attach_calls == 1);
+      }
+    }
+  }
+}
+}
+'''
+
+
 def source_code():
     stream_tests = (ROOT / "test/test_companion_node_prefs/test_companion_node_prefs.cpp").read_text(
         encoding="utf-8"
@@ -20,6 +112,9 @@ def source_code():
         function(utils, marker)
         for marker in ("static uint8_t hexVal(", "bool Utils::fromHex(")
     )
+    radio = (ROOT / "src/helpers/CommonRadioPrefsKeys.cpp").read_text(encoding="utf-8")
+    radio_keys = "\n".join(function(radio, marker) for marker in (
+        "bool CommonRadioPrefs::getByKey(", "bool CommonRadioPrefs::setByKey("))
     return r'''
 #include <cassert>
 #include <cstdio>
@@ -29,9 +124,11 @@ def source_code():
 #include "examples/companion_radio/NodePrefs.h"
 #include "Utils.h"
 #include "helpers/ConfigSerializer.cpp"
+#include "helpers/DynamicConfigSerializer.cpp"
 namespace mesh {
-''' + hex_methods + "\n}\n" + streams + r'''
+''' + hex_methods + "\n}\n" + radio_keys + "\n" + streams + room_startup_code() + r'''
 int main() {
+  room_startup::test();
   NodePrefs saved;
   saved.radio_fem_rxgain = 1;
   saved.radio_fem_txgain = 1;
@@ -73,7 +170,7 @@ int main() {
   assert(reloaded.loadSerial(disabled_input));
   assert(reloaded.radio_fem_rxgain == 0 && reloaded.radio_fem_txgain == 0);
 
-  puts("PASS actual NodePrefs FEM fields: copy, old-key defaults, ON/OFF JSON roundtrip");
+  puts("PASS actual NodePrefs FEM fields: copy, old-key defaults, ON/OFF JSON roundtrip; room server startup legacy/dynamic FEM restore");
 }
 '''
 

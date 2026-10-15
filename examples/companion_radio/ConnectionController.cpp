@@ -18,7 +18,7 @@
 
 #if defined(ESP32)
   #include <WiFi.h>
-  #include <helpers/esp32/SerialWifiInterface.h>
+  #include <helpers/wifi/SerialWifiInterface.h>
 #endif
 
 #include <ctype.h>
@@ -1491,13 +1491,13 @@ void ConnectionController::printInfo() {
   const char* board = _hooks.getBoardName ? _hooks.getBoardName() : nullptr;
   char line[448];
   snprintf(line, sizeof(line),
-      "SmartUI=%s core=%s build=%s upstream=%s capabilities=%s%s%s board=%.96s\r\n",
+      "SmartUI=%s core=%s build=%s upstream=%s capabilities=%s%s%s ble_pin=%u board=%.96s\r\n",
       SMARTUI_VERSION, SMARTUI_CORE_VERSION, SMARTUI_BUILD_SHA, SMARTUI_UPSTREAM_SHA,
       (caps & COMPANION_CAP_BLE) ? "BLE" : "",
       (caps & COMPANION_CAP_USB) ? ((caps & COMPANION_CAP_BLE) ? ",USB" : "USB") : "",
       (caps & COMPANION_CAP_WIFI) ? ((caps & (COMPANION_CAP_BLE | COMPANION_CAP_USB))
           ? ",WiFi" : "WiFi") : "",
-      board && board[0] ? board : "unknown");
+      _hooks.getBLEPin ? 1U : 0U, board && board[0] ? board : "unknown");
   printConsole(line);
 }
 
@@ -1705,6 +1705,25 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   char* line = trimAscii(raw_line);
   lowerAscii(line);
   if (!line[0]) return;
+  if (strcmp(line, "get pin") == 0 || strcmp(line, "get ble.pin") == 0) {
+    // This read remains available during storage quarantine. Never regenerate
+    // the PIN, change transports, or expose it in unsolicited diagnostics.
+    if (!_hooks.getBLEPin) {
+      printConsole("ERR ble_pin unsupported\r\n");
+    } else {
+      const uint32_t pin = _hooks.getBLEPin();
+      if (pin < 100000 || pin > 999999) {
+        printConsole("ERR ble_pin unavailable\r\n");
+      } else {
+        char reply[40];
+        snprintf(reply, sizeof(reply), "BLEPin v=1 pin=%06lu\r\n",
+                 static_cast<unsigned long>(pin));
+        printConsole(reply);
+        secureZero(reply, sizeof(reply));
+      }
+    }
+    return;
+  }
   if (strcmp(line, "settings") == 0 || strncmp(line, "settings ", 9) == 0) {
     // The backend allows capability/current-value reads during recovery, but
     // receives an explicit false for every mutation. Keep its machine grammar

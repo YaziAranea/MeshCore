@@ -6,7 +6,7 @@ ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 READ_COMMANDS = {"board", "ver", "get name", "get radio"}
 MESHCORE_READ_COMMANDS = {"get freq", "get tx", "get af", "get dutycycle", "get rxdelay",
                          "get multi.acks", "get path.hash.mode", "get radio.rxgain",
-                         "get tz.offset", "get wifi.status", "get wifi.ip"}
+                         "get tz.offset", "get wifi.status", "get wifi.ip", "get pin", "get ble.pin"}
 DECIMAL = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 MESHCORE_SET = re.compile(
     r"set (?:name .+|(?:pin|tx|multi\.acks|path\.hash\.mode) [-+]?\d+|"
@@ -55,6 +55,7 @@ ERROR_TEXT = {
     "meshcore_unsupported": "meshcore=1 not discovered in ui hello; use supported ui commands.",
     "console_unsupported": "console=1 not discovered in ui hello; short commands require SmartUI 0.15.",
     "control_unsupported": "control=1 not discovered in ui hello; this command is unavailable.",
+    "ble_pin_unsupported": "ble_pin=1 not discovered in ui hello; active PIN reading is unavailable.",
     "help_unavailable": "Firmware help is unavailable; use client documentation and schema KEY.",
     "busy": "Another command is pending.",
     "closed": "Transport is closed.",
@@ -235,6 +236,8 @@ class CliClient:
             if self.uncertain:
                 raise CliError("uncertain")
             encode_command("00", command)  # Validate before capability/permission checks; no I/O.
+            if command in {"get pin", "get ble.pin"} and self.hello.get("ble_pin") != "1":
+                raise CliError("ble_pin_unsupported")
             if needs_control(command) and self.hello.get("control") != "1":
                 raise CliError("control_unsupported")
             if re.match(r"help(?: |$)", command) and self.hello.get("control") == "1":
@@ -253,6 +256,15 @@ class CliClient:
             raise
         finally:
             self._lock.release()
+
+    def read_ble_pin(self):
+        """Read the active pairing code explicitly; callers must not log it."""
+        text = self.execute("get pin")
+        match = re.fullmatch(r"> ([1-9][0-9]{5})", text)
+        if not match:
+            self.uncertain = True
+            raise CliError("protocol")
+        return match[1]
 
     def field(self, kind, key):
         if kind not in {"caps", "get"} or not re.fullmatch(r"[a-z][a-z_]*", key):

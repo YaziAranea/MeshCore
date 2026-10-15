@@ -8,7 +8,7 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.19"
+VERSION = "0.20"
 ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}.zip"
 DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
@@ -17,6 +17,23 @@ SOURCES = (
     "docs/CONSOLE_COMMANDS_RU.md",
     "docs/CLI_BOARD_MATRIX_RU.md",
     "docs/EXTERNAL_BUZZER_RU.md",
+    "docs/SUPPORTED_BOARDS_RU.md",
+    "docs/MIGRATION_1.18_RU.md",
+    "docs/FLASHING_RU.md",
+    "docs/PROMICRO_GPS_RU.md",
+    "docs/BUILD_RU.md",
+    "docs/VERIFY_RU.md",
+    "variants/promicro/variant.cpp",
+    "docs/AUDIT_FIXES_0.06_RU.md",
+    "RELEASE_NOTES_v2.1.0-dev.1_RU.md",
+    "RELEASE_NOTES_v2.1.0-dev_RU.md",
+    "RELEASE_NOTES_v2.1.0-beta.2_RU.md",
+    "docs/assets/ui/wireless-paper-ble-pin.png",
+    "docs/assets/ui/ui006-all-six.png",
+    "docs/assets/ui/ui-overview-three-boards.png",
+    "docs/assets/ui/v4-3-oled-clock.png",
+    "docs/assets/ui/wireless-paper-wood-clock.png",
+    "RELEASE_NOTES_SmartUI_0.20_RU.md",
     "tools/smartui-cli/README.md",
     "tools/smartui-cli/inspect_device.py",
     "tools/smartui-cli/smartui_cli.py",
@@ -60,6 +77,12 @@ def package(output, commit, *, root=ROOT, development=False):
         if not source.is_file() or source.is_symlink() or not source.stat().st_size:
             raise ValueError(f"Developer kit source must be a regular nonempty file: {name}")
         payloads[name] = source.read_bytes()
+    payloads["tools/usb-helper/README_RU.md"] = (
+        "# USB Helper 2.7\n\n"
+        "[Локальные команды и подключение](../../docs/SMARTUI_CLI_RU.md).\n\n"
+        "Отдельный offline HTML и полная инструкция находятся в "
+        "[USB Helper из выпуска SmartUI 0.20](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.20).\n"
+    ).encode("utf-8")
     title = (f"# SmartUI Developer Kit — LOCAL DEVELOPMENT (base {VERSION})\n\n"
              if development else f"# SmartUI {VERSION} — Developer Kit\n\n")
     notice = (
@@ -72,7 +95,7 @@ def package(output, commit, *, root=ROOT, development=False):
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 2.6"
+    helper = "USB Helper 2.7"
     payloads["README.md"] = (
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "

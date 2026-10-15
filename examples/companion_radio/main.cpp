@@ -54,21 +54,39 @@ MultiSerialInterface interface_manager;
     // include nrf52 bluetooth interface
     #include <helpers/nrf52/SerialBLEInterface.h>
     SerialBLEInterface bluetooth_interface;
+  #elif defined(RP2040_PLATFORM)
+    #include <helpers/rp2040/SerialBLEInterface.h>
+    SerialBLEInterface bluetooth_interface;
   #else
     #error "SerialBLEInterface is not defined for this platform"
   #endif
 #endif
 
 // include wifi interface
-#if defined(WIFI_SSID) || \
+#if defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID) || \
     (defined(ESP32) && defined(SMARTUI_CONNECTION_SELECTOR) && \
      SMARTUI_CONNECTION_SELECTOR)
+  #ifndef WIFI_SSID
+    #define WIFI_SSID ""
+  #endif
+  #ifndef WIFI_PWD
+    #define WIFI_PWD ""
+  #endif
   #ifndef TCP_PORT
     #define TCP_PORT 5000
   #endif
-  #ifdef ESP32
-    // include esp32 wifi interface
-    #include <helpers/esp32/SerialWifiInterface.h>
+  #ifndef WIFI_RETRY_INTERVAL
+    #if defined(RP2040_PLATFORM)
+      #define WIFI_RETRY_INTERVAL 30000
+    #else
+      #define WIFI_RETRY_INTERVAL 10000
+    #endif
+  #endif
+  #ifndef WIFI_RETRY_TIMEOUT
+    #define WIFI_RETRY_TIMEOUT 5000
+  #endif
+  #if defined(ESP32) || defined(RP2040_PLATFORM)
+    #include <helpers/wifi/SerialWifiInterface.h>
     SerialWifiInterface wifi_interface;
   #else
     #error "SerialWifiInterface is not defined for this platform"
@@ -632,8 +650,14 @@ bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity)
       meshcore_cli, the_mesh.getNodePrefs()->node_name, MAX_LORA_TX_POWER)) return true;
   if (strcmp(command, "ui hello") == 0) {
     snprintf(reply, capacity,
-        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1 control=1",
-        SMARTUI_VERSION, writable ? 1U : 0U);
+        "OK ui hello version=1 firmware=%s max_command=156 max_reply=156 write=%u sync=0 events=0 meshcore=1 console=1 control=1 ble_pin=%u",
+        SMARTUI_VERSION, writable ? 1U : 0U,
+#ifdef BLE_PIN_CODE
+        1U
+#else
+        0U
+#endif
+        );
     return true;
   }
   if (connection_controller.handleCliCommand(command, reply, capacity, writable)) return true;
@@ -778,10 +802,14 @@ static void showFatalStorageError(DisplayDriver* disp, const char* title,
 #endif
 
 /* WIFI RECONNECT TRACKERS */
-#if defined(ESP32) && defined(WIFI_SSID) && \
+#if (defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)) && \
     !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR)
   bool wifi_needs_reconnect = false;
   unsigned long last_wifi_reconnect_attempt = 0;
+  char wifi_ssid[33] = WIFI_SSID;
+  char wifi_pwd[64] = WIFI_PWD;
+  bool wifi_was_connected = false;
+  bool wifi_enabled = false;
 #endif
 
 void setup() {
@@ -931,7 +959,20 @@ void setup() {
   // when the listener becomes available.
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
-#elif defined(WIFI_SSID)
+#elif defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)
+  // Upstream WiFi preferences apply only to non-SmartUI transports. SmartUI
+  // keeps its confirmed, exclusive connection selection in ConnectionController.
+  #ifdef ENABLE_WIFI_INTERFACE
+  if (the_mesh.getNodePrefs()->wifi_ssid[0]) {
+    StrHelper::strncpy(wifi_ssid, the_mesh.getNodePrefs()->wifi_ssid, sizeof(wifi_ssid));
+    StrHelper::strncpy(wifi_pwd, the_mesh.getNodePrefs()->wifi_pwd, sizeof(wifi_pwd));
+  }
+  wifi_enabled = the_mesh.getNodePrefs()->wifi_enabled;
+  #else
+  wifi_enabled = true;
+  #endif
+  if (wifi_enabled && wifi_ssid[0]) {
+  #if defined(ESP32)
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.setAutoReconnect(true);
 
@@ -944,10 +985,16 @@ void setup() {
           wifi_needs_reconnect = false;
       }
   });
-
-  WiFi.begin(WIFI_SSID, WIFI_PWD);
+  #endif
+  #if defined(RP2040_PLATFORM)
+  WiFi.beginNoBlock(wifi_ssid, wifi_pwd);
+  last_wifi_reconnect_attempt = millis();
+  #else
+  WiFi.begin(wifi_ssid, wifi_pwd);
+  #endif
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+  }
 #endif
 
 // add usb interface
@@ -985,6 +1032,9 @@ void setup() {
   connection_hooks.isCliRescue = isCompanionCliRescue;
   connection_hooks.isStorageQuarantined = isCompanionStorageQuarantined;
   connection_hooks.getBoardName = companionBoardName;
+#ifdef BLE_PIN_CODE
+  connection_hooks.getBLEPin = []() -> uint32_t { return the_mesh.getBLEPin(); };
+#endif
   connection_hooks.getQuickReply = companionQuickReply;
   connection_hooks.setQuickReply = setCompanionQuickReply;
   connection_hooks.handleDeviceSettings = handleCompanionDeviceSettings;
@@ -1157,6 +1207,7 @@ void loop() {
   ui_task.loop();
 #endif
   rtc_clock.tick();
+  board.loop();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
 #endif
@@ -1194,14 +1245,24 @@ void loop() {
 #endif
   }
 
-#if defined(ESP32) && defined(WIFI_SSID) && \
+#if (defined(ENABLE_WIFI_INTERFACE) || defined(WIFI_SSID)) && \
     !(defined(SMARTUI_CONNECTION_SELECTOR) && SMARTUI_CONNECTION_SELECTOR)
-  // Safely attempt to reconnect every 10 seconds if flagged
-  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
+  if (wifi_enabled && wifi_ssid[0]) {
+  #if defined(RP2040_PLATFORM)
+  wifi_needs_reconnect = WiFi.status() != WL_CONNECTED;
+  wifi_was_connected = !wifi_needs_reconnect;
+  #endif
+  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > WIFI_RETRY_INTERVAL)) {
     WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
+    #if defined(RP2040_PLATFORM)
+    WiFi.setTimeout(WIFI_RETRY_TIMEOUT);
+    WiFi.beginNoBlock(wifi_ssid, wifi_pwd);
+    #else
     WiFi.disconnect();
     WiFi.reconnect();
+    #endif
     last_wifi_reconnect_attempt = millis();
+  }
   }
 #endif
 }

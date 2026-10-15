@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check deterministic allowlisted SDK packaging and the 19-asset release layout."""
+"""Check deterministic allowlisted SDK packaging and the 20-asset release layout."""
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 import hashlib
@@ -37,7 +37,7 @@ class DeveloperKitTests(unittest.TestCase):
     def test_exact_sources_checksums_manifest_and_offline_links(self):
         path = kit.package(self.root / "out", COMMIT, root=self.source)
         with zipfile.ZipFile(path) as archive:
-            expected = set(kit.SOURCES) | {"README.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"}
+            expected = set(kit.SOURCES) | {"README.md", "tools/usb-helper/README_RU.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"}
             self.assertEqual(set(archive.namelist()), expected)
             self.assertEqual(len(archive.namelist()), len(expected))
             for name in kit.SOURCES:
@@ -60,15 +60,15 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertNotIn("base_source_commit", manifest)
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
-            self.assertIn("SmartUI 0.19", readme)
-            self.assertIn("USB Helper 2.6", readme)
+            self.assertIn("SmartUI 0.20", readme)
+            self.assertIn("USB Helper 2.7", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
             self.assertIn("[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md)", readme)
             self.assertIn("docs/CLI_BOARD_MATRIX_RU.md", kit.SOURCES)
             self.assertIn("[Внешний зуммер](docs/EXTERNAL_BUZZER_RU.md)", readme)
             self.assertIn("docs/EXTERNAL_BUZZER_RU.md", kit.SOURCES)
             self.assertNotIn("LOCAL DEVELOPMENT", readme)
-            self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md"})
+            self.assertEqual({f["name"] for f in manifest["files"]}, set(kit.SOURCES) | {"README.md", "tools/usb-helper/README_RU.md"})
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
@@ -90,9 +90,9 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertNotEqual(first, other)
 
     def test_current_release_and_optional_development_names(self):
-        self.assertEqual(kit.VERSION, "0.19")
-        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.19.zip")
-        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.19-development.zip")
+        self.assertEqual(kit.VERSION, "0.20")
+        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.20.zip")
+        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.20-development.zip")
 
     def test_local_secrets_caches_and_unlisted_files_are_excluded(self):
         for name in ("tools/smartui-cli/.env", "tools/smartui-cli/node_modules/test.js",
@@ -147,7 +147,7 @@ class DeveloperKitTests(unittest.TestCase):
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 2.6", readme)
+            self.assertIn("USB Helper 2.7", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
@@ -171,7 +171,7 @@ class DeveloperKitTests(unittest.TestCase):
         secret.write_text("local fixture", encoding="utf-8")
         path = kit.package(self.root / "dev", COMMIT, root=self.source, development=True)
         with zipfile.ZipFile(path) as archive:
-            self.assertEqual(set(archive.namelist()), set(kit.SOURCES) | {"README.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"})
+            self.assertEqual(set(archive.namelist()), set(kit.SOURCES) | {"README.md", "tools/usb-helper/README_RU.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"})
             self.assertNotIn("tools/smartui-cli/.env", archive.namelist())
         (self.source / "tools/smartui-cli/smartui_cli.py").unlink()
         with self.assertRaisesRegex(ValueError, "regular nonempty"):
@@ -195,7 +195,7 @@ class DeveloperKitTests(unittest.TestCase):
         archive_path = kit.package(self.root / "dev", COMMIT, root=self.source, development=True)
         extracted = self.root / "extracted"
         with zipfile.ZipFile(archive_path) as archive:
-            expected = set(kit.SOURCES) | {"README.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"}
+            expected = set(kit.SOURCES) | {"README.md", "tools/usb-helper/README_RU.md", kit.MANIFEST_NAME, "SHA256SUMS.txt"}
             self.assertEqual(set(archive.namelist()), expected)
             archive.extractall(extracted)  # Only the just-verified generated allowlist.
         result = subprocess.run(
@@ -209,7 +209,7 @@ class DeveloperKitTests(unittest.TestCase):
         )
         self.assertEqual(javascript.returncode, 0, javascript.stdout + javascript.stderr)
 
-    def test_release_contains_19_assets_and_kit_in_manifest_and_all_boards_zip(self):
+    def test_release_contains_20_assets_and_kit_in_manifest_and_all_boards_zip(self):
         # Synthetic images only: hardware/image validators have their own tests.
         marker = b"SmartUI-source:" + COMMIT[:8].encode() + b"\0"
         files = []
@@ -223,18 +223,22 @@ class DeveloperKitTests(unittest.TestCase):
         with patch.object(release, "validate_stage"):
             result = release.package_release(self.root / "release", files, notes, COMMIT)
         output = Path(result["directory"])
-        self.assertEqual(len(result["assets"]), 19)
+        self.assertEqual(len(result["assets"]), 20)
         manifest = json.loads((output / release.MANIFEST_NAME).read_text(encoding="utf-8"))
-        self.assertEqual(manifest["asset_count"], 19)
+        self.assertEqual(manifest["asset_count"], 20)
         self.assertEqual(manifest["board_count"], 7)
-        self.assertEqual(manifest["firmware_count"], 11)
-        self.assertEqual(len(manifest["firmware"]), 11)
+        self.assertEqual(manifest["profile_count"], 8)
+        self.assertEqual(manifest["meshcore_core_version"], "1.18.0")
+        self.assertEqual(manifest["meshcore_core_commit"], "81dbae592ffad40b4212bc0b37e82b38da08f4bc")
+        self.assertEqual(manifest["powersaving_upstream_commit"], "a27e78e4da1389055b6dd16ce473112d25c8a5cd")
+        self.assertEqual(manifest["firmware_count"], 12)
+        self.assertEqual(len(manifest["firmware"]), 12)
         entry = manifest["developer_kit"]
         self.assertEqual((entry["name"], entry["source_commit"]), (kit.ZIP_NAME, COMMIT))
         self.assertEqual(entry["sha256"], release.digest(output / kit.ZIP_NAME))
         self.assertIn(kit.ZIP_NAME, {f["name"] for f in manifest["files"]})
         with zipfile.ZipFile(output / release.ARCHIVE_NAME) as archive:
-            self.assertEqual(len(archive.namelist()), 18)
+            self.assertEqual(len(archive.namelist()), 19)
             self.assertEqual(archive.read(kit.ZIP_NAME), (output / kit.ZIP_NAME).read_bytes())
 
 

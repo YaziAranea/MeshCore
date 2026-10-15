@@ -416,7 +416,7 @@ HARNESS = r'''#include <cassert>
 #include <helpers/StorageTransaction.h>
 #include <helpers/SmartUiBuildInfo.h>
 #if defined(ESP32)
-#include <helpers/esp32/SerialWifiInterface.h>
+#include <helpers/wifi/SerialWifiInterface.h>
 #include <WiFi.h>
 #endif
 
@@ -1915,6 +1915,48 @@ static void testApiConnectionControl() {
 #endif
 }
 
+static uint32_t test_pin = 456789;
+static uint32_t activePin() { return test_pin; }
+
+static void testLocalPinRead() {
+  FakeFS fs;
+  DataStore store(fs);
+  FakeTransport ble, usb;
+  MultiSerialInterface manager;
+  manager.addInterface(InterfaceType::Bluetooth, &ble);
+  manager.addInterface(InterfaceType::USB, &usb);
+  manager.enable();
+  FakeStream console;
+  ConnectionController controller;
+  auto local_hooks = hooks();
+  local_hooks.getBLEPin = activePin;
+  controller.begin(store, manager, console, nullptr, local_hooks);
+  const auto before = fs.files;
+  const auto writes = fs.write_open_count;
+  const int resets = reset_count;
+  send(controller, console, "info\nstatus\n");
+  assert(console.output.find("ble_pin=1") != std::string::npos);
+  assert(console.output.find("456789") == std::string::npos);
+  console.output.clear();
+  send(controller, console, "get pin\n");
+  assert(console.output == "BLEPin v=1 pin=456789\r\n");
+  console.output.clear();
+  quarantined = true;
+  send(controller, console, "get ble.pin\n");
+  assert(console.output == "BLEPin v=1 pin=456789\r\n");
+  quarantined = false;
+  test_pin = 0;
+  console.output.clear();
+  send(controller, console, "get pin\n");
+  assert(console.output == "ERR ble_pin unavailable\r\n");
+  test_pin = 456789;
+  assert(fs.files == before && fs.write_open_count == writes);
+  assert(reset_count == resets && controller.status().selected == CompanionMode::BLE);
+  ModeChangeFixture unsupported;
+  send(unsupported.controller, unsupported.console, "get pin\n");
+  assert(unsupported.console.output.find("ERR ble_pin unsupported\r\n") != std::string::npos);
+}
+
 int main() {
   FakeFS fs;
   DataStore store(fs);
@@ -2246,6 +2288,7 @@ int main() {
   testRecoveryConsoleAndReplies();
   testForgetFailurePrivacy();
   testInfoReadOnly();
+  testLocalPinRead();
   testDeviceSettingsConsole();
   testPhysicalUsbServiceEntry();
   testApiConnectionControl();
@@ -2334,7 +2377,7 @@ def main() -> None:
         root = Path(raw)
         example = root / "examples/companion_radio"
         helpers = root / "stubs/helpers"
-        esp_helpers = helpers / "esp32"
+        esp_helpers = helpers / "wifi"
         source_helpers = root / "src/helpers"
         example.mkdir(parents=True)
         esp_helpers.mkdir(parents=True)
