@@ -7,7 +7,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture'),{fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..');
 const output=process.env.SMARTUI_CONSOLE_UI_OUTPUT?path.resolve(process.env.SMARTUI_CONSOLE_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-console-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.8.html');
+const artifact=path.join(output,'SmartUI_USB_Helper_2.9.html');
 // Reuse the existing service wire fixture without registering its browser tests.
 const serviceFixtureSource=fs.readFileSync(path.join(__dirname,'test_ui.js'),'utf8');
 const serviceStart=serviceFixtureSource.indexOf('function installSerialMock('),serviceEnd=serviceFixtureSource.indexOf('\nasync function fixture(',serviceStart);
@@ -52,7 +52,8 @@ async function fixture(transport='api',options={}){
     };
   },{transport,settings:full.settings});
   await page.goto(pathToFileURL(artifact).href);
-  if(transport==='api')await page.locator('#helper-mode').selectOption('api');
+  await page.locator('#view-advanced').click();
+  await page.locator('#helper-mode').selectOption(transport==='api'?'api':'console');
   return {page,context,transport,async close(){await context.close();assert.deepEqual(errors,[],'Browser runtime errors');assert.deepEqual(network,[],'Offline helper made a network request');}};
 }
 async function connect(f){
@@ -221,7 +222,7 @@ test('custom macros save/reload/export/import safely, with no execution or secre
     await importFile({version:1,macros:[{id:'user:good1',name:'Импорт',description:'Только чтение',commands:['get battery']}],favorites:[]});
     await p.waitForFunction(()=>document.getElementById('macro-status').textContent.includes('Добавлено макросов: 1'));
     assert.deepEqual((await commands(p)).slice(before),[],'Save/import/export do not execute commands');
-    await p.reload();await p.locator('[data-page-target="console"]').click();await p.locator('[data-command-group="custom"]').click();
+    await p.reload();await p.locator('#view-advanced').click();await p.locator('[data-page-target="console"]').click();await p.locator('[data-command-group="custom"]').click();
     assert.equal(await p.locator('[data-action-id="user:good1"]').count(),1);
     assert.match(await p.locator('#command-leaves').textContent(),/Мой звук/);
     assert.doesNotMatch(await p.locator('#command-journal').textContent(),/654321|Secret/);

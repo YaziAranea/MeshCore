@@ -2,8 +2,12 @@
 (() => {
   const $=id=>document.getElementById(id), api=SmartUiCli, legacy=SmartUiLegacy;
   let mode='console',choosing=false,running=false,caps=null,settings=null,preview=null,wifiState=null,connectionState=null,acknowledgedLoss=false,adcService=null,adcManualSupported=false;
-  let activePage='connection',consoleLease=false;
+  let activePage='simple',viewMode='simple',advancedPage='connection',consoleLease=false;
+  let selectedTransport='auto',connectionAttempt=null,connectionMessage='',needsReconnect=false,lastSelectedPort=null;
   function renderPages(){
+    document.querySelector('main').dataset.view=viewMode;
+    $('view-simple').setAttribute('aria-pressed',String(viewMode==='simple'));
+    $('view-advanced').setAttribute('aria-pressed',String(viewMode==='advanced'));
     for(const panel of document.querySelectorAll('[data-pages]'))panel.classList.toggle('page-hidden',!panel.dataset.pages.split(' ').includes(activePage));
     for(const tab of document.querySelectorAll('[data-page-target]')){const selected=tab.dataset.pageTarget===activePage;tab.setAttribute('aria-selected',String(selected));tab.tabIndex=selected?0:-1;}
     if($('device-title'))$('device-title').textContent=activePage==='sound'?'Звук, свет и пины':'Настройки устройства';
@@ -139,14 +143,18 @@
   const available=()=>mode==='api'&&binaryState.connected&&binaryState.phase==='ready'&&!binaryState.busy&&!running&&!choosing&&!networkRunning;
   const writable=()=>available()&&binaryState.hello?.write==='1';
   function renderShell(){
+    document.querySelector('main').classList.toggle('connecting',Boolean(connectionAttempt));
     const s=mode==='api'?binaryState:legacy.getState(),busy=Boolean(s.busy||running||networkRunning||choosing||(mode==='api'&&(client.opening||client.closing||(!s.connected&&client.session))));
     $('helper-mode').disabled=Boolean(s.connected||busy);
-    $('connect').disabled=!window.isSecureContext||!navigator.serial||Boolean(s.connected||busy);
-    $('disconnect').disabled=!s.connected||choosing;
-    $('connect').textContent=choosing?'Выберите порт…':acknowledgedLoss?'Переподключить USB':'Выбрать USB-порт';
+    const recover=needsReconnect||s.connected&&(mode==='api'?s.uncertain:!s.verified);
+    $('connect').disabled=!window.isSecureContext||!navigator.serial||Boolean(busy||s.connected&&!recover);
+    $('disconnect').disabled=!s.connected&&!connectionAttempt;
+    $('disconnect').textContent=connectionAttempt?'Отменить подключение':'Отключиться';
+    $('connect').textContent=choosing?'Подключаем…':recover?'Переподключить ноду':s.connected?'Нода подключена':'Подключить ноду';
     const phases={opening:'Открываем USB-порт…',negotiating:'Проверяем локальный CLI…',ready:running||s.busy?'Выполняется операция…':'USB-компаньон подключён',uncertain:'Результат неизвестен — требуется переподключение',disconnected:'Нода не подключена'};
     $('transport-state').textContent=mode==='api'?phases[s.phase]||'Нода не подключена':s.busy?'Выполняется операция…':s.verified?'Консоль SmartUI подключена':s.connected?'Порт открыт; консоль не подтверждена':'Нода не подключена';
-    $('transport-help').textContent=s.connected?'Настройки читаются напрямую по USB. Телефон и сопряжение для настройки не нужны.':mode==='api'?'Для ноды в режиме USB-компаньона. Если режим Bluetooth, выберите «Сервисная USB-консоль (нода BLE/Wi-Fi)».':'Для ноды в режиме Bluetooth или Wi-Fi, в том числе без экрана. Подключение — USB-кабелем.';
+    if(connectionMessage)$('transport-state').textContent=connectionMessage;
+    $('transport-help').textContent=s.connected?'Настройки прочитаны по USB. Соединение можно оставить открытым.':selectedTransport==='auto'?'Подключите USB-кабель и выберите порт в окне браузера. Helper определит протокол и прочитает настройки.':mode==='api'?'Для ноды в режиме USB-компаньона.':'Для ноды в режиме Bluetooth или Wi-Fi. Подключение — USB-кабелем.';
     connectionMeta.textContent=binaryState.hello?'SmartUI '+(binaryState.hello.firmware||'—')+' · '+(binaryState.hello.write==='1'?'Изменения разрешены':'Только чтение')+(connectionState?' · Режим: '+connectionState.mode:''):'';
     for(const id of ['api-settings-load','api-sound-read','api-command-send'])$(id).disabled=!available();
     $('api-notify-test').disabled=!writable()||!settings||!['sound','vibration','board_led','unread_led'].some(key=>caps?.[key]==='1');
@@ -188,11 +196,12 @@
     renderPages();
     window.dispatchEvent(new CustomEvent('smartui-helper-state'));
   }
-  async function run(operation){
+  async function run(operation,{propagate=false}={}){
     if(running)return;running=true;renderShell();
     try{await operation();}catch(error){
       if(error?.code==='PROTOCOL'&&binaryState.connected)client.update({uncertain:true,phase:'uncertain'});
       note(error?.safe?error.message:'Операция не завершена. Сырые ответы не отображаются.','error');
+      if(propagate)throw error;
     }finally{running=false;renderShell();}
   }
   const client=new api.CliClient({
@@ -465,23 +474,54 @@
     }
   }
   async function wifiStatus(){wifiState=await rec('ui wifi status','OK ui wifi');if(!['supported','configured','associated'].every(key=>['0','1'].includes(wifiState[key]))||!(wifiState.ip==='none'||/^(?:\d{1,3}\.){3}\d{1,3}$/.test(wifiState.ip)&&wifiState.ip.split('.').every(n=>Number(n)<=255)))throw new api.CliError('PROTOCOL');const names={idle:'Нет незавершённой настройки',ssid:'Ожидает имя сети',password:'Ожидает пароль',ready:'Можно начать проверку',testing:'Проверка идёт — запросите результат через несколько секунд',test_ok:'Проверка успешна. Сеть ещё не сохранена',saved:'Сеть сохранена',cancelled:'Проверка отменена',failed:'Проверка не прошла; старые настройки сохранены',timeout:'Время проверки истекло'};$('api-wifi-state').textContent=names[wifiState.state]||'Состояние не распознано';renderShell();}
-  $('helper-mode').onchange=()=>{
-    if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing){$('helper-mode').value=mode;return;}
-    hidePin();mode=$('helper-mode').value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
+  function selectTransport(value){
+    hidePin();mode=value;workspace.hidden=mode!=='api';$('connection-section').hidden=mode==='api';connectionMeta.hidden=mode!=='api';consolePanels.forEach(el=>el.hidden=mode==='api');consoleNotices.forEach(el=>{if(el.id!=='unsupported'&&el.id!=='connection-help')el.hidden=mode==='api';});
     $('refresh').hidden=mode==='api';renderPages();renderShell();
+  }
+  $('helper-mode').onchange=()=>{
+    if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing){$('helper-mode').value=selectedTransport;return;}
+    selectedTransport=$('helper-mode').value;connectionMessage='';selectTransport(selectedTransport==='api'?'api':'console');
   };
-  const originalConnect=$('connect').onclick,originalDisconnect=$('disconnect').onclick;
+  const originalDisconnect=$('disconnect').onclick;
+  window.addEventListener('smartui-reconnect-required',()=>{needsReconnect=true;renderShell();});
   $('connect').onclick=async()=>{
-    if(mode==='console'){resetNetwork();await originalConnect();renderShell();if(networkReady()&&!legacy.getState().status?.readOnly)await networkOperation(loadNetwork);return;}
-    if(legacy.getState().connected||legacy.getState().busy||binaryState.connected||binaryState.busy||client.session||client.opening||client.closing||running||choosing)return;
-    choosing=true;renderShell();
-    try{const port=await navigator.serial.requestPort();choosing=false;await run(async()=>{
+    const s=mode==='api'?binaryState:legacy.getState();
+    const recover=needsReconnect||s.connected&&(mode==='api'?s.uncertain:!s.verified);
+    if(legacy.getState().busy||binaryState.busy||client.opening||client.closing||running||networkRunning||choosing||!recover&&(legacy.getState().connected||binaryState.connected||client.session))return;
+    const selection=viewMode==='simple'?'auto':selectedTransport;
+    const attempt=new AbortController();connectionAttempt=attempt;choosing=true;connectionMessage='Выберите USB-порт в окне браузера…';renderShell();
+    let adopted=null,handedOff=false;
+    try{
+      const reusable=recover?lastSelectedPort:null;
+      if(recover){if(mode==='console')await legacy.client.disconnect();else await client.disconnect();resetNetwork();}
+      needsReconnect=false;
+      if(attempt.signal.aborted)return;
+      const selected=reusable||await navigator.serial.requestPort();lastSelectedPort=selected;
+      if(attempt.signal.aborted)return;
+      let port=selected;
+      if(selection==='auto'){
+        const detected=await SmartUiAutoConnect.detect(selected,{signal:attempt.signal,onProgress:()=>{connectionMessage='Определяем подключение ноды…';renderShell();}});
+        adopted=port=detected.port;
+        if(attempt.signal.aborted)return;
+        selectTransport(detected.transport==='companion'?'api':'console');
+      }else selectTransport(selection);
+      connectionMessage='Читаем настройки ноды…';renderShell();handedOff=true;
+      if(mode==='console'){
+        resetNetwork();await legacy.client.connect(port);choosing=false;
+        if(!attempt.signal.aborted&&networkReady()&&!legacy.getState().status?.readOnly)await networkOperation(loadNetwork);
+      }else await run(async()=>{
       resetNetwork();await client.connect(port);acknowledgedLoss=false;settings=null;caps=null;settingEdits.clear();melodyNames.clear();wifiState=null;note('Локальный CLI подключён. Читаем настройки; сообщения не запрашиваются.');
       connectionState=await rec('ui connection','OK ui connection');if(!['ble','usb','wifi'].includes(connectionState.mode)||!['none','ble','usb','wifi'].includes(connectionState.client)||!['0','1'].includes(connectionState.write))throw new api.CliError('PROTOCOL');numeric(connectionState.caps,7);await wifiStatus();await loadSettings();await loadNetwork();note('Настройки прочитаны. Изменения сохраняются отдельно.');
-    });}catch(error){note(error.name==='NotFoundError'?'Порт не выбран.':error.safe?error.message:'Не удалось открыть порт. Проверьте разрешения браузера.','warning');}
-    finally{choosing=false;renderShell();}
+      },{propagate:true});
+      connectionMessage=attempt.signal.aborted?'Подключение отменено.':'';
+    }catch(error){
+      if(handedOff)try{if(mode==='console')await legacy.client.disconnect();else await client.disconnect();}catch(_){}
+      connectionMessage=attempt.signal.aborted?'Подключение отменено.':error.name==='NotFoundError'?'Порт не выбран. Нажмите «Подключить ноду», чтобы повторить.':error.safe?error.message:'Не удалось открыть порт. Закройте другие программы и проверьте USB-кабель.';note(connectionMessage,'warning');
+    }
+    finally{if(adopted&&!handedOff)try{await adopted.close();}catch(_){}if(attempt.signal.aborted)connectionMessage='Подключение отменено.';if(connectionAttempt===attempt)connectionAttempt=null;choosing=false;renderShell();}
   };
-  $('disconnect').onclick=async()=>{if(mode==='console')await originalDisconnect();else{if(adcService?.active&&available())try{await readAdcService('stop');}catch(_){}await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}resetNetwork();renderShell();};
+  $('disconnect').onclick=async()=>{connectionAttempt?.abort();connectionMessage='';needsReconnect=false;if(mode==='console')await originalDisconnect();else{if(adcService?.active&&available())try{await readAdcService('stop');}catch(_){}await client.disconnect();note('Отключено. Для продолжения подключите порт заново.');}resetNetwork();renderShell();};
+  window.addEventListener('beforeunload',()=>connectionAttempt?.abort());
   window.addEventListener('smartui-console-state',()=>{if(mode==='console')renderShell();});
 
 
@@ -606,6 +646,7 @@
       write:binary?binaryState.hello?.write==='1':!s.status?.readOnly,
       control:binary?binaryState.hello?.control==='1':true,compact:binary?binaryState.hello?.console==='1':true,meshcore:binary?binaryState.hello?.meshcore==='1':true,ranges:{tx:txState},
       caps:currentCaps,schemas:currentSchemas,settings:binary?settings:s.deviceSettings,
+      melodyNames:binary?Object.fromEntries(melodyNames):legacy.getMelodyNames(),name:identityState?.name,
       firmware:binary?binaryState.hello?.firmware:s.info?.firmware,board:binary?identityState?.name:s.info?.board};
   }
   function consoleServiceReply(step,reply){
@@ -625,6 +666,10 @@
   }
   window.SmartUiConsoleBridge={
     getContext:consoleContext,confirm:legacy.confirmAction,
+    clearSettingDraft(key){
+      if(mode==='console')legacy.clearSettingDraft(key);
+      else{settingEdits.delete(key);const field=$('api-setting-'+key);if(field&&settings?.[key]!==undefined){field.value=String(settings[key]);field.onchange();}}
+    },
     acquire(session){const current=consoleContext();if(current.busy||!current.connected||session!==current.session)throw new api.CliError('BUSY');consoleLease=true;running=true;legacy.setExternalBusy(true);renderShell();},
     async release(){consoleLease=false;running=false;legacy.setExternalBusy(false);renderShell();},
     async execute(step){
@@ -652,20 +697,22 @@
           if(typeof step.expectedValue==='string'){if(readback!=='> '+step.expectedValue)throw new api.CliError('PROTOCOL');}
           else if(step.expectedValue!==undefined){const match=/^> (-?\d+(?:\.\d+)?)$/.exec(readback);if(!match||Math.abs(Number(match[1])-step.expectedValue)>0.000002)throw new api.CliError('PROTOCOL');}
         }
-        if(step.mutates){await loadSettings();if(step.kind==='tx'){txState=await readCore('tx');if(radioState){radioState={...radioState,tx_dbm:txState.value};showNetworkState();}showCore();}if(step.kind==='identity'){identityState=await readCore('identity');showCore();}if(step.kind==='advert'){advertState=await readNetwork('advert');showNetworkState();}}
+        if(step.mutates){await loadSettings({savedKey:step.schemaKey});if(step.schemaKey&&Number(settings?.[step.schemaKey])!==step.expectedValue)throw new api.CliError('PROTOCOL');if(step.kind==='tx'){txState=await readCore('tx');if(radioState){radioState={...radioState,tx_dbm:txState.value};showNetworkState();}showCore();}if(step.kind==='identity'){identityState=await readCore('identity');showCore();}if(step.kind==='advert'){advertState=await readNetwork('advert');showNetworkState();}}
         return {reply,readback,verified:Boolean(step.mutates&&step.readback)};
       }catch(error){if((acknowledged||error?.code==='PROTOCOL')&&binaryState.connected)client.update({uncertain:true,phase:'uncertain'});throw error;}
     },
     navigate(destination){
       if(consoleLease)return;
       const pages={pin:'connection',connection:'connection',wifi:'wifi',adc:'device',pins:'sound',profile:'device',radio:'radio'};
-      hidePin();activePage=pages[destination]||'connection';renderPages();
+      hidePin();viewMode='advanced';activePage=advancedPage=pages[destination]||'connection';renderPages();
       const target=destination==='adc'?$(mode==='api'?'api-adc':'adc-fields'):destination==='pin'?$('node-pin-show'):null;
       if(target){const details=target.tagName==='DETAILS'?target:target.closest('details');if(details)details.open=true;target.scrollIntoView({block:'center',behavior:'smooth'});if(target.tagName==='BUTTON')target.focus();}
     }
   };
+  $('view-simple').onclick=()=>{hidePin();viewMode='simple';activePage='simple';renderPages();renderShell();};
+  $('view-advanced').onclick=()=>{hidePin();viewMode='advanced';activePage=advancedPage;renderPages();renderShell();};
   const tabs=[...document.querySelectorAll('[data-page-target]')];
-  for(const tab of tabs){tab.onclick=()=>{hidePin();activePage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
+  for(const tab of tabs){tab.onclick=()=>{hidePin();viewMode='advanced';activePage=advancedPage=tab.dataset.pageTarget;renderPages();};tab.onkeydown=event=>{let index=tabs.indexOf(tab);if(event.key==='ArrowRight'||event.key==='ArrowDown')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft'||event.key==='ArrowUp')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();tabs[index].click();tabs[index].focus();};}
   renderPages();
   renderShell();
 })();

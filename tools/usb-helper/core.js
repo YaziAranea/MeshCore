@@ -963,7 +963,8 @@
           if(kind==='set'){
             // Notification channels, GPS source and mute affect other fields.
             // Refresh the same authoritative cache used by the dedicated forms.
-            await this._loadDeviceSettings(session);
+            const snapshot=await this._loadDeviceSettings(session);
+            if(Object.hasOwn(snapshot,key)&&snapshot[key]!==value)throw failure('PROTOCOL');
             const after=await this._consoleRead(session,'settings get '+key,{kind:'get',key});
             if(after.value!==value)throw failure('PROTOCOL');
           }else if(kind==='tx_set'){

@@ -1316,8 +1316,8 @@ test('public service night quiet is opt-in, refreshes mute and reports unset clo
 });
 
 test('public service writes stop after lost ACK or contradictory readback, without retry',async()=>{
-  for(const mode of ['lost-ack','wrong-ack','wrong-readback','readback-error']){
-    let sent=false;
+  for(const mode of ['lost-ack','wrong-ack','wrong-readback','readback-error','inconsistent-snapshot']){
+    let sent=false,reads=0;
     const f=await connected({settings:true,schemas:{},onCommand(command,port){
       if(command==='settings set volume 3'){
         sent=true;port.settingsState.volume=mode==='wrong-readback'?4:3;
@@ -1325,6 +1325,7 @@ test('public service writes stop after lost ACK or contradictory readback, witho
         return false;
       }
       if(sent&&mode==='readback-error'&&command==='settings caps'){port.reply('ERR settings busy');return false;}
+      if(sent&&mode==='inconsistent-snapshot'&&command==='settings get volume'&&++reads===1){port.reply('OK settings get key=volume value=4');return false;}
     }});
     try{
       await assert.rejects(f.instance.executeConsoleCommand('settings set volume 3'),code('SETTINGS_UNCERTAIN'),mode);

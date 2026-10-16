@@ -16,7 +16,7 @@ function installApiMock(options={}) {
     handle(request){
       if(options.optionalTone){const enabled=Number(this.settings.tone_pin>=0);Object.assign(this.caps,{sound:enabled,sound_preview:enabled,melody_max:enabled?2:0});}
       this.packets.push(Array.from(request));
-      if(request[0]===22){this.emit(Uint8Array.of(13,options.meshcore?14:13));return;}
+      if(request[0]===22){const info=new Uint8Array(82);info[0]=13;info[1]=options.meshcore?14:13;this.emit(info);return;}
       if(request[0]===40){this.emit(Uint8Array.from([21,...enc.encode(options.discovery??(options.oldFirmware?'smartui_api:1':'smartui_cli:1'))]));return;}
       if(request[0]!==66)throw new Error('Unexpected protocol opcode');
       const raw=new TextDecoder().decode(request.slice(1)),tag=raw.slice(0,2),original=raw.slice(3);let cmd=original;this.commands.push(cmd);

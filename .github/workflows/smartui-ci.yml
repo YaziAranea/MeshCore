@@ -557,7 +557,7 @@ jobs:
           node --test tools/usb-helper/test_firmware.js
           node --test tools/usb-helper/test_api.js
           node --test tools/usb-helper/test_presets.js
-          node --test tools/usb-helper/test_console_catalog.js tools/usb-helper/test_console_runner.js
+          node --test tools/usb-helper/test_console_catalog.js tools/usb-helper/test_console_runner.js tools/usb-helper/test_auto_connect.js tools/usb-helper/test_autosave.js
           python tools/test_usb_helper_package.py
           python tools/test_smartui_helper_update.py
           python tools/test_prune_superseded_helper_assets.py
@@ -578,6 +578,8 @@ jobs:
           node --test tools/usb-helper/test_ui.js
           node --test tools/usb-helper/test_api_ui.js
           node --test tools/usb-helper/test_console_ui.js
+          node --test tools/usb-helper/test_simple_ui.js
+          node --test tools/usb-helper/test_auto_connect_ui.js
 
       - name: Check active compose sessions and shared-display real-font quick replies
         run: |

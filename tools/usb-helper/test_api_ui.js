@@ -5,7 +5,7 @@ const {spawnSync}=require('node:child_process'),{pathToFileURL}=require('node:ur
 const {installApiMock}=require('./test_api_fixture');
 const {fullSettingsFixture}=require('./test_full_settings_fixture');
 const root=path.resolve(__dirname,'../..'),output=process.env.SMARTUI_API_UI_OUTPUT?path.resolve(process.env.SMARTUI_API_UI_OUTPUT):fs.mkdtempSync(path.join(os.tmpdir(),'smartui-api-ui-'));
-const artifact=path.join(output,'SmartUI_USB_Helper_2.8.html');let browser;
+const artifact=path.join(output,'SmartUI_USB_Helper_2.9.html');let browser;
 test.before(async()=>{
   const p=spawnSync(process.env.PYTHON||'python',[path.join(root,'tools/package_usb_helper.py'),output],{encoding:'utf8',windowsHide:true});assert.equal(p.status,0,p.stderr);
   const executablePath=[process.env.CHROME_PATH,'C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe','/usr/bin/google-chrome','/usr/bin/chromium'].filter(Boolean).find(p=>fs.existsSync(p));
@@ -16,7 +16,7 @@ async function fixture(options={}){
   const context=await browser.newContext({viewport:{width:1440,height:1080},locale:'ru-RU'}),page=await context.newPage(),errors=[],network=[];
   page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/^https?:/.test(r.url()))network.push(r.url());});
   if(options.clock)await page.clock.install({time:new Date('2026-01-01T12:00:00Z')});
-  await page.addInitScript(installApiMock,options);await page.goto(pathToFileURL(artifact).href);await page.locator('#helper-mode').selectOption('api');
+  await page.addInitScript(installApiMock,options);await page.goto(pathToFileURL(artifact).href);await page.locator('#view-advanced').click();await page.locator('#helper-mode').selectOption('api');
   return {page,async close(){await context.close();assert.deepEqual(errors,[]);assert.deepEqual(network,[]);}};
 }
 async function connect(page){await page.locator('#connect').click();await page.waitForFunction(()=>document.getElementById('api-settings-status').textContent==='Прочитано с ноды'&&!document.getElementById('api-settings-load').disabled);await tab(page,'device');}

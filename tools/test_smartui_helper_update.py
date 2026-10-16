@@ -31,8 +31,13 @@ class HelperUpdateTests(unittest.TestCase):
         self.manifest = {"schema_version": 2, "version": "0.20", "tag": "smartui-0.20",
                          "commit": update.FIRMWARE_SHA, "board_count": 7, "profile_count": 8,
                          "firmware_count": 12, "asset_count": 20, "firmware": firmware,
-                         "developer_kit": {"source_commit": update.FIRMWARE_SHA},
+                         "developer_kit": {"source_commit": update.BASE_HELPER_SHA, "firmware_source_commit": update.FIRMWARE_SHA},
                          "files": [update.release.record(path) for path in sorted(self.base.iterdir())]}
+        entries = {x["name"]: x for x in self.manifest["files"]}
+        self.manifest.update(helper_version=update.BASE_HELPER_VERSION, helper_source_commit=update.BASE_HELPER_SHA,
+                             documentation_source_commit=update.BASE_HELPER_SHA, firmware_source_commit=update.FIRMWARE_SHA,
+                             helper={"version": update.BASE_HELPER_VERSION, "source_commit": update.BASE_HELPER_SHA,
+                                     "html": entries["SmartUI_USB_Helper_2.8.html"], "zip": entries["SmartUI_USB_Helper_2.8.zip"]})
         (self.base / update.release.MANIFEST_NAME).write_text(json.dumps(self.manifest), encoding="utf-8")
         update.make_archive(self.base / update.release.ARCHIVE_NAME, list(self.base.iterdir()))
         self.pins = patch.multiple(update,
@@ -56,7 +61,7 @@ class HelperUpdateTests(unittest.TestCase):
         return path
 
     def prepare(self, output):
-        (self.root / update.release.NOTES_NAME).write_text("SmartUI 0.20 Helper 2.8 update\n", encoding="utf-8")
+        (self.root / update.release.NOTES_NAME).write_text("SmartUI 0.20 Helper 2.9 update\n", encoding="utf-8")
         with patch.object(update, "ROOT", self.root), \
              patch.object(update, "resolve_helper_commit", return_value=HELPER_SHA), \
              patch.object(update.helper, "package", side_effect=self.fake_helper), \
@@ -84,7 +89,7 @@ class HelperUpdateTests(unittest.TestCase):
         self.assertEqual(manifest["firmware_source_commit"], update.FIRMWARE_SHA)
         self.assertEqual(manifest["helper_source_commit"], HELPER_SHA)
         self.assertEqual(manifest["documentation_source_commit"], HELPER_SHA)
-        self.assertEqual(manifest["helper"], {"version": "2.8", "source_commit": HELPER_SHA,
+        self.assertEqual(manifest["helper"], {"version": "2.9", "source_commit": HELPER_SHA,
             "html": update.release.record(output / update.helper.HTML_NAME),
             "zip": update.release.record(output / update.helper.ZIP_NAME)})
         self.assertEqual(manifest["developer_kit"]["source_commit"], HELPER_SHA)
@@ -105,7 +110,7 @@ class HelperUpdateTests(unittest.TestCase):
             self.prepare(a)
 
     def test_rejects_tampered_base_firmware_checksums_and_helper(self):
-        for name in (next(iter(update.release.FIRMWARE_NAMES)), "SHA256SUMS.txt", "SmartUI_USB_Helper_2.7.html"):
+        for name in (next(iter(update.release.FIRMWARE_NAMES)), "SHA256SUMS.txt", "SmartUI_USB_Helper_2.8.html"):
             original = (self.base / name).read_bytes()
             (self.base / name).write_bytes(original + b"tampered")
             with self.subTest(name=name), self.assertRaisesRegex(ValueError, "Base asset mismatch"):
@@ -118,19 +123,31 @@ class HelperUpdateTests(unittest.TestCase):
         altered = deepcopy(self.manifest)
         altered["commit"] = HELPER_SHA
         path.write_text(json.dumps(altered), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "original public.*manifest"):
+        with self.assertRaisesRegex(ValueError, "pinned public.*manifest"):
             update.validate_base(self.base)
 
     def test_rejects_modified_base_archive_and_extra_file(self):
         path = self.base / update.release.ARCHIVE_NAME
         original = path.read_bytes()
         path.write_bytes(original + b"trailer")
-        with self.assertRaisesRegex(ValueError, "original public.*archive"):
+        with self.assertRaisesRegex(ValueError, "pinned public.*archive"):
             update.validate_base(self.base)
         path.write_bytes(original)
         (self.base / "unexpected.txt").write_bytes(b"x")
         with self.assertRaisesRegex(ValueError, "Asset set mismatch"):
             update.validate_base(self.base)
+
+    def test_rejects_regressed_or_mixed_base_helper_provenance(self):
+        for field, wrong in (("helper_version", "2.7"), ("helper_source_commit", HELPER_SHA),
+                             ("firmware_source_commit", HELPER_SHA), ("documentation_source_commit", HELPER_SHA)):
+            manifest = deepcopy(self.manifest)
+            manifest[field] = wrong
+            path = self.base / update.release.MANIFEST_NAME
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            # Even a newly trusted root must have a consistent prior Helper source.
+            with patch.object(update, "BASE_MANIFEST_SHA256", update.release.digest(path)):
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "base Helper identity"):
+                    update.validate_base(self.base)
 
     def test_rejects_output_inside_immutable_base(self):
         with self.assertRaisesRegex(ValueError, "inside the immutable"):
@@ -166,7 +183,7 @@ class ActualGitSourceGuardTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "-qm", "helper fixture")
         self.head = self.git("rev-parse", "HEAD").strip().decode()
-        self.pin = patch.object(update, "FIRMWARE_SHA", self.base)
+        self.pin = patch.multiple(update, FIRMWARE_SHA=self.base, BASE_HELPER_SHA=self.base)
         self.pin.start()
         self.addCleanup(self.pin.stop)
 
@@ -195,6 +212,16 @@ class ActualGitSourceGuardTests(unittest.TestCase):
             update.resolve_helper_commit(root=self.root)
         override.unlink()
         self.assertEqual(update.resolve_helper_commit(root=self.root), self.head)
+
+    def test_rejects_reusing_the_previous_helper_source(self):
+        with patch.object(update, "BASE_HELPER_SHA", self.head):
+            with self.assertRaisesRegex(ValueError, "new full source commit"):
+                update.resolve_helper_commit(root=self.root)
+
+    def test_requires_descending_from_the_published_helper(self):
+        with patch.object(update, "BASE_HELPER_SHA", "f" * 40):
+            with self.assertRaises(subprocess.CalledProcessError):
+                update.resolve_helper_commit(root=self.root)
 
     def test_rejects_actual_firmware_source_change(self):
         source = self.root / "src/main.cpp"

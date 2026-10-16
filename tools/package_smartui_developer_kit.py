@@ -15,6 +15,7 @@ SOURCES = (
     "LICENSE",
     "docs/SMARTUI_CLI_RU.md",
     "docs/HELPER_CONSOLE_RU.md",
+    "docs/HELPER_SIMPLE_RU.md",
     "docs/CONSOLE_COMMANDS_RU.md",
     "docs/CLI_BOARD_MATRIX_RU.md",
     "docs/EXTERNAL_BUZZER_RU.md",
@@ -42,10 +43,17 @@ SOURCES = (
     "tools/smartui-cli/tests/test_smartui_cli.py",
     "tools/usb-helper/api.js",
     "tools/usb-helper/core.js",
+    "tools/usb-helper/auto_connect.js",
+    "tools/usb-helper/autosave.js",
+    "tools/usb-helper/test_auto_connect.js",
+    "tools/usb-helper/test_autosave.js",
+    "tools/usb-helper/simple.js",
     "tools/usb-helper/console_catalog.js",
     "tools/usb-helper/console_runner.js",
     "tools/usb-helper/test_console_catalog.js",
     "tools/usb-helper/test_console_runner.js",
+    "tools/usb-helper/screenshots/simple-desktop.png",
+    "tools/usb-helper/screenshots/simple-mobile.png",
     "tools/usb-helper/screenshots/command-tree-desktop.png",
     "tools/usb-helper/screenshots/command-tree-mobile.png",
     "tools/usb-helper/test_api.js",
@@ -88,8 +96,9 @@ def package(output, commit, *, root=ROOT, development=False, firmware_commit=Non
             raise ValueError(f"Developer kit source must be a regular nonempty file: {name}")
         payloads[name] = source.read_bytes()
     payloads["tools/usb-helper/README_RU.md"] = (
-        "# USB Helper 2.8\n\n"
+        "# USB Helper 2.9\n\n"
         "[Локальные команды и подключение](../../docs/SMARTUI_CLI_RU.md).\n\n"
+        "[Простое управление](../../docs/HELPER_SIMPLE_RU.md).\n\n"
         "[Дерево команд и макросы](../../docs/HELPER_CONSOLE_RU.md).\n\n"
         "Отдельный offline HTML и полная инструкция находятся в "
         "[USB Helper из выпуска SmartUI 0.20](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.20).\n"
@@ -106,10 +115,11 @@ def package(output, commit, *, root=ROOT, development=False, firmware_commit=Non
         "Packaging does not change the firmware version. No hardware verification is claimed.\n\n"
         if development else ""
     )
-    helper = "USB Helper 2.8"
+    helper = "USB Helper 2.9"
     payloads["README.md"] = (
         title + notice +
         "[Локальный CLI: инструкция](docs/SMARTUI_CLI_RU.md) · "
+        "[Простое управление](docs/HELPER_SIMPLE_RU.md) · "
         "[Дерево команд и макросы](docs/HELPER_CONSOLE_RU.md) · "
         "[Справочник команд](docs/CONSOLE_COMMANDS_RU.md) · "
         "[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md) · "
@@ -137,7 +147,7 @@ def package(output, commit, *, root=ROOT, development=False, firmware_commit=Non
         }
     if firmware_commit is not None:
         manifest.update(firmware_source_commit=firmware_commit, helper_source_commit=commit,
-                        documentation_source_commit=commit, helper_version="2.8")
+                        documentation_source_commit=commit, helper_version="2.9")
     manifest.update(transport="companion-cli", command=66, response=29,
                     companion_protocol_version=14, local_only=True, sync=False, events=False)
     manifest["files"] = [{"name": name, "bytes": len(raw), "sha256": digest(raw)}

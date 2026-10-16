@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare Helper 2.8 for the existing SmartUI 0.20 release, without publishing.
+"""Prepare Helper 2.9 for the existing SmartUI 0.20 release, without publishing.
 
 The original twelve firmware files, their checksum files and their source SHA
 remain unchanged. Only six assets are replaced. This deliberately does not use
 the firmware publication workflow, move a tag, build firmware or call GitHub.
-The base bundle must be the exact original public 0.20 bundle, already downloaded
+The base bundle must be the exact current public Helper 2.8 / SmartUI 0.20 bundle, already downloaded
 and verified by the release operator. Output is a new complete twenty-file
 bundle; the JSON result identifies the six files eligible for upload.
 """
@@ -26,11 +26,14 @@ import package_usb_helper as helper
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE_SHA = "b3be1cc01d229cb75d48fe206fadde48a0e25b3f"
-BASE_MANIFEST_SHA256 = "96e5b6154f32363aea45cdcc9c96e469ac8142e960d8d7ba1f93e95b3747a699"
-BASE_ARCHIVE_SHA256 = "864a7b32055e0af50ca7fe250bdaad95fcdba24da6a305c9fac8ada747d6004e"
+BASE_MANIFEST_SHA256 = "c096363d660c8dabe2855f005dbc24b97b78a4c53e7019e4f64a931823bec7f1"
+BASE_ARCHIVE_SHA256 = "f96f93340f9d70567a850f6290c413c8f68e5f17cd4b1a443c846467c686862e"
+BASE_HELPER_SHA = "93a7bca300e57343e1871df3b573538561ce67da"
+BASE_HELPER_VERSION = "2.8"
+HELPER_VERSION = "2.9"
 RELEASE_ID = 414030602
-OLD_HELPER = {"SmartUI_USB_Helper_2.7.html", "SmartUI_USB_Helper_2.7.zip"}
-NEW_HELPER = {"SmartUI_USB_Helper_2.8.html", "SmartUI_USB_Helper_2.8.zip"}
+OLD_HELPER = {"SmartUI_USB_Helper_2.8.html", "SmartUI_USB_Helper_2.8.zip"}
+NEW_HELPER = {"SmartUI_USB_Helper_2.9.html", "SmartUI_USB_Helper_2.9.zip"}
 CHECKSUMS = {"SHA256SUMS.txt", "SHA256SUMS-ESP32.txt"}
 UNCHANGED = set(release.FIRMWARE_NAMES) | CHECKSUMS
 CHANGED = NEW_HELPER | {developer_kit.ZIP_NAME, release.ARCHIVE_NAME,
@@ -59,9 +62,9 @@ def validate_base(folder: Path) -> dict:
     """Verify immutable roots of trust before trusting any supplied metadata."""
     files = regular_files(folder, OLD_ASSETS)
     release.require(release.digest(files[release.MANIFEST_NAME]) == BASE_MANIFEST_SHA256,
-                    "Base manifest is not the original public SmartUI 0.20 manifest")
+                    "Base manifest is not the pinned public Helper 2.8 / SmartUI 0.20 manifest")
     release.require(release.digest(files[release.ARCHIVE_NAME]) == BASE_ARCHIVE_SHA256,
-                    "Base all-boards archive is not the original public SmartUI 0.20 archive")
+                    "Base all-boards archive is not the pinned public Helper 2.8 / SmartUI 0.20 archive")
     manifest = json.loads(files[release.MANIFEST_NAME].read_text(encoding="utf-8"))
     release.require((manifest["schema_version"], manifest["version"], manifest["tag"], manifest["commit"])
                     == (2, "0.20", "smartui-0.20", FIRMWARE_SHA), "Unexpected base firmware identity")
@@ -71,6 +74,15 @@ def validate_base(folder: Path) -> dict:
     entries = records(manifest["files"], "base manifest")
     release.require(set(entries) == OLD_ASSETS - {release.MANIFEST_NAME, release.ARCHIVE_NAME},
                     "Base manifest must cover all eighteen non-recursive payloads")
+    release.require(manifest["helper_version"] == BASE_HELPER_VERSION and
+                    manifest["helper_source_commit"] == manifest["documentation_source_commit"] == BASE_HELPER_SHA and
+                    manifest["firmware_source_commit"] == FIRMWARE_SHA, "Unexpected base Helper identity")
+    release.require(manifest["helper"] == {"version": BASE_HELPER_VERSION, "source_commit": BASE_HELPER_SHA,
+                    "html": entries["SmartUI_USB_Helper_2.8.html"],
+                    "zip": entries["SmartUI_USB_Helper_2.8.zip"]}, "Base Helper provenance mismatch")
+    release.require(manifest["developer_kit"]["source_commit"] == BASE_HELPER_SHA and
+                    manifest["developer_kit"]["firmware_source_commit"] == FIRMWARE_SHA,
+                    "Base SDK provenance mismatch")
     for name, entry in entries.items():
         release.require(entry["bytes"] == files[name].stat().st_size and
                         entry["sha256"] == release.digest(files[name]), "Base asset mismatch: " + name)
@@ -89,11 +101,12 @@ def validate_base(folder: Path) -> dict:
 def resolve_helper_commit(explicit: str | None = None, *, root: Path = ROOT) -> str:
     root = Path(root)
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root).decode("ascii").strip()
-    release.require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None and commit != FIRMWARE_SHA,
+    release.require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None and commit not in {FIRMWARE_SHA, BASE_HELPER_SHA},
                     "Helper update requires a new full source commit")
     release.require(explicit is None or explicit == commit, "Helper commit differs from checkout HEAD")
     release.require_clean_checkout(root)
     subprocess.run(["git", "merge-base", "--is-ancestor", FIRMWARE_SHA, commit], cwd=root, check=True)
+    subprocess.run(["git", "merge-base", "--is-ancestor", BASE_HELPER_SHA, commit], cwd=root, check=True)
     # A helper-only update must not silently include firmware changes. The
     # actual images are additionally pinned and compared byte for byte below.
     changed = subprocess.check_output(
@@ -124,12 +137,12 @@ def prepare_update(base: Path, output: Path, explicit_commit: str | None = None)
     commit = resolve_helper_commit(explicit_commit)
     original = validate_base(base)
     release.require({helper.HTML_NAME, helper.ZIP_NAME} == NEW_HELPER,
-                    "This updater requires exactly Helper 2.8")
+                    "This updater requires exactly Helper 2.9")
     release.require(developer_kit.VERSION == release.VERSION == "0.20" and release.TAG == "smartui-0.20",
                     "Firmware version/tag must stay SmartUI 0.20")
     notes = ROOT / release.NOTES_NAME
     release.validate_release_notes(notes.read_text(encoding="utf-8"))
-    with tempfile.TemporaryDirectory(prefix="smartui-helper28-update-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="smartui-helper29-update-") as temporary:
         stage = Path(temporary)
         for name in sorted(UNCHANGED):
             shutil.copy2(base / name, stage / name)
@@ -138,8 +151,8 @@ def prepare_update(base: Path, output: Path, explicit_commit: str | None = None)
         kit = developer_kit.package(stage, commit, firmware_commit=FIRMWARE_SHA)
         manifest = deepcopy(original)
         manifest.update(firmware_source_commit=FIRMWARE_SHA, helper_source_commit=commit,
-                        documentation_source_commit=commit, helper_version="2.8")
-        manifest["helper"] = {"version": "2.8", "source_commit": commit,
+                        documentation_source_commit=commit, helper_version=HELPER_VERSION)
+        manifest["helper"] = {"version": HELPER_VERSION, "source_commit": commit,
                               "html": release.record(html), "zip": release.record(helper_zip)}
         manifest["developer_kit"] = release.record(
             kit, source_commit=commit, firmware_source_commit=FIRMWARE_SHA,
@@ -167,7 +180,7 @@ def prepare_update(base: Path, output: Path, explicit_commit: str | None = None)
     return {
         "directory": str(output), "tag": release.TAG, "release_id": RELEASE_ID,
         "firmware_source_commit": FIRMWARE_SHA, "helper_source_commit": commit,
-        "helper_version": "2.8", "tag_and_target_commitish_must_remain": FIRMWARE_SHA,
+        "helper_version": HELPER_VERSION, "tag_and_target_commitish_must_remain": FIRMWARE_SHA,
         "upload_only": [release.record(output / name) for name in sorted(CHANGED)],
         "preserve_existing_asset_ids": sorted(UNCHANGED),
         "remove_only_after_replacements_verified": sorted(OLD_HELPER),
@@ -177,7 +190,7 @@ def prepare_update(base: Path, output: Path, explicit_commit: str | None = None)
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("base", type=Path, help="downloaded original public twenty-asset 0.20 bundle")
+    parser.add_argument("base", type=Path, help="verified current public twenty-asset Helper 2.8 / SmartUI 0.20 bundle")
     parser.add_argument("output", type=Path, help="new output directory; never overwrite existing assets")
     parser.add_argument("--commit", help="must equal the clean Helper checkout HEAD")
     args = parser.parse_args(argv)

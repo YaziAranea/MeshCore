@@ -41,8 +41,8 @@ class HelperPackageTests(unittest.TestCase):
         # definitions/favorites. Transport code and session logs do not persist.
         for name in ("core.js", "api.js", "app.js", "dashboard.js", "console_runner.js"):
             self.assertNotIn("localStorage", (helper.SOURCE / name).read_text(encoding="utf-8"), name)
-        self.assertIn("Помощник 2.8", html)
-        self.assertIn("Помощник 2.8 · MeshCore", html)
+        self.assertIn("Помощник 2.9", html)
+        self.assertIn("Помощник 2.9 · MeshCore", html)
         self.assertIn("SmartUiPresets", html)
         self.assertIn('id="preset-city"', html)
         self.assertIn('id="advert-interval"', html)
@@ -50,8 +50,8 @@ class HelperPackageTests(unittest.TestCase):
         self.assertIn('id="info-firmware"', html)
         self.assertIn('id="info-board"', html)
         self.assertIn("120 секунд", html)
-        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.8.html")
-        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.8.zip")
+        self.assertEqual(helper.HTML_NAME, "SmartUI_USB_Helper_2.9.html")
+        self.assertEqual(helper.ZIP_NAME, "SmartUI_USB_Helper_2.9.zip")
         self.assertIn("class CliClient", html)
         self.assertIn('id="helper-mode"', html)
         self.assertNotIn('id="api-inbox"', html)
@@ -73,7 +73,7 @@ class HelperPackageTests(unittest.TestCase):
                 self.assertIsNone(archive.testzip())
                 self.assertEqual(set(archive.namelist()), {
                     helper.HTML_NAME, "README_RU.md", "PRESETS_SOURCE_RU.md", "LICENSE", "SHA256SUMS.txt",
-                    "docs/CONSOLE_COMMANDS_RU.md", "docs/HELPER_CONSOLE_RU.md",
+                    "docs/CONSOLE_COMMANDS_RU.md", "docs/HELPER_CONSOLE_RU.md", "docs/HELPER_SIMPLE_RU.md",
                     "docs/CLI_BOARD_MATRIX_RU.md",
                     "docs/EXTERNAL_BUZZER_RU.md",
                     "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
@@ -93,13 +93,15 @@ class HelperPackageTests(unittest.TestCase):
                 "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png",
                 "screenshots/console-desktop.png", "screenshots/console-mobile.png",
                 "screenshots/headless-desktop.png", "screenshots/headless-mobile.png",
-                "screenshots/command-tree-desktop.png", "screenshots/command-tree-mobile.png"})
+                "screenshots/command-tree-desktop.png", "screenshots/command-tree-mobile.png",
+                "screenshots/simple-desktop.png", "screenshots/simple-mobile.png"})
                 self.assertEqual(archive.read(helper.HTML_NAME), first[0].read_bytes())
                 self.assertEqual(archive.read("docs/CONSOLE_COMMANDS_RU.md"),
                                  (helper.ROOT / "docs/CONSOLE_COMMANDS_RU.md").read_bytes())
-                console_doc = (helper.ROOT / "docs/HELPER_CONSOLE_RU.md").read_text(encoding="utf-8")
-                self.assertEqual(archive.read("docs/HELPER_CONSOLE_RU.md").decode("utf-8"),
-                                 console_doc.replace("../tools/usb-helper/screenshots/", "../screenshots/"))
+                for doc in ("docs/HELPER_CONSOLE_RU.md", "docs/HELPER_SIMPLE_RU.md"):
+                    source_doc = (helper.ROOT / doc).read_text(encoding="utf-8")
+                    self.assertEqual(archive.read(doc).decode("utf-8"),
+                                     source_doc.replace("../tools/usb-helper/screenshots/", "../screenshots/"))
                 for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
                              "docs/EXTERNAL_BUZZER_RU.md",
                              "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
@@ -120,7 +122,8 @@ class HelperPackageTests(unittest.TestCase):
                              "screenshots/dashboard-desktop.png", "screenshots/dashboard-mobile.png",
                              "screenshots/city-desktop.png", "screenshots/city-mobile.png",
                              "screenshots/adc-service-desktop.png", "screenshots/adc-service-mobile.png",
-                             "screenshots/command-tree-desktop.png", "screenshots/command-tree-mobile.png"):
+                             "screenshots/command-tree-desktop.png", "screenshots/command-tree-mobile.png",
+                             "screenshots/simple-desktop.png", "screenshots/simple-mobile.png"):
                     self.assertTrue(archive.read(name).startswith(b"\x89PNG\r\n\x1a\n"))
                 for line in archive.read("SHA256SUMS.txt").decode("ascii").splitlines():
                     digest, name = line.split("  ", 1)

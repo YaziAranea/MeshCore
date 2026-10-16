@@ -18,7 +18,7 @@ const root = path.resolve(__dirname, '../..');
 const output = process.env.SMARTUI_UI_OUTPUT
   ? path.resolve(process.env.SMARTUI_UI_OUTPUT)
   : fs.mkdtempSync(path.join(os.tmpdir(), 'smartui-usb-ui-'));
-const artifact = path.join(output, 'SmartUI_USB_Helper_2.8.html');
+const artifact = path.join(output, 'SmartUI_USB_Helper_2.9.html');
 const chromeCandidates = [
   process.env.CHROME_PATH,
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
@@ -200,6 +200,8 @@ async function fixture(options = {}) {
   page.on('request', request => { if (/^https?:/i.test(request.url())) network.push(request.url()); });
   await page.addInitScript(installSerialMock, { supported: options.supported !== false, readOnly: Boolean(options.readOnly), manualTest: Boolean(options.manualTest), info: options.info || null, replies:Boolean(options.replies),localRecovery:Boolean(options.localRecovery),settings:Boolean(options.settings),settingsCaps:options.settingsCaps||{},radioFeature:Boolean(options.radioFeature),manualAdc:options.manualAdc,schemas:options.schemas,extendedValues:options.extendedValues,soundPreview:Boolean(options.soundPreview),optionalTone:Boolean(options.optionalTone) });
   await page.goto(pathToFileURL(artifact).href);
+  await page.locator('#view-advanced').click();
+  await page.locator('#helper-mode').selectOption('console');
   assert.equal(await page.evaluate(() => window.isSecureContext), true, 'file:// must be a secure context in supported desktop Chromium');
   return {
     page, context, errors, network,

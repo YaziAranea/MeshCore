@@ -61,7 +61,7 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("SmartUI 0.20", readme)
-            self.assertIn("USB Helper 2.8", readme)
+            self.assertIn("USB Helper 2.9", readme)
             self.assertIn("[Дерево команд и макросы](docs/HELPER_CONSOLE_RU.md)", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
             self.assertIn("[Команды по платам](docs/CLI_BOARD_MATRIX_RU.md)", readme)
@@ -98,7 +98,7 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertEqual(manifest["helper_source_commit"], COMMIT)
             self.assertEqual(manifest["documentation_source_commit"], COMMIT)
             self.assertEqual(manifest["firmware_source_commit"], firmware)
-            self.assertEqual(manifest["helper_version"], "2.8")
+            self.assertEqual(manifest["helper_version"], "2.9")
             self.assertEqual(manifest["firmware_version"], "0.20")
             self.assertEqual(archive.read("docs/HELPER_CONSOLE_RU.md"),
                              (self.source / "docs/HELPER_CONSOLE_RU.md").read_bytes())
@@ -168,7 +168,7 @@ class DeveloperKitTests(unittest.TestCase):
             readme = archive.read("README.md").decode("utf-8")
             self.assertIn("LOCAL DEVELOPMENT", readme)
             self.assertIn("NOT the exact commit", readme)
-            self.assertIn("USB Helper 2.8", readme)
+            self.assertIn("USB Helper 2.9", readme)
             for entry in manifest["files"]:
                 raw = archive.read(entry["name"])
                 self.assertEqual((entry["bytes"], entry["sha256"]), (len(raw), hashlib.sha256(raw).hexdigest()))
@@ -226,7 +226,8 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         javascript = subprocess.run(
             ["node", "--test", "tools/usb-helper/test_api.js", "tools/usb-helper/test_console_catalog.js",
-             "tools/usb-helper/test_console_runner.js"], cwd=extracted,
+             "tools/usb-helper/test_console_runner.js", "tools/usb-helper/test_auto_connect.js",
+             "tools/usb-helper/test_autosave.js"], cwd=extracted,
             capture_output=True, text=True, timeout=30,
         )
         self.assertEqual(javascript.returncode, 0, javascript.stdout + javascript.stderr)
