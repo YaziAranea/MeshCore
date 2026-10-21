@@ -35,14 +35,59 @@ TEST(DeferredSavePolicy, DeadlineSurvivesUint32Wrap) {
   EXPECT_FALSE(policy.pending());
 }
 
-TEST(DeferredSavePolicy, FailedWriteRetryIsBoundedAndNotBusyLooped) {
+TEST(DeferredSavePolicy, RetriesBackOffWithoutNewChangesBypassingOrExtendingDelay) {
   mesh::storage::DeferredSavePolicy policy;
-  policy.schedule(100u, 5u);
-  ASSERT_TRUE(policy.due(105u, 30u));
+  policy.schedule(1000u, 5000u);
+  uint32_t now = 6000u;
+  ASSERT_TRUE(policy.due(now, 30000u));
 
-  policy.retryFrom(105u, 5u);
-  EXPECT_FALSE(policy.due(109u, 30u));
-  EXPECT_TRUE(policy.due(110u, 30u));
+  for (uint32_t delay : {5000u, 10000u, 20000u, 40000u, 80000u,
+                         160000u, 300000u, 300000u}) {
+    policy.retryFrom(now, 5000u, 300000u);
+    for (uint32_t elapsed : {0u, delay / 2, delay - 1}) {
+      policy.schedule(now + elapsed, 5000u);
+      EXPECT_TRUE(policy.pending());
+      EXPECT_FALSE(policy.due(now + elapsed, 30000u));
+    }
+    now += delay;
+    policy.schedule(now, 5000u);
+    EXPECT_TRUE(policy.due(now, 30000u));
+  }
+}
+
+TEST(DeferredSavePolicy, RetryDeadlineSurvivesUint32Wrap) {
+  mesh::storage::DeferredSavePolicy policy;
+  policy.schedule(0xFFFFE000u, 5000u);
+  policy.retryFrom(0xFFFFFFF0u, 5000u, 300000u);
+  policy.schedule(4983u, 5000u);
+  EXPECT_FALSE(policy.due(4983u, 30000u));
+  EXPECT_TRUE(policy.due(4984u, 30000u));
+}
+
+TEST(DeferredSavePolicy, ExplicitFlushBypassesBackoffButFailureKeepsDirtyAndDeadline) {
+  mesh::storage::DeferredSavePolicy policy;
+  policy.schedule(1000u, 5000u);
+  policy.retryFrom(6000u, 5000u, 300000u);
+  policy.retryFrom(11000u, 5000u, 300000u);
+  unsigned saves = 0;
+  EXPECT_FALSE(mesh::storage::flushDeferredSave(
+      policy, false, [&saves]() { ++saves; return false; }));
+  EXPECT_EQ(1u, saves);
+  EXPECT_TRUE(policy.pending());
+  EXPECT_FALSE(policy.due(20999u, 30000u));
+  EXPECT_TRUE(policy.due(21000u, 30000u));
+
+  EXPECT_TRUE(mesh::storage::flushDeferredSave(
+      policy, false, [&saves]() { ++saves; return true; }));
+  EXPECT_EQ(2u, saves);
+  EXPECT_FALSE(policy.pending());
+  // Successful explicit flush resets the retry ladder as well as the batch.
+  policy.schedule(12000u, 5000u);
+  EXPECT_FALSE(policy.due(16999u, 30000u));
+  EXPECT_TRUE(policy.due(17000u, 30000u));
+  policy.retryFrom(17000u, 5000u, 300000u);
+  EXPECT_FALSE(policy.due(21999u, 30000u));
+  EXPECT_TRUE(policy.due(22000u, 30000u));
 }
 
 TEST(DeferredSavePolicy, RecoveryQuarantineNeverReplaysDirtyRamState) {

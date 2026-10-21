@@ -580,7 +580,7 @@ prefs_saver = between(datastore, "bool DataStore::savePrefs", "void DataStore::l
 contacts_storage = between(datastore, "void DataStore::loadContacts", "void DataStore::loadChannels")
 channels_storage = between(datastore, "void DataStore::loadChannels", "#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)")
 check(
-    "Preferences, contacts and channels publish verified tmp generations with bak recovery",
+    "Preferences, contacts and channels use scratch verification and backup recovery",
     has_all(
         prefs_saver,
         (
@@ -606,8 +606,10 @@ check(
             '"/contacts3.bak"',
             "chooseContactCandidate",
             "commitScratch(",
-            'fs, "/contacts3", "/contacts3.tmp", "/contacts3.bak",',
-            'contactRecordFileValid(fs, "/contacts3")',
+            'target = "/contacts3"',
+            "commitScratch(fs, target, scratch, backup,",
+            "contactRecordFileValid(fs, target)",
+            "digest.crc32 == expected_crc.value()",
             "digestFile",
         ),
     )
@@ -634,7 +636,7 @@ check(
             "Crc32MatchesStandardVectorAndStreamingUpdates",
         ),
     ),
-    "a power loss at any publish step must leave a complete primary, verified temporary or backup generation",
+    "writers must verify scratch contents before publication and retain recovery candidates; source checks do not prove every power-loss scenario",
 )
 
 migration_storage = between(datastore, "static bool copyFileTransactional", "}  // namespace") + between(

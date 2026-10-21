@@ -106,6 +106,34 @@ TEST(CompanionFrameValidation, ContactAndSettingsCommandsRejectTruncatedKeysAndF
   }
 }
 
+TEST(CompanionFrameValidation, TuningAcceptsStartupAndCliRangeBoundaries) {
+  uint8_t frame[9] = {companion::kSetTuningParams};
+  const uint32_t rx_values[] = {0, 1, 19999, 20000};
+  const uint32_t airtime_values[] = {0, 1, 8999, 9000};
+  for (uint32_t rx : rx_values) {
+    for (uint32_t airtime : airtime_values) {
+      memcpy(&frame[1], &rx, sizeof(rx));
+      memcpy(&frame[5], &airtime, sizeof(airtime));
+      EXPECT_EQ(companion::kFrameValid, validate(frame, sizeof(frame)))
+          << "rx=" << rx << ", airtime=" << airtime;
+    }
+  }
+}
+
+TEST(CompanionFrameValidation, TuningRejectsOutOfRangeValuesBeforeDispatch) {
+  uint8_t frame[9] = {companion::kSetTuningParams};
+  const uint32_t invalid_values[][2] = {
+      {20001, 0}, {0, 9001}, {20001, 9001},
+      {UINT32_MAX, 1000}, {0, UINT32_MAX}, {UINT32_MAX, UINT32_MAX},
+  };
+  for (const auto& values : invalid_values) {
+    memcpy(&frame[1], &values[0], sizeof(values[0]));
+    memcpy(&frame[5], &values[1], sizeof(values[1]));
+    EXPECT_EQ(companion::kFrameInvalidShape, validate(frame, sizeof(frame)))
+        << "rx=" << values[0] << ", airtime=" << values[1];
+  }
+}
+
 TEST(CompanionFrameValidation, OptionalFixedWidthFieldsCannotBePartial) {
   uint8_t frame[64] = {};
   frame[0] = companion::kGetContacts;

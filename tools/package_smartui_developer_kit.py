@@ -21,6 +21,7 @@ SOURCES = (
     "docs/EXTERNAL_BUZZER_RU.md",
     "docs/SUPPORTED_BOARDS_RU.md",
     "docs/MIGRATION_1.18_RU.md",
+    "docs/CONTACT_STORAGE_RU.md",
     "docs/FLASHING_RU.md",
     "docs/PROMICRO_GPS_RU.md",
     "docs/BUILD_RU.md",

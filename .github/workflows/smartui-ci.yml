@@ -96,7 +96,10 @@ jobs:
 
       - name: Reproduce low-space prefs retry with the pinned LittleFS
         if: matrix.artifact_id == 't096-fem'
-        run: python tools/test_littlefs_prefs_capacity.py
+        run: |
+          python tools/test_littlefs_prefs_capacity.py
+          python tools/test_contact_storage_capacity.py --littlefs
+          python tools/test_contact_limit_migration.py --littlefs
 
       - name: Check actual T114 CLI stack frames
         if: matrix.artifact_id == 't114'
@@ -489,7 +492,12 @@ jobs:
         run: python tools/test_heltec_v4_r8_profile.py
 
       - name: Check contact persistence and route-reset acknowledgement
-        run: python tools/test_contact_persistence.py
+        run: |
+          python tools/test_contact_persistence.py
+          python tools/test_contact_storage_capacity.py
+          python tools/test_contact_recovery.py
+          python tools/test_contact_limit_migration.py
+          python tools/test_contact_load_migration.py
 
       - name: Check Wireless Paper shutdown frame
         run: python tools/test_paper_shutdown_v007.py
@@ -708,6 +716,18 @@ jobs:
           tag="smartui-0.20"
           title="Smart UI 0.20"
           notes="release/RELEASE_NOTES_SmartUI_0.20_RU.md"
+          # Keep archive links local, but bind the GitHub page to this source.
+          python - "$notes" "$RUNNER_TEMP/smartui-release-body.md" "$GITHUB_SHA" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          source, output, sha = sys.argv[1:]
+          assert re.fullmatch(r"[0-9a-f]{40}", sha)
+          body = Path(source).read_text(encoding="utf-8")
+          body = body.replace("](docs/", f"](https://github.com/YaziAranea/MeshCore/blob/{sha}/docs/")
+          Path(output).write_text(body, encoding="utf-8")
+          PY
+          notes="$RUNNER_TEMP/smartui-release-body.md"
           update_tag_from=""
           # Tags stay immutable unless this dispatch explicitly names the
           # current release commit for a same-page hotfix. Never force-update a ref.

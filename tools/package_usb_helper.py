@@ -59,6 +59,7 @@ def package(output):
         "docs/SMARTUI_CLI_RU.md": (ROOT / "docs/SMARTUI_CLI_RU.md").read_bytes(),
         "docs/SUPPORTED_BOARDS_RU.md": (ROOT / "docs/SUPPORTED_BOARDS_RU.md").read_bytes(),
         "docs/MIGRATION_1.18_RU.md": (ROOT / "docs/MIGRATION_1.18_RU.md").read_bytes(),
+        "docs/CONTACT_STORAGE_RU.md": (ROOT / "docs/CONTACT_STORAGE_RU.md").read_bytes(),
         "docs/FLASHING_RU.md": (ROOT / "docs/FLASHING_RU.md").read_bytes(),
         "docs/PROMICRO_GPS_RU.md": (ROOT / "docs/PROMICRO_GPS_RU.md").read_bytes(),
         "docs/BUILD_RU.md": (ROOT / "docs/BUILD_RU.md").read_bytes(),

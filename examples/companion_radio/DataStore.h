@@ -38,6 +38,9 @@ class DataStore {
   mesh::RTCClock* _clock;
   IdentityStore identity_store;
   PrefsSaveError _prefs_save_error = PrefsSaveError::NONE;
+  bool _contacts_limit_ready = true;
+  uint32_t _contacts_limit_crc = 0;
+  bool _contacts_limit_crc_pending = false;
 
   bool loadPrefsInt(const char *filename, NodePrefs& prefs);
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)

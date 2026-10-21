@@ -54,7 +54,12 @@ HARNESS = r'''
 #define MESH_DEBUG_PRINTLN(...) do {} while (false)
 using Bytes = std::vector<uint8_t>;
 static unsigned checks = 0;
-static void expect(bool value) { assert(value); ++checks; }
+static void expectAt(bool value, const char* expression, unsigned line) {
+  if (!value) std::fprintf(stderr, "FAIL contact persistence at C++ line %u: %s\n",
+                           line, expression);
+  assert(value); ++checks;
+}
+#define expect(value) expectAt((value), #value, __LINE__)
 struct ContactInfo {
   struct { uint8_t pub_key[32] = {}; } id;
   char name[32] = {};
@@ -313,6 +318,106 @@ static void testTimersAndFlush() {
   expect(!flush.flushPendingStorage() && flush.dirty_contacts.pending());
   expect(flush.fs.writes == 2);
 }
+static void testRetryBackoff() {
+  MyMesh retry; seed(retry);
+  const Bytes previous = retry.fs.files["/contacts3"];
+  // The first slow failure crosses millis() rollover. Every retry deadline
+  // must be measured after the failed write, including at the five-minute cap.
+  retry.clock.now = UINT32_MAX - 6000;
+  retry.command(CMD_RESET_PATH);
+  retry.clock.now += 5000;
+  retry.fs.write_duration = 8000;
+  retry.fs.read_fail = "/contacts3.tmp";
+  retry.serviceStorage();
+  expect(retry.fs.writes == 1 && retry.dirty_contacts.pending());
+  for (uint32_t delay : {5000U, 10000U, 20000U, 40000U, 80000U,
+                         160000U, 300000U, 300000U}) {
+    const uint32_t failed_at = retry.clock.now;
+    const unsigned writes = retry.fs.writes;
+    for (uint32_t elapsed : {0U, delay / 2, delay - 1}) {
+      retry.clock.now = failed_at + elapsed;
+      expect(!retry.hasPendingWork());
+      retry.serviceStorage();
+      expect(retry.fs.writes == writes && retry.dirty_contacts.pending());
+    }
+    retry.clock.now = failed_at + delay;
+    expect(retry.hasPendingWork());
+    retry.serviceStorage();
+    expect(retry.fs.writes == writes + 1 && retry.dirty_contacts.pending());
+    expect(retry.clock.now == uint32_t(failed_at + delay + 8000));
+    expect(retry.fs.files["/contacts3"] == previous);
+  }
+
+  // Fresh route/contact changes cannot shorten or indefinitely extend a
+  // pending retry, even when the normal 30-second dirty limit has passed.
+  const uint32_t failed_at = retry.clock.now;
+  const unsigned writes = retry.fs.writes;
+  for (uint32_t elapsed = 0; elapsed < 300000; elapsed += 1000) {
+    retry.clock.now = failed_at + elapsed;
+    retry.command(CMD_RESET_PATH);
+    expect(!retry.hasPendingWork());
+    retry.serviceStorage();
+    expect(retry.fs.writes == writes && retry.dirty_contacts.pending());
+  }
+  retry.clock.now = failed_at + 300000;
+  retry.command(CMD_RESET_PATH);
+  std::strcpy(retry.contacts.front().name, "latest pending contact");
+  retry.scheduleContactsSave();
+  expect(retry.hasPendingWork());
+  retry.fs.read_fail.clear(); retry.fs.write_duration = 0;
+  retry.serviceStorage();
+  expect(retry.fs.writes == writes + 1 && !retry.dirty_contacts.pending());
+  expect(retry.fs.files["/contacts3"] == legacyBytes(retry.contacts.front()));
+
+  // A successful save resets both the normal debounce and the retry ladder.
+  retry.command(CMD_RESET_PATH);
+  retry.clock.now += 4999; retry.serviceStorage();
+  expect(retry.fs.writes == writes + 1);
+  ++retry.clock.now;
+  retry.fs.read_fail = "/contacts3.tmp"; retry.serviceStorage();
+  expect(retry.fs.writes == writes + 2 && retry.dirty_contacts.pending());
+  retry.clock.now += 4999; retry.serviceStorage();
+  expect(retry.fs.writes == writes + 2);
+  retry.fs.read_fail.clear();
+  ++retry.clock.now; retry.serviceStorage();
+  expect(retry.fs.writes == writes + 3 && !retry.dirty_contacts.pending());
+
+  // The retry deadline itself may wrap, not only a long failing write.
+  MyMesh wrap; seed(wrap); wrap.clock.now = UINT32_MAX - 7000;
+  wrap.command(CMD_RESET_PATH); wrap.clock.now += 5000;
+  wrap.fs.read_fail = "/contacts3.tmp"; wrap.serviceStorage();
+  expect(wrap.fs.writes == 1 && wrap.dirty_contacts.pending());
+  wrap.clock.now += 4999; wrap.command(CMD_RESET_PATH);
+  expect(!wrap.hasPendingWork());
+  wrap.serviceStorage(); expect(wrap.fs.writes == 1);
+  ++wrap.clock.now; wrap.command(CMD_RESET_PATH);
+  expect(wrap.hasPendingWork());
+  wrap.fs.read_fail.clear(); wrap.serviceStorage();
+  expect(wrap.fs.writes == 2 && !wrap.dirty_contacts.pending());
+}
+static void testExplicitFlushDuringBackoff() {
+  MyMesh flush; seed(flush); flush.command(CMD_RESET_PATH);
+  flush.clock.now += 5000;
+  flush.fs.short_write_at = 1; flush.serviceStorage();
+  const uint32_t failed_at = flush.clock.now;
+  ++flush.clock.now;
+  flush.fs.short_write_at = 2;
+  expect(!flush.flushPendingStorage());
+  expect(flush.fs.writes == 2 && flush.dirty_contacts.pending());
+  flush.clock.now = failed_at + 4999;
+  flush.serviceStorage(); expect(flush.fs.writes == 2);
+  flush.clock.now = failed_at + 5000;
+  flush.fs.short_write_at = 3; flush.serviceStorage();
+  expect(flush.fs.writes == 3 && flush.dirty_contacts.pending());
+  ++flush.clock.now;
+  expect(flush.flushPendingStorage());
+  expect(flush.fs.writes == 4 && !flush.dirty_contacts.pending());
+  // Explicit success also clears the backoff for the next dirty batch.
+  flush.command(CMD_RESET_PATH); flush.clock.now += 4999;
+  flush.serviceStorage(); expect(flush.fs.writes == 4);
+  ++flush.clock.now; flush.serviceStorage();
+  expect(flush.fs.writes == 5 && !flush.dirty_contacts.pending());
+}
 static void testDurableCommands() {
   for (bool fail : {false, true}) {
     MyMesh update; seed(update); const Bytes old = legacyBytes(update.contacts.front());
@@ -488,6 +593,7 @@ static void testLayoutAndStorageFailures() {
 }
 int main() {
   testResetAndSchedule(); testTimersAndFlush();
+  testRetryBackoff(); testExplicitFlushDuringBackoff();
   testDurableCommands(); testLayoutAndStorageFailures();
   testQueuedResponseBeforeOldBatchSave();
   testEspPendingIsNotThrottle();
@@ -503,7 +609,7 @@ def main():
     symbols = ["CMD_RESET_PATH", "CMD_ADD_UPDATE_CONTACT", "CMD_REMOVE_CONTACT",
                "ERR_CODE_NOT_FOUND", "ERR_CODE_FILE_IO_ERROR", "ERR_CODE_ILLEGAL_ARG",
                "ERR_CODE_TABLE_FULL", "LAZY_CONTACTS_WRITE_DELAY", "MAX_DIRTY_CONTACTS_AGE",
-               "CONTACTS_RESPONSE_DRAIN_LIMIT"]
+               "CONTACTS_RESPONSE_DRAIN_LIMIT", "MAX_CONTACTS_WRITE_RETRY_DELAY"]
     defines = "\n".join(re.search(r"^#define\s+" + name + r"\s+.*$", mesh, re.M).group()
                         for name in symbols)
     helpers = ["static bool prepareScratch(", "static File openScratch(",
@@ -551,7 +657,7 @@ public:
                         "-Werror", "-pedantic", "-O2", "-I", path(ROOT / "src"),
                         path(cpp), "-o", path(binary)], check=True, timeout=60)
         subprocess.run([*prefix, path(binary)], check=True, timeout=30)
-    print("[PASS] Reset RAM/ACK/deferred save; bounded session-aware TX drain before due save; durable add/update/remove rollback; timers, retries, shutdown flush; contacts3 byte layout, filtered records, one write/record, transactional I/O faults")
+    print("[PASS] Reset RAM/ACK/deferred save; bounded session-aware TX drain before due save; durable add/update/remove rollback; bounded retry backoff, wrap/slow-write timing, new dirty traffic, immediate shutdown flush; contacts3 byte layout, filtered records, one write/record, transactional I/O faults")
 
 
 if __name__ == "__main__":

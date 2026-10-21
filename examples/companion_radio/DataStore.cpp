@@ -191,6 +191,13 @@ uint8_t DataStore::formatFileSystemDetailed() {
 #else
   #error "need to implement format()"
 #endif
+  if (failures == STORAGE_FORMAT_OK) {
+    // A complete factory reset starts a new contact generation, including
+    // callers that rebuild settings without reloading or rebooting first.
+    _contacts_limit_ready = true;
+    _contacts_limit_crc = 0;
+    _contacts_limit_crc_pending = false;
+  }
   return failures;
 }
 
@@ -321,10 +328,15 @@ static bool prefsFileValid(FILESYSTEM* fs, const char* filename,
 }
 
 static bool fixedRecordFileValid(FILESYSTEM* fs, const char* filename,
-                                 uint32_t record_size) {
+                                 uint32_t record_size, bool* readable = nullptr) {
+  if (readable) *readable = true;
   if (!fs->exists(filename) || record_size == 0) return false;
   FileDigest digest;
-  return digestFile(fs, filename, digest) && (digest.size % record_size) == 0;
+  if (!digestFile(fs, filename, digest)) {
+    if (readable) *readable = false;
+    return false;
+  }
+  return (digest.size % record_size) == 0;
 }
 
 static bool encodedPathLenValid(uint8_t path_len) {
@@ -334,15 +346,20 @@ static bool encodedPathLenValid(uint8_t path_len) {
   return hash_size != 4 && (uint16_t)hash_count * hash_size <= MAX_PATH_SIZE;
 }
 
-static bool contactRecordFileValid(FILESYSTEM* fs, const char* filename) {
+static bool contactRecordFileValid(FILESYSTEM* fs, const char* filename,
+                                    bool* readable = nullptr) {
   static const uint32_t RECORD_SIZE = 152;
-  if (!fixedRecordFileValid(fs, filename, RECORD_SIZE)) return false;
+  if (!fixedRecordFileValid(fs, filename, RECORD_SIZE, readable)) return false;
   File file = openStorageRead(fs, filename);
-  if (!file) return false;
+  if (!file) {
+    if (readable) *readable = false;
+    return false;
+  }
   uint8_t record[RECORD_SIZE];
   bool valid = true;
   while (file.available() > 0) {
     if (file.read(record, sizeof(record)) != (int)sizeof(record)) {
+      if (readable) *readable = false;
       valid = false;
       break;
     }
@@ -379,13 +396,91 @@ static bool channelRecordFileValid(FILESYSTEM* fs, const char* filename) {
   return valid;
 }
 
+#if defined(SMARTUI_CONTACT_LIMIT)
+#if !defined(NRF52_PLATFORM)
+#error SMARTUI_CONTACT_LIMIT migration requires the nRF52 LittleFS implementation
+#endif
+static_assert(SMARTUI_CONTACT_LIMIT == MAX_CONTACTS, "Contact limits must agree");
+
+static bool contactPrefixCrc(FILESYSTEM* fs, const char* filename,
+                             uint32_t bytes, uint32_t& result) {
+  File file = openStorageRead(fs, filename);
+  if (!file) return false;
+  mesh::storage::Crc32 crc;
+  uint8_t buffer[64];
+  bool valid = true;
+  while (bytes > 0) {
+    const uint32_t count = bytes < sizeof(buffer) ? bytes : sizeof(buffer);
+    if (file.read(buffer, count) != (int)count) { valid = false; break; }
+    crc.update(buffer, count);
+    bytes -= count;
+  }
+  file.close();
+  result = crc.value();
+  return valid;
+}
+
+// The release deliberately keeps the first N stored records when upgrading a
+// larger list. LittleFS tail truncation publishes a shorter CTZ head/size; it
+// does not rewrite the retained prefix or need a second full contact snapshot.
+// Never use the generic openWrite() helper here: it removes the entire file.
+static bool trimContactsToLimit(FILESYSTEM* fs, const char* filename,
+                                uint32_t* retry_crc = nullptr,
+                                bool* retry_pending = nullptr) {
+  const uint32_t keep_bytes = uint32_t(SMARTUI_CONTACT_LIMIT) * 152U;
+  File before = openStorageRead(fs, filename);
+  if (!before) return false;
+  const uint32_t old_size = before.size();
+  before.close();
+  if (old_size <= keep_bytes) {
+    if (retry_pending && *retry_pending) {
+      FileDigest actual;
+      if (!retry_crc || !digestFile(fs, filename, actual) ||
+          actual.size != keep_bytes || actual.crc32 != *retry_crc) return false;
+      *retry_pending = false;
+    }
+    return true;
+  }
+  uint32_t expected_crc;
+  if (!contactRecordFileValid(fs, filename) ||
+      !contactPrefixCrc(fs, filename, keep_bytes, expected_crc)) return false;
+  // Keep the original prefix checksum across a failed flush/readback. A retry
+  // must not accept a corrupted 200-record file merely because its size fits.
+  if (retry_crc && retry_pending) {
+    if (*retry_pending && *retry_crc != expected_crc) return false;
+    *retry_crc = expected_crc;
+    *retry_pending = true;
+  }
+  File file = fs->open(filename, FILE_O_WRITE);
+  if (!file) return false;
+  const bool truncated = file.truncate(keep_bytes);
+  file.flush();
+  file.close();
+  // Arduino's flush/close discard I/O results; verify durable length/content.
+  FileDigest actual;
+  const bool valid = truncated && digestFile(fs, filename, actual) &&
+                     actual.size == keep_bytes && actual.crc32 == expected_crc;
+  if (valid && retry_pending) *retry_pending = false;
+  return valid;
+}
+#endif
+
 static mesh::storage::RecoveryCandidate chooseContactCandidate(
     FILESYSTEM* fs, const char* target, const char* scratch,
     const char* backup) {
-  return mesh::storage::chooseRecoveryCandidate(
-      contactRecordFileValid(fs, target),
-      contactRecordFileValid(fs, scratch),
-      contactRecordFileValid(fs, backup));
+  if (contactRecordFileValid(fs, target)) {
+    return mesh::storage::RecoveryCandidate::PRIMARY;
+  }
+  // Legacy contacts3 has no persisted count or CRC. An interrupted scratch
+  // ending on a record boundary can pass structural validation. Prefer the
+  // previous committed generation until scratch is published as the primary.
+  if (contactRecordFileValid(fs, backup)) {
+    return mesh::storage::RecoveryCandidate::BACKUP;
+  }
+  // With no usable committed copy, scratch remains best-effort recovery only.
+  return contactRecordFileValid(fs, scratch)
+      ? mesh::storage::RecoveryCandidate::TEMPORARY
+      : mesh::storage::RecoveryCandidate::NONE;
 }
 
 static mesh::storage::RecoveryCandidate chooseChannelCandidate(
@@ -826,11 +921,35 @@ void DataStore::loadContacts(DataStoreHost* host) {
         chooseContactCandidate(fs, "/contacts3", "/contacts3.tmp",
                                "/contacts3.bak"),
         "/contacts3", "/contacts3.tmp", "/contacts3.bak");
-    if (!selected) return;
+    if (!selected) {
+      // A reset/empty store starts a new generation. A reload of damaged data
+      // must not discard a pending checksum from this boot's failed migration.
+      if (!fs->exists("/contacts3") && !fs->exists("/contacts3.tmp") &&
+          !fs->exists("/contacts3.bak")) {
+        _contacts_limit_ready = true;
+        _contacts_limit_crc_pending = false;
+      }
+      return;
+    }
+#if defined(SMARTUI_CONTACT_LIMIT)
+    _contacts_limit_ready = trimContactsToLimit(
+        fs, selected, &_contacts_limit_crc, &_contacts_limit_crc_pending);
+    if (!_contacts_limit_ready) {
+      MESH_DEBUG_PRINTLN("ERROR: contact limit migration not persisted; writes blocked");
+    }
+#endif
     File file = openRead(fs, selected);
     if (file) {
       bool full = false;
-      while (!full) {
+      uint32_t loaded = 0;
+      // Do not call an overwrite-enabled host with records beyond its limit.
+      // A failed migration must not let later records replace the first N.
+#if defined(SMARTUI_CONTACT_LIMIT)
+      const uint32_t load_limit = SMARTUI_CONTACT_LIMIT;
+#else
+      const uint32_t load_limit = UINT32_MAX;
+#endif
+      while (!full && loaded < load_limit) {
         ContactInfo c = {};
         uint8_t pub_key[32];
         uint8_t unused;
@@ -855,6 +974,7 @@ void DataStore::loadContacts(DataStoreHost* host) {
             !encodedPathLenValid(c.out_path_len)) break;
         c.id = mesh::Identity(pub_key);
         if (!host->onContactLoaded(c)) full = true;
+        ++loaded;
       }
       file.close();
     }
@@ -862,17 +982,49 @@ void DataStore::loadContacts(DataStoreHost* host) {
 
 bool DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactInfo& c)) {
   static const uint32_t CONTACT_RECORD_SIZE = 152;
+  static const char* target = "/contacts3";
+  static const char* scratch = "/contacts3.tmp";
+  static const char* backup = "/contacts3.bak";
   FILESYSTEM* fs = _getContactsChannelsFS();
-  if (!prepareScratch(fs, "/contacts3.tmp")) return false;
-  File file = openScratch(fs, "/contacts3.tmp");
-  if (file) {
+
+#if defined(SMARTUI_CONTACT_LIMIT)
+  if (!_contacts_limit_ready) {
+    const char* selected = candidatePath(
+        chooseContactCandidate(fs, target, scratch, backup), target, scratch, backup);
+    if (!selected || !trimContactsToLimit(
+        fs, selected, &_contacts_limit_crc, &_contacts_limit_crc_pending)) return false;
+    _contacts_limit_ready = true;
+  }
+#endif
+
+  // A recovered scratch may be the only readable contact generation. Publish
+  // it before reusing that path so a failed replacement cannot erase it.
+  if (fs->exists(scratch)) {
+    bool target_readable, backup_readable;
+    const bool target_valid = contactRecordFileValid(fs, target, &target_readable);
+    const bool backup_valid = contactRecordFileValid(fs, backup, &backup_readable);
+    if (!target_valid && !backup_valid) {
+      // A transient read fault must not classify a recovery copy as corrupt.
+      if (!target_readable || !backup_readable) return false;
+      bool scratch_readable;
+      const bool scratch_valid = contactRecordFileValid(fs, scratch, &scratch_readable);
+      if (!scratch_readable) return false;
+      if (scratch_valid && !commitScratch(fs, target, scratch, backup, false)) return false;
+    }
+  }
+
+  for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+    if (!prepareScratch(fs, scratch)) return false;
+    File file = openScratch(fs, scratch);
+    bool capacity_failure = !file;
     uint32_t idx = 0;
     uint32_t records_written = 0;
     ContactInfo c;
     uint8_t record[CONTACT_RECORD_SIZE];
-    bool success = true;
+    mesh::storage::Crc32 expected_crc;
+    bool success = static_cast<bool>(file);
 
-    while (host->getContactForSave(idx, c)) {
+    while (success && host->getContactForSave(idx, c)) {
       if (filter && !filter(c)) {
         idx++;  // advance to next contact
         continue;
@@ -893,24 +1045,46 @@ bool DataStore::saveContacts(DataStoreHost* host, bool (*filter)(const ContactIn
       memcpy(record + 148, &c.gps_lon, 4);
       success = file.write(record, sizeof(record)) == sizeof(record);
 
-      if (!success) break; // write failed
+      if (!success) {
+        capacity_failure = true;
+        break;
+      }
 
+      expected_crc.update(record, sizeof(record));
       records_written++;
       idx++;  // advance to next contact
     }
-    file.flush();
-    file.close();
-
-    FileDigest digest;
-    success = success && digestFile(fs, "/contacts3.tmp", digest) &&
-              digest.size == records_written * CONTACT_RECORD_SIZE;
-    if (success) {
-      success = commitScratch(
-          fs, "/contacts3", "/contacts3.tmp", "/contacts3.bak",
-          contactRecordFileValid(fs, "/contacts3"));
+    if (file) {
+      file.flush();
+      file.close();
     }
-    if (!success && fs->exists("/contacts3.tmp")) fs->remove("/contacts3.tmp");
-    return success;
+
+    if (success) {
+      FileDigest digest;
+      const uint32_t expected_size = records_written * CONTACT_RECORD_SIZE;
+      success = digestFile(fs, scratch, digest);
+      if (success) {
+        // File::flush() has no error result on supported Arduino wrappers.
+        // A short persisted file can therefore be the first sign of NOSPC.
+        capacity_failure = digest.size < expected_size;
+        success = digest.size == expected_size &&
+                  digest.crc32 == expected_crc.value();
+      }
+    }
+    if (success) {
+      bool target_readable;
+      const bool target_valid = contactRecordFileValid(fs, target, &target_readable);
+      success = target_readable && commitScratch(fs, target, scratch, backup, target_valid);
+      if (success) return true;
+    }
+
+    // Reclaim only an older generation behind a fully readable, structurally
+    // valid primary. Never sacrifice the last recovery copy, retry a failed
+    // commit, or treat equal-length corruption/read errors as capacity errors.
+    // This removes the third-copy peak; two complete copies must still fit.
+    if (fs->exists(scratch) && !fs->remove(scratch)) return false;
+    if (attempt != 0 || !capacity_failure || !fs->exists(backup) ||
+        !contactRecordFileValid(fs, target) || !fs->remove(backup)) return false;
   }
   return false;
 }

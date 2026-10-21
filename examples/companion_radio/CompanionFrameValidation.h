@@ -213,6 +213,18 @@ inline FrameValidationResult validateCommandFrame(const uint8_t* data, size_t le
   }
 
   switch (command) {
+    case kSetTuningParams: {
+      uint32_t rx_delay_milli, airtime_factor_milli;
+      memcpy(&rx_delay_milli, &data[1], sizeof(rx_delay_milli));
+      memcpy(&airtime_factor_milli, &data[5], sizeof(airtime_factor_milli));
+      // Match the startup/CLI ranges before changing RAM or saving prefs.
+      // An excessive airtime factor can shrink the TX budget below one ms.
+      if (rx_delay_milli > 20000U || airtime_factor_milli > 9000U) {
+        return kFrameInvalidShape;
+      }
+      break;
+    }
+
     case kRunCliCommand:
       if (length > 160) return kFrameTooLarge;
       break;

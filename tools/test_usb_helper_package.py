@@ -77,7 +77,7 @@ class HelperPackageTests(unittest.TestCase):
                     "docs/CLI_BOARD_MATRIX_RU.md",
                     "docs/EXTERNAL_BUZZER_RU.md",
                     "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
-                    "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
+                    "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md", "docs/CONTACT_STORAGE_RU.md",
                     "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.20_RU.md",
                     "docs/PROMICRO_GPS_RU.md", "docs/BUILD_RU.md", "docs/VERIFY_RU.md",
                     "variants/promicro/variant.cpp", "tools/usb-helper/README_RU.md",

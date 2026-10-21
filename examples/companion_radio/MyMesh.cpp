@@ -284,6 +284,7 @@ bool MyMesh::textMentionsNodeName(const char* text, const char* node_name) {
 #define DIRECT_SEND_PERHOP_FACTOR       6.0f
 #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
 #define LAZY_CONTACTS_WRITE_DELAY       5000
+#define MAX_CONTACTS_WRITE_RETRY_DELAY  300000
 #define MAX_DIRTY_CONTACTS_AGE          30000
 #define CONTACTS_RESPONSE_DRAIN_LIMIT   1000
 
@@ -3687,9 +3688,11 @@ void MyMesh::loop() {
       dirty_contacts.clear();
     } else {
       MESH_DEBUG_PRINTLN("ERROR: contacts save failed; retry scheduled");
+      // Back off persistent flash failures without discarding pending changes.
       // A slow failed write must not consume its own retry delay.
       dirty_contacts.retryFrom((uint32_t)_ms->getMillis(),
-                               (uint32_t)LAZY_CONTACTS_WRITE_DELAY);
+                               (uint32_t)LAZY_CONTACTS_WRITE_DELAY,
+                               (uint32_t)MAX_CONTACTS_WRITE_RETRY_DELAY);
     }
   }
 
