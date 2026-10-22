@@ -115,6 +115,14 @@ MultiSerialInterface interface_manager;
 // platform file system
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
   #include <InternalFileSystem.h>
+  #if defined(NRF52_PLATFORM)
+    #include <helpers/nrf52/SafeLittleFsMount.h>
+    #include <helpers/nrf52/SafeNrf52FlashRegion.h>
+    static smartui::Nrf52FlashCacheLock shared_flash_cache_lock;
+    static smartui::SafeNrf52FlashRegion internal_storage_region(
+        smartui::SafeNrf52FlashRegion::kInternalStart,
+        smartui::SafeNrf52FlashRegion::kInternalSize, shared_flash_cache_lock);
+  #endif
   #if defined(QSPIFLASH)
     #include <CustomLFS_QSPIFlash.h>
     DataStore store(InternalFS, QSPIFlash, rtc_clock);
@@ -122,6 +130,10 @@ MultiSerialInterface interface_manager;
     #if defined(EXTRAFS)
       #include <CustomLFS.h>
       CustomLFS ExtraFS(0xD4000, 0x19000, 128);
+      #if defined(NRF52_PLATFORM)
+        static smartui::SafeNrf52FlashRegion extra_storage_region(
+            0xD4000, 0x19000, shared_flash_cache_lock);
+      #endif
       DataStore store(InternalFS, ExtraFS, rtc_clock);
     #else
       DataStore store(InternalFS, rtc_clock);
@@ -612,8 +624,10 @@ static bool cliRadioCommand(const char* command, char* reply, size_t capacity, b
   return radio_settings.handle(command, reply, capacity, allowed);
 }
 static smartui::MeshCoreCliResult cliReboot() {
-  the_mesh.rebootLocal();  // Returns only when pending contacts could not be saved.
-  return smartui::MeshCoreCliResult::STORAGE;
+  // Emergency local CLI reset: do not enter flash I/O or wait for radio work.
+  // Pending RAM-only changes may be lost. Transport access is checked upstream.
+  board.reboot();
+  return smartui::MeshCoreCliResult::UNSUPPORTED;  // A real reset does not return.
 }
 static smartui::MeshCoreCliResult cliPowerOff() {
   if (!the_mesh.flushPendingStorage()) return smartui::MeshCoreCliResult::STORAGE;
@@ -855,7 +869,13 @@ void setup() {
   bool storage_ready = true;
   bool mesh_started = false;
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  #if defined(NRF52_PLATFORM)
+  // Initialize virgin flash, but never auto-format a damaged existing store.
+  storage_ready = shared_flash_cache_lock.begin() && smartui::mountAtStartupOrInitializeErased(
+      InternalFS, internal_storage_region.config());
+  #else
   storage_ready = InternalFS.begin();
+  #endif
   if (storage_ready) {
   #if defined(QSPIFLASH)
     storage_ready = QSPIFlash.begin();
@@ -867,10 +887,15 @@ void setup() {
     }
   #else
   #if defined(EXTRAFS)
+    #if defined(NRF52_PLATFORM)
+      storage_ready = smartui::mountAtStartupOrInitializeErased(
+          ExtraFS, extra_storage_region.config());
+    #else
       // Call the non-formatting base mount directly. CustomLFS::begin() erases
       // and formats this region after any mount failure, which can turn a
       // transient error into loss of contacts/channels.
       storage_ready = ExtraFS.Adafruit_LittleFS::begin();
+    #endif
       if (!storage_ready) {
         MESH_DEBUG_PRINTLN("CustomLFS: mount failed; refusing to auto-format persistent data");
       }
@@ -1045,6 +1070,7 @@ void setup() {
   connection_hooks.getQuickReply = companionQuickReply;
   connection_hooks.setQuickReply = setCompanionQuickReply;
   connection_hooks.handleDeviceSettings = handleCompanionDeviceSettings;
+  connection_hooks.reboot = []() { board.reboot(); };
   connection_controller.begin(
       store, interface_manager, Serial,
     #if defined(ESP32)

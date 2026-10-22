@@ -10,17 +10,17 @@
 
 Репозиторий фиксирует `nordicnrf52@10.11.0`, nRF52 framework fork и ключевые Git-ссылки через `platformio.ini`. Часть библиотек из PlatformIO Registry задана совместимыми диапазонами версий, поэтому побитовое совпадение сборок на разных датах не обещается. Не заменяйте зависимости вручную перед первой успешной сборкой. Для CLI проверенную версию можно установить командой `python -m pip install platformio==6.1.19`.
 
-Официальная база SmartUI 0.20 — MeshCore Companion 1.18.0, commit `81dbae592ffad40b4212bc0b37e82b38da08f4bc`. Сохранённые дополнения PowerSaving происходят из `a27e78e4da1389055b6dd16ce473112d25c8a5cd`. В Git сохранено слияние обеих историй. [Решения переноса](MIGRATION_1.18_RU.md). Для воспроизведения используйте commit опубликованного `RELEASE-MANIFEST.json`, а не вершину изменяемой ветки. nRF52 GCC 14.2 закреплён пакетом `1.140201.0`; штатная flash-разметка ExtraFS сохранена.
+Официальная база SmartUI 0.21 — MeshCore Companion 1.18.0, commit `81dbae592ffad40b4212bc0b37e82b38da08f4bc`. Сохранённые дополнения PowerSaving происходят из `a27e78e4da1389055b6dd16ce473112d25c8a5cd`. В Git сохранено слияние обеих историй. [Решения переноса](MIGRATION_1.18_RU.md). Для воспроизведения используйте commit опубликованного `RELEASE-MANIFEST.json`, а не вершину изменяемой ветки. nRF52 GCC 14.2 закреплён пакетом `1.140201.0`; штатная flash-разметка ExtraFS сохранена.
 
 ## Получение исходников
 
 ```powershell
 git clone https://github.com/YaziAranea/MeshCore.git
 Set-Location MeshCore
-git switch smartui-0.20
+git switch --detach refs/tags/smartui-0.21
 ```
 
-Текущий SmartUI 0.20 для семи плат находится в ветке `smartui-0.20`. Для исходников опубликованного выпуска используйте `git switch --detach refs/tags/smartui-0.20`, для предыдущего выпуска — тег `smartui-0.19`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
+Исходники опубликованного SmartUI 0.21 для семи плат закреплены тегом `smartui-0.21`; предыдущий выпуск — `smartui-0.20`. Точная ревизия указана в `RELEASE-MANIFEST.json`. Не копируйте поверх клона старую папку `.pio`: PlatformIO пересоздаст её локально.
 
 ### Проверка состава релизной сборки
 
@@ -93,13 +93,13 @@ pio run -e heltec_v4_r8_companion_radio_ble_femon_smartui -t mergebin -j 1
 
 `firmware-merged.bin` — чистая установка/Web Flasher по адресу `0x00000`. `firmware.bin` — update/application по адресу `0x10000`. Это ESP32 BIN, не UF2. После копирования под публичными именами выполняйте `python tools/validate_release_esp32.py firmware` и `python tools/validate_release_fresh_spiffs.py firmware`. Для V3 дополнительно выполняйте `python tools/validate_release_v3.py firmware`.
 
-Публичные stems `SmartUI 0.20`:
+Публичные stems `SmartUI 0.21`:
 
 ```text
-Heltec_V3_UI_0.20
-Heltec_V4.3_UI_0.20
-Paper_UI_0.20
-Heltec_V4_R8_UI_0.20
+Heltec_V3_UI_0.21
+Heltec_V4.3_UI_0.21
+Paper_UI_0.21
+Heltec_V4_R8_UI_0.21
 ```
 
 К каждому stem добавляются `-merged.bin` и `-update.bin`.
@@ -114,16 +114,16 @@ V3 сохраняет штатные GPIO/ADC и не включает GPS/FEM/�
 ```powershell
 New-Item -ItemType Directory -Force firmware | Out-Null
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_UI_0.20.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T096_UI_0.21.uf2'
 pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_UI_0.20.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/T114_UI_0.21.uf2'
 pio run -e Heltec_t114_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_UI_0.20.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_RA62_UI_0.21.uf2'
 pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
 
-$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2'
+$env:UF2_FILE_PATH = Join-Path $PWD 'firmware/ProMicro_FakeTec_RA62_Headless_UI_0.21.uf2'
 pio run -e SmartUI_ProMicro_headless -t create_uf2
 
 Remove-Item Env:UF2_FILE_PATH
@@ -133,13 +133,13 @@ Remove-Item Env:UF2_FILE_PATH
 
 ```bash
 mkdir -p firmware
-UF2_FILE_PATH="$PWD/firmware/T096_UI_0.20.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T096_UI_0.21.uf2" \
   pio run -e Heltec_t096_companion_radio_ble_femon -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/T114_UI_0.20.uf2" \
+UF2_FILE_PATH="$PWD/firmware/T114_UI_0.21.uf2" \
   pio run -e Heltec_t114_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_UI_0.20.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_RA62_UI_0.21.uf2" \
   pio run -e ProMicro_ra62_companion_radio_ble -t create_uf2
-UF2_FILE_PATH="$PWD/firmware/ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2" \
+UF2_FILE_PATH="$PWD/firmware/ProMicro_FakeTec_RA62_Headless_UI_0.21.uf2" \
   pio run -e SmartUI_ProMicro_headless -t create_uf2
 ```
 
@@ -155,16 +155,16 @@ pio run -e ProMicro_ra62_companion_radio_ble
 
 ## Генерация checksum-манифестов
 
-Упаковщик SmartUI 0.20 принимает двенадцать прошивок восьми профилей из одного
+Упаковщик SmartUI 0.21 принимает двенадцать прошивок восьми профилей из одного
 чистого commit. Укажите новую, ещё не существующую папку:
 
 ```powershell
-python tools/package_smartui_release.py ../SmartUI_0.20_RELEASE
+python tools/package_smartui_release.py ../SmartUI_0.21_RELEASE
 ```
 
 Скрипт берёт файлы из `.pio/build`, проверяет четыре UF2, четыре пары BIN и подготовленную
 SPIFFS V3, V4.3, V4 R8 и Paper, создаёт два списка SHA-256, общий `RELEASE-MANIFEST.json` и ZIP семи
-плат. Включает HTML/ZIP USB-помощника 2.7 и Developer Kit 0.20; всего 20 assets. Сборка помощника не требует npm или скачивания зависимостей: `python tools/package_usb_helper.py ../USB_Helper`.
+плат. Включает HTML/ZIP USB-помощника 2.9 и Developer Kit 0.21; всего 20 assets. Сборка помощника не требует npm или скачивания зависимостей: `python tools/package_usb_helper.py ../USB_Helper`.
 Проверки помощника: `node tools/usb-helper/test_core.js` и `python tools/test_usb_helper_package.py`. Нужны PlatformIO tool-mkspiffs 2.230.0 и SDK-конфигурация V3. Для CI
 поддерживается `--firmware-dir` с двенадцатью release-named файлами.
 Он не прошивает платы и не публикует ничего на GitHub. Существующую папку
@@ -255,7 +255,7 @@ python tools/generate_docs_assets.py
 
 ## Проверки перед релизом
 
-1. Все три `create_uf2` и нужные ESP32 `mergebin` завершились `SUCCESS`.
+1. Все четыре `create_uf2` и нужные ESP32 `mergebin` завершились `SUCCESS`.
 2. Каждый UF2 и обе части каждой ESP32-пары существуют и имеют ненулевой размер.
 3. Сгенерированы оба новых манифеста: `SHA256SUMS.txt` для UF2 и `SHA256SUMS-ESP32.txt` для BIN; старые манифесты не копировались автоматически.
 4. Пройдены статический аудит и симуляция.
@@ -273,13 +273,14 @@ CI проверяет настоящий `flash_cache.c` вместе с обр�
 разбирает ARM ELF, доказывая вызов `__wrap_ledOn` из `flash_cache_flush`.
 Пакеты framework не редактируются, операции erase/program не заменяются.
 
+SmartUI 0.21 публикуется отдельным тегом и Release; выпуск 0.20 сохраняется.
 Обычно релизный тег неизменяем. Для явно запрошенного исправления на той же
-странице 0.20 workflow принимает `expected_release_commit`: точный текущий commit
+странице workflow принимает `expected_release_commit`: точный текущий commit
 тега. После всех проверок разрешён только переход к его потомку, без force.
-Без этого параметра перенос существующего тега запрещён. Перед обновлением
-сохраните прежний комплект и манифест; имена файлов 0.20 остаются прежними.
+Без этого параметра перенос существующего тега запрещён. Перед таким обновлением
+сохраните прежний комплект и манифест.
 
-Размеры файлов SmartUI 0.20 берите из `RELEASE-MANIFEST.json` того же выпуска, расход RAM/flash — из финального отчёта линковщика соответствующего CI-run. Исторические размеры beta.2 сохранены в [её примечаниях](../RELEASE_NOTES_v2.1.0-beta.2_RU.md) и не являются измерением 0.20. Число изменённых байт исходников не равно изменению бинарника: код и выравнивание тоже меняются.
+Размеры файлов SmartUI 0.21 берите из `RELEASE-MANIFEST.json` того же выпуска, расход RAM/flash — из финального отчёта линковщика соответствующего CI-run. Исторические размеры beta.2 сохранены в [её примечаниях](../RELEASE_NOTES_v2.1.0-beta.2_RU.md) и не являются измерением 0.21. Число изменённых байт исходников не равно изменению бинарника: код и выравнивание тоже меняются.
 
 ## Стабильный baseline: размеры v2.0.0-rc1
 

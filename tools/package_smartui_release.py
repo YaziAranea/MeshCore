@@ -29,10 +29,10 @@ from smartui_source_guard import build_override_reason, checkout_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.20"
-TAG = "smartui-0.20"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.20_RU.md"
-ARCHIVE_NAME = "SmartUI_0.20_all-boards.zip"
+VERSION = "0.21"
+TAG = "smartui-0.21"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.21_RU.md"
+ARCHIVE_NAME = "SmartUI_0.21_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 ASSET_COUNT = 20
 DISTRIBUTION = "public"

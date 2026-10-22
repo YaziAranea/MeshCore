@@ -681,7 +681,7 @@ test('headless service console reads PIN explicitly without changing connection 
     assert.equal(await p.evaluate(()=>__serialMock.mode),'BLE');
   }finally{await f.close();}
 });
-test('0.08 through 0.20 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
+test('0.08 through 0.21 retain verified melody names; unknown firmware or changed catalogs stay numeric',async()=>{
   for (const {version,maximum,named} of [
     {version:'0.08',maximum:30,named:true},
     {version:'0.09',maximum:30,named:true},
@@ -696,7 +696,8 @@ test('0.08 through 0.20 retain verified melody names; unknown firmware or change
     {version:'0.18',maximum:30,named:true},
     {version:'0.19',maximum:30,named:true},
     {version:'0.20',maximum:30,named:true},
-    {version:'0.21',maximum:30,named:false},
+    {version:'0.21',maximum:30,named:true},
+    {version:'0.22',maximum:30,named:false},
     {version:'0.09',maximum:29,named:false},
     {version:'0.10',maximum:29,named:false},
     {version:'0.11',maximum:29,named:false},

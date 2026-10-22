@@ -456,6 +456,8 @@ public:
 };
 
 static int reset_count = 0;
+static unsigned reboot_count = 0;
+static void forceReboot() { ++reboot_count; }
 static bool sleep_inhibited = false;
 static bool cli_rescue = false;
 static bool quarantined = false;
@@ -515,6 +517,7 @@ static ConnectionControllerHooks hooks() {
   value.getQuickReply = getReply;
   value.setQuickReply = setReply;
   value.handleDeviceSettings = settingsHook;
+  value.reboot = forceReboot;
   return value;
 }
 
@@ -1984,6 +1987,15 @@ int main() {
   assert(status.usbConsoleEnabled && (status.capabilities & COMPANION_CAP_BLE));
   assert(manager.getSelectedInterface() == InterfaceType::Bluetooth);
 
+  // Emergency USB reboot bypasses quarantine and performs no persistent write.
+  const auto reboot_files = fs.files;
+  const auto reboot_writes = fs.write_open_count;
+  quarantined = true;
+  send(controller, console, "reboot\n");
+  quarantined = false;
+  assert(reboot_count == 1);
+  assert(fs.files == reboot_files && fs.write_open_count == reboot_writes);
+
 #if defined(ESP32)
   // Selection precedes provisioning: transport remains exclusive but inactive,
   // WiFi radio/server stay off, and USB remains service console.
@@ -2000,6 +2012,13 @@ int main() {
   // blank password after CR advances the wizard stage.
   send(controller, console, "wifi setup\r");
   console.add("\n"); controller.loop();
+  // Even during SSID entry, reboot is a command, never a saved credential.
+  assert(controller.deviceApiBusy());
+  const auto wizard_files = fs.files;
+  const auto wizard_writes = fs.write_open_count;
+  send(controller, console, "reboot\n");
+  assert(reboot_count == 2 && WiFi.begin_count == 0);
+  assert(fs.files == wizard_files && fs.write_open_count == wizard_writes);
   send(controller, console, " My SSID \r");
   assert(WiFi.begin_count == 0);
   console.add("\n"); controller.loop();

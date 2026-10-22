@@ -43,7 +43,7 @@ def package(output):
     # lives at its root. Keep both locations' document links functional.
     for name in ("docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
                  "docs/FLASHING_RU.md", "docs/HELPER_CONSOLE_RU.md", "docs/HELPER_SIMPLE_RU.md",
-                 "RELEASE_NOTES_SmartUI_0.20_RU.md"):
+                 "RELEASE_NOTES_SmartUI_0.21_RU.md"):
         readme = readme.replace(f"](../../{name})", f"]({name})")
     payloads = {
         HTML_NAME: html,
@@ -66,7 +66,7 @@ def package(output):
         "docs/VERIFY_RU.md": (ROOT / "docs/VERIFY_RU.md").read_bytes(),
         "variants/promicro/variant.cpp": (ROOT / "variants/promicro/variant.cpp").read_bytes(),
         "tools/usb-helper/README_RU.md": "# USB Helper 2.9\n\n[Инструкция, возможности и подключение](../../README_RU.md).\n".encode("utf-8"),
-        "RELEASE_NOTES_SmartUI_0.20_RU.md": (ROOT / "RELEASE_NOTES_SmartUI_0.20_RU.md").read_bytes(),
+        "RELEASE_NOTES_SmartUI_0.21_RU.md": (ROOT / "RELEASE_NOTES_SmartUI_0.21_RU.md").read_bytes(),
         "tools/smartui-cli/README.md": (ROOT / "tools/smartui-cli/README.md").read_bytes(),
         "tools/usb-helper/PRESETS_SOURCE_RU.md": (SOURCE / "PRESETS_SOURCE_RU.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
@@ -88,7 +88,7 @@ def package(output):
         "screenshots/command-tree-mobile.png": (SOURCE / "screenshots/command-tree-mobile.png").read_bytes(),
     }
     # Linked historical context and wiring illustrations remain readable offline.
-    for name in ("docs/AUDIT_FIXES_0.06_RU.md", "RELEASE_NOTES_v2.1.0-dev.1_RU.md",
+    for name in ("RELEASE_NOTES_SmartUI_0.20_RU.md", "docs/AUDIT_FIXES_0.06_RU.md", "RELEASE_NOTES_v2.1.0-dev.1_RU.md",
                  "RELEASE_NOTES_v2.1.0-dev_RU.md", "RELEASE_NOTES_v2.1.0-beta.2_RU.md",
                  "docs/assets/ui/wireless-paper-ble-pin.png", "docs/assets/ui/ui006-all-six.png",
                  "docs/assets/ui/ui-overview-three-boards.png", "docs/assets/ui/v4-3-oled-clock.png",

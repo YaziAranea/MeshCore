@@ -248,8 +248,16 @@ int main() {
   }
   CHECK(writes == 0);
 
-  // Disruptive actions must not call hardware while readonly or busy.
-  for (const char* command : {"reboot", "poweroff", "shutdown"}) {
+  // Emergency reboot bypasses settings/storage gates. Transport access is
+  // enforced before this local command parser, not by allow_mutation.
+  next_result = MeshCoreCliResult::OK;
+  CHECK(call("reboot", false) == "OK" && reboots == 1);
+  busy = true;
+  CHECK(call("reboot", false) == "OK" && reboots == 2);
+  CHECK(call("reboot") == "OK" && reboots == 3);
+  busy = false;
+  // Power-off still saves pending state and retains its existing gates.
+  for (const char* command : {"poweroff", "shutdown"}) {
     const unsigned before_actions = reboots + power_offs;
     CHECK(call(command, false) == "Error: readonly");
     busy = true;
@@ -274,7 +282,7 @@ int main() {
   cli.begin(no_action_hooks);
   for (const char* command : {"reboot", "poweroff", "shutdown"}) {
     CHECK(call(command) == "Error: unsupported");
-    CHECK(call(command, false) == "Error: readonly");
+    CHECK(call(command, false) == (strcmp(command,"reboot")==0 ? "Error: unsupported" : "Error: readonly"));
   }
   CHECK(reboots == 3 && power_offs == 6);
   fresh();

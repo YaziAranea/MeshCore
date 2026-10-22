@@ -4,7 +4,7 @@
 // PlatformIO supplies the exact source identity; host tests/source ZIP builds
 // without Git retain an explicit "unknown" rather than inventing a commit.
 #ifndef SMARTUI_VERSION
-#define SMARTUI_VERSION "0.20"
+#define SMARTUI_VERSION "0.21"
 #endif
 #ifndef SMARTUI_CORE_VERSION
 #define SMARTUI_CORE_VERSION "1.18.0"

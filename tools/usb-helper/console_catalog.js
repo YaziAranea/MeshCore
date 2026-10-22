@@ -177,7 +177,7 @@
     action('radio-state','radio','Параметры радио','Частота, полоса, SF, CR и мощность. Ничего не меняет.',['get radio','get tx']),
     action('tx-power','radio','Мощность TX','Мощность радиочипа в dBm; не измеренная мощность после FEM. Точные границы задаёт нода.',['set tx {value}','get tx'],{parameter:number('Мощность, dBm',-9,22,10)}),
     action('fem-lna','radio','FEM · приём','Переключает внешнее усиление приёма, если драйвер платы это поддерживает.',['set fem.lna {value}','get fem.lna'],{parameter:toggle()}),
-    action('fem-pa','radio','FEM · передача','Только при поддержке переключателя TX gain. В публичных профилях 0.20 он недоступен.',['set fem.pa {value}','get fem.pa'],{parameter:toggle()}),
+    action('fem-pa','radio','FEM · передача','Только при поддержке переключателя TX gain. В публичных профилях 0.21 он недоступен.',['set fem.pa {value}','get fem.pa'],{parameter:toggle()}),
     action('agc','radio','Сброс AGC','Включает или выключает периодический сброс AGC каждые 60 секунд.',['set agc_reset {value}','get agc_reset'],{parameter:toggle()}),
     navigation('radio-setup','radio','Настроить радио','Открывает форму частоты, полосы и пресетов с проверкой параметров.','radio'),
     action('board-led','lights','LED платы','Штатная индикация состояния платы. Отдельна от световых уведомлений.',['set board_led {value}','get board_led'],{parameter:toggle()}),

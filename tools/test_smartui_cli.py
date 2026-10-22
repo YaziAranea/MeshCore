@@ -457,7 +457,7 @@ struct NodePrefs {
 };
 struct Mesh {
   NodePrefs prefs; bool save_ok=true,radio_busy=false,gain_supported=true,flush_ok=true;
-  unsigned reboots=0; std::string name; uint32_t pin=1;
+  unsigned reboots=0, flushes=0; std::string name; uint32_t pin=1;
   NodePrefs* getNodePrefs() { return &prefs; }
   bool setLocalNodeName(const char* n) { if(save_ok) name=n; return save_ok; }
   bool setLocalBlePin(uint32_t p) { if(save_ok) pin=p; return save_ok; }
@@ -469,9 +469,13 @@ struct Mesh {
   bool setLocalTimezoneMinutes(int16_t m) { if(save_ok) prefs.timezone_offset_minutes=m; return save_ok; }
   bool localRadioSettingsBusy() { return radio_busy; }
   void rebootLocal() { ++reboots; }  // Returning stands for a failed flush.
-  bool flushPendingStorage() { return flush_ok; }
+  bool flushPendingStorage() { ++flushes; return flush_ok; }
 } the_mesh;
-struct Board { unsigned power_offs=0; void powerOff() { ++power_offs; } } board;
+struct Board {
+  unsigned power_offs=0, reboots=0;
+  void powerOff() { ++power_offs; }
+  void reboot() { ++reboots; }
+} board;
 struct Controller {
   bool writable=true,busy=false; CompanionStatus current;
   CompanionStatus status() const { return current; }
@@ -524,7 +528,16 @@ int main() {
   connection_controller.current.wifiAssociated=true;
   strcpy(connection_controller.current.wifiLocalIp,"10.0.0.7");
   assert(call("get wifi.status")=="> connected" && call("get wifi.ip")=="> 10.0.0.7");
-  assert(call("reboot")=="Error: storage" && the_mesh.reboots==1);
+  assert(call("reboot")=="Error: unsupported" && board.reboots==1);
+  // A returning board stub cannot perform the reset, hence unsupported. On
+  // hardware reboot() never returns. Storage/busy gates must not reach flash.
+  connection_controller.writable=false; connection_controller.busy=true;
+  the_mesh.flush_ok=false; the_mesh.radio_busy=true;
+  assert(call("reboot")=="Error: unsupported" && board.reboots==2);
+  assert(the_mesh.reboots==0 && the_mesh.flushes==0);
+  assert(call("poweroff")=="Error: readonly" && board.power_offs==0);
+  connection_controller.writable=true; connection_controller.busy=false;
+  the_mesh.radio_busy=false;
   the_mesh.flush_ok=false;
   assert(call("poweroff")=="Error: storage" && board.power_offs==0);
   the_mesh.flush_ok=true;

@@ -25,6 +25,8 @@ struct ConnectionControllerHooks {
   // allow_mutation for every persistent change and notification test.
   bool (*handleDeviceSettings)(const char* command, char* reply,
                                size_t capacity, bool allow_mutation) = nullptr;
+  // Emergency local USB command. Must reset directly without storage I/O.
+  void (*reboot)() = nullptr;
 };
 
 class ConnectionController {

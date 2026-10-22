@@ -1652,6 +1652,13 @@ void ConnectionController::printStorageLegacy() {
 }
 
 void ConnectionController::handleConsoleLine(char* raw_line) {
+  // Exact emergency command also works inside a wizard or storage recovery.
+  // Do not queue a reply or wait for the USB host before resetting.
+  if (strcmp(raw_line, "reboot") == 0) {
+    if (_hooks.reboot) _hooks.reboot();
+    printConsole("ERR reboot unsupported\r\n");  // A real reset does not return.
+    return;
+  }
   // These fail-safe commands never become an SSID/password or require writes.
   if (strcmp(raw_line, "settings adc service") == 0 ||
       strcmp(raw_line, "settings adc manual") == 0 ||

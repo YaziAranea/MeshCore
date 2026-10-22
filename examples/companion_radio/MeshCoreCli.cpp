@@ -119,6 +119,14 @@ bool MeshCoreCli::handle(const char* command, char* reply, size_t capacity,
     respond(reply, capacity, "Error: buffer");
     return true;
   }
+  // The local emergency reset must also work while storage is quarantined or
+  // a settings operation is busy. allow_mutation is the storage/settings gate,
+  // not transport authentication. Only the exact command reaches this hook.
+  if (strcmp(command, "reboot") == 0) {
+    if (_hooks.reboot == nullptr) respond(reply, capacity, "Error: unsupported");
+    else respondResult(reply, capacity, _hooks.reboot());
+    return true;
+  }
   if (_hooks.read == nullptr) return false;
 
   for (const char* key : UNSUPPORTED_KEYS) {
@@ -132,11 +140,10 @@ bool MeshCoreCli::handle(const char* command, char* reply, size_t capacity,
     }
   }
 
-  if (strcmp(command, "reboot") == 0 || strcmp(command, "poweroff") == 0 ||
-      strcmp(command, "shutdown") == 0) {
+  if (strcmp(command, "poweroff") == 0 || strcmp(command, "shutdown") == 0) {
     if (!allow_mutation) { respond(reply, capacity, "Error: readonly"); return true; }
     if (_hooks.busy != nullptr && _hooks.busy()) { respond(reply, capacity, "Error: busy"); return true; }
-    auto action = command[0] == 'r' ? _hooks.reboot : _hooks.powerOff;
+    auto action = _hooks.powerOff;
     if (action == nullptr) respond(reply, capacity, "Error: unsupported");
     else respondResult(reply, capacity, action());
     return true;

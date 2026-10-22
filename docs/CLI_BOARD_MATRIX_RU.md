@@ -1,10 +1,10 @@
-# CLI SmartUI 0.20: команды по платам
+# CLI SmartUI 0.21: команды по платам
 
-Матрица относится к **семи аппаратным семействам SmartUI 0.20** и отдельному
+Матрица относится к **семи аппаратным семействам SmartUI 0.21** и отдельному
 headless-профилю ProMicro/FakeTec V4.
 Она помогает выбрать команды для своей ноды и элементы управления в приложении.
 С 0.18 доступен [внешний зуммер на четырёх ESP32](EXTERNAL_BUZZER_RU.md).
-В 0.20 меню и CLI одинаково запрещают новые конфликты LED, звука и вибро.
+В 0.21 меню и CLI одинаково запрещают новые конфликты LED, звука и вибро.
 Мостовой звук T096/T114 требует свободной штатной пары выводов;
 занятый вывод даёт `pin_conflict`, без переноса LED или отключения вибро.
 Синтаксис и примеры — в [справочнике команд](CONSOLE_COMMANDS_RU.md), формат обмена —
@@ -41,10 +41,10 @@ headless-профилю ProMicro/FakeTec V4.
 | Paper | Wireless Paper FULL — `Heltec_Wireless_Paper_companion_radio_ble_smartui_full` |
 
 Другие upstream environments не наследуют эту таблицу автоматически.
-[Выбор платы и файла прошивки](https://github.com/YaziAranea/MeshCore/blob/smartui-0.20/docs/SUPPORTED_BOARDS_RU.md).
+[Выбор платы и файла прошивки](https://github.com/YaziAranea/MeshCore/blob/smartui-0.21/docs/SUPPORTED_BOARDS_RU.md).
 Профили `SmartUI_*_headless` сохраняют задачу уведомлений и защиту АКБ, но
-экранные параметры недоступны. В 0.20 опубликован отдельный
-`ProMicro_FakeTec_RA62_Headless_UI_0.20.uf2` (`SmartUI_ProMicro_headless`).
+экранные параметры недоступны. В 0.21 опубликован отдельный
+`ProMicro_FakeTec_RA62_Headless_UI_0.21.uf2` (`SmartUI_ProMicro_headless`).
 Для него действует столбец ProMicro, кроме всех строк с условием «Экран».
 
 ## Команды, общие для семи плат
@@ -60,12 +60,16 @@ headless-профилю ProMicro/FakeTec V4.
 | `set pin N` | Сохранить BLE PIN: `0` либо шестизначное число; это изменение, не способ просмотра |
 | `reply get N`, `reply set N TEXT`, `reply reset N` | Читать, сохранить, сбросить фразу 1–9; до 64 байт UTF-8, не 64 произвольных символов; это заготовка, не отправка сообщения |
 | `get tz.offset`, `set tz.offset N` | Часовой пояс −12…+14, шаг 0.5; часы этим не синхронизируются |
-| `reboot` | Сохранить изменения и перезагрузить ноду |
+| `reboot` | В 0.21 принудительно перезапустить без сохранения; работает на всех восьми профилях, включая headless, даже при `readonly`/`busy`/ошибке хранилища. Несохранённые изменения могут потеряться |
 | `poweroff`, `shutdown` | После сохранения: nRF52 SYSTEMOFF или ESP32 deep sleep; питание физически не размыкается |
 
 При успешном `reboot`/`poweroff`/`shutdown` ответа может не быть. Один разрыв
 соединения не подтверждает успех; Python/JavaScript SDK эти команды не разрешают.
-`help` в локальном CMD66 у 0.20 отсутствует; справка поставляется в документации.
+Поле команд Helper 2.9 их также не отправляет. CLI `reboot` не форматирует файлы
+и не заменяет аппаратный сброс полностью зависшего процессора. Перезагрузка
+из меню и двоичная Companion-команда `CMD_REBOOT` по-прежнему требуют успешного
+сохранения. [Порядок принудительного перезапуска](CONSOLE_COMMANDS_RU.md#принудительная-перезагрузка).
+`help` в локальном CMD66 у 0.21 отсутствует; справка поставляется в документации.
 
 ## Радио и подключение
 
@@ -185,7 +189,7 @@ LED платы Paper — GPIO18; команды переназначения/у�
 мост и другие роли исключают занятые выводы; диапазон 0–127 не разрешает любой
 контакт из этого диапазона. Внешний мотор требует драйвера, а LED — ограничения тока.
 
-В 0.20 у V3/V4.3/R8/Paper `tone_pin` доступен для назначения при `caps sound=0`.
+В 0.21 у V3/V4.3/R8/Paper `tone_pin` доступен для назначения при `caps sound=0`.
 По умолчанию и после `set tone_pin -1` звук выключен; после назначения допустимого
 GPIO появляется `caps sound=1`. Это поддержка драйвера, не обнаружение зуммера.
 У трёх nRF52 `tone_pin=-1` не разрешён: отключайте звук через `sound`/`mute`.
@@ -287,7 +291,7 @@ GPS, **не поддерживаемый ни одним из семи проф�
 
 1. Выполните discovery CMD40 и найдите единственный `smartui_cli:1`.
 2. Прочитайте `ui hello`: для компактных команд нужен `control=1`; для изменений
-   также нужен `write=1`. Сам номер «0.20» этот обмен не заменяет.
+   также нужен `write=1`. Сам номер «0.21» этот обмен не заменяет.
 3. Проверьте `caps schema`. Для обычной настройки прочитайте `schema KEY`;
    включайте изменение только при `supported=1`. Затем получите `get KEY`.
 4. Перед записью GPIO перечитайте `options`, после записи — значение и зависящие
@@ -362,7 +366,7 @@ USB-companion или Wi-Fi/TCP. Сервисная текстовая USB-кон
 
 Python SDK содержит USB/TCP-адаптеры; BLE требует своего transport exchange
 с общей очередью приложения. JavaScript содержит кодек и Web Serial; USB Helper
-2.7 работает по USB. Его поле команд блокирует `set pin`; формы изменения BLE PIN
+2.9 работает по USB. Его поле команд блокирует `set pin`; формы изменения BLE PIN
 нет. Смена подключения, запись ADC и Wi-Fi provisioning также исключены из
 этого поля и выполняются отдельными формами. Ограничение поля Helper не означает
 отсутствия соответствующей команды в прошивке.
@@ -377,13 +381,13 @@ Python SDK содержит USB/TCP-адаптеры; BLE требует сво�
 
 ## Основание таблиц
 
-Таблицы обновлены для 0.20, включая выбираемый звуковой GPIO ESP32:
+Таблицы обновлены для 0.21, включая выбираемый звуковой GPIO ESP32:
 
-- [Ключи, диапазоны, поддержка и чтение сохранённых значений — DeviceSettings](https://github.com/YaziAranea/MeshCore/blob/smartui-0.20/examples/companion_radio/DeviceSettings.cpp).
-- [Возможности конкретной ноды — main.cpp](https://github.com/YaziAranea/MeshCore/blob/smartui-0.20/examples/companion_radio/main.cpp).
-- [Пины, шрифты, уведомления и зависимости настроек — UITask](https://github.com/YaziAranea/MeshCore/blob/smartui-0.20/examples/companion_radio/ui-new/UITask.cpp).
-- [Интерфейс FEM: переключение TX gain отдельно от наличия PA](https://github.com/YaziAranea/MeshCore/blob/smartui-0.20/src/MeshCore.h).
-- [Аппаратные профили и драйверы](https://github.com/YaziAranea/MeshCore/tree/smartui-0.20/variants).
+- [Ключи, диапазоны, поддержка и чтение сохранённых значений — DeviceSettings](https://github.com/YaziAranea/MeshCore/blob/smartui-0.21/examples/companion_radio/DeviceSettings.cpp).
+- [Возможности конкретной ноды — main.cpp](https://github.com/YaziAranea/MeshCore/blob/smartui-0.21/examples/companion_radio/main.cpp).
+- [Пины, шрифты, уведомления и зависимости настроек — UITask](https://github.com/YaziAranea/MeshCore/blob/smartui-0.21/examples/companion_radio/ui-new/UITask.cpp).
+- [Интерфейс FEM: переключение TX gain отдельно от наличия PA](https://github.com/YaziAranea/MeshCore/blob/smartui-0.21/src/MeshCore.h).
+- [Аппаратные профили и драйверы](https://github.com/YaziAranea/MeshCore/tree/smartui-0.21/variants).
 
 При отличающейся конфигурации сборки или новом релизе приоритет имеют ответы
 конкретной ноды, а не имя платы в этой таблице.

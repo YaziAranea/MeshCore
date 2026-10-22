@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify helper-only packaging rejects altered firmware and false provenance."""
 from copy import deepcopy
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import subprocess
@@ -16,6 +17,22 @@ HELPER_SHA = "12345678" + "1" * 32
 
 class HelperUpdateTests(unittest.TestCase):
     def setUp(self):
+        # Exercise the historical 0.20 operation with its original asset names.
+        # The public package now targets a newer release and must never use it.
+        historical = self.enterContext(ExitStack())
+        firmware_names = tuple(name.replace("_UI_0.21", "_UI_0.20")
+                               for name in update.release.FIRMWARE_NAMES)
+        historical.enter_context(patch.multiple(update.release, VERSION="0.20", TAG="smartui-0.20",
+            NOTES_NAME="RELEASE_NOTES_SmartUI_0.20_RU.md", ARCHIVE_NAME="SmartUI_0.20_all-boards.zip",
+            FIRMWARE_NAMES=firmware_names))
+        historical.enter_context(patch.multiple(update.developer_kit, VERSION="0.20",
+            ZIP_NAME="SmartUI_Developer_Kit_0.20.zip"))
+        unchanged = set(firmware_names) | update.CHECKSUMS
+        changed = update.NEW_HELPER | {update.developer_kit.ZIP_NAME, update.release.ARCHIVE_NAME,
+                                      update.release.NOTES_NAME, update.release.MANIFEST_NAME}
+        historical.enter_context(patch.multiple(update, UNCHANGED=unchanged, CHANGED=changed,
+            OLD_ASSETS=unchanged | (changed - update.NEW_HELPER) | update.OLD_HELPER,
+            NEW_ASSETS=unchanged | changed))
         self.temporary = tempfile.TemporaryDirectory(prefix="smartui-helper-update-test-")
         self.root = Path(self.temporary.name)
         self.base = self.root / "original"
@@ -164,6 +181,16 @@ class HelperUpdateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Immutable firmware/checksum changed"):
                 self.prepare(self.root / "raced")
         self.assertFalse((self.root / "raced").exists())
+
+
+class CurrentReleaseGuardTests(unittest.TestCase):
+    def test_new_release_checkout_cannot_run_historical_helper_update(self):
+        with patch.object(update, "resolve_helper_commit") as resolve, \
+             patch.object(update, "validate_base") as validate:
+            with self.assertRaisesRegex(ValueError, "Historical Helper updater.*0.20"):
+                update.prepare_update(Path("unused-base"), Path("unused-output"))
+            resolve.assert_not_called()
+            validate.assert_not_called()
 
 
 class ActualGitSourceGuardTests(unittest.TestCase):

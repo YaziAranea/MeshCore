@@ -131,6 +131,10 @@ def make_archive(path: Path, payloads: list[Path]) -> None:
 
 def prepare_update(base: Path, output: Path, explicit_commit: str | None = None) -> dict:
     """Create a new complete local bundle; return the restricted upload plan."""
+    # This historical operation is pinned to the old release and source SHA.
+    # Refuse newer checkouts before inspecting files or resolving their HEAD.
+    release.require(developer_kit.VERSION == release.VERSION == "0.20" and release.TAG == "smartui-0.20",
+                    "Historical Helper updater requires the SmartUI 0.20 checkout")
     base, output = Path(base).resolve(), Path(output).resolve()
     release.require(not output.exists(), f"Refusing to overwrite an existing output: {output}")
     release.require(base not in output.parents, "Output must not be inside the immutable base bundle")
@@ -138,8 +142,6 @@ def prepare_update(base: Path, output: Path, explicit_commit: str | None = None)
     original = validate_base(base)
     release.require({helper.HTML_NAME, helper.ZIP_NAME} == NEW_HELPER,
                     "This updater requires exactly Helper 2.9")
-    release.require(developer_kit.VERSION == release.VERSION == "0.20" and release.TAG == "smartui-0.20",
-                    "Firmware version/tag must stay SmartUI 0.20")
     notes = ROOT / release.NOTES_NAME
     release.validate_release_notes(notes.read_text(encoding="utf-8"))
     with tempfile.TemporaryDirectory(prefix="smartui-helper29-update-") as temporary:
