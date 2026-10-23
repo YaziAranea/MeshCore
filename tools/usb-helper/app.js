@@ -45,10 +45,10 @@
     {key:"vibration",cap:"vibration",group:"lights",label:"Вибрация",options:[[1,"Включена"],[0,"Выключена"]]},
     {key:"gps",cap:"gps",group:"gps",label:"Аппаратный GPS",options:[[1,"Включён"],[0,"Выключен"]]},
   ].concat(SmartUiConsole.EXTENDED_FIELDS.map(field=>({...field,extended:true,options:[]})));
-  // Exact public 0.08..0.21 notify_tones order; the package test checks source parity.
+  // Exact public 0.08..0.22 notify_tones order; the package test checks source parity.
   // Other versions retain numeric names unless they share this known catalog.
   const melodyNames = ["Пульс","Бумер","К Элизе","Менуэт","Канон","Рукава","Маяк","Перезв","Колокол","SOS","Ода","Коробейники","Колыбельная","Бадинери","Князь Игорь","Тихая ночь","День рожд.","Гран-вальс","Лебеди","Пинг","Дубль","Рост","Мягк","Ода коротк.","Аркада","Лифт","Nova","Radar","Echo","Tiny","Alert"];
-  const knownMelodies=()=>["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16","0.17","0.18","0.19","0.20","0.21"].includes(state.info?.firmware)&&state.settingsCaps?.melody_max===melodyNames.length-1;
+  const knownMelodies=()=>["0.08","0.09","0.10","0.11","0.12","0.13","0.14","0.15","0.16","0.17","0.18","0.19","0.20","0.21","0.22"].includes(state.info?.firmware)&&state.settingsCaps?.melody_max===melodyNames.length-1;
   const addOptions = (select, options) => {
     select.replaceChildren();
     for (const [value,text] of options) { const option=document.createElement("option"); option.value=String(value); option.textContent=text; select.append(option); }

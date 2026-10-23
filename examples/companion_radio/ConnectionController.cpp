@@ -1712,6 +1712,21 @@ void ConnectionController::handleConsoleLine(char* raw_line) {
   char* line = trimAscii(raw_line);
   lowerAscii(line);
   if (!line[0]) return;
+  if (strncmp(line, "get remote.cli", 14) == 0 ||
+      strncmp(line, "set remote.cli", 14) == 0) {
+    secureZero(_settings_response, sizeof(_settings_response));
+    const bool handled = _hooks.handleRemoteCliPermission &&
+        _hooks.handleRemoteCliPermission(line, _settings_response,
+            sizeof(_settings_response), mutationAllowed());
+    const char* end = static_cast<const char*>(memchr(_settings_response, 0, 157));
+    bool valid = handled && end && end != _settings_response;
+    for (const char* p = _settings_response; valid && p != end; ++p)
+      if (*p < 0x20 || *p > 0x7e) valid = false;
+    printConsole(valid ? _settings_response : "Error: unsupported");
+    printConsole("\r\n");
+    secureZero(_settings_response, sizeof(_settings_response));
+    return;
+  }
   if (strcmp(line, "get pin") == 0 || strcmp(line, "get ble.pin") == 0) {
     // This read remains available during storage quarantine. Never regenerate
     // the PIN, change transports, or expose it in unsolicited diagnostics.

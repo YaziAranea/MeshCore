@@ -155,8 +155,9 @@ int main() {
 def pin_code():
     mesh = (ROOT / "examples/companion_radio/MyMesh.cpp").read_text(encoding="utf-8")
     code = function(mesh, "bool MyMesh::executeLocalCli(")
-    remote = function(mesh, "void MyMesh::onCliCommandMessage(")
-    assert "getBLEPin" not in remote and "execute" not in remote
+    remote = function(mesh, "void MyMesh::onCLICommandFrameRecv(")
+    assert "getBLEPin" not in remote
+    assert "from.isRemoteCLIAllowed()" in remote and "_remote_cli.handle(" in remote
     return r'''
 #include <cassert>
 #include <cstdio>
@@ -188,7 +189,7 @@ int main() {
     assert(!strcmp(reply, "Error: unsupported"));
 #endif
   }
-  puts("PASS local active BLE PIN read; no remote command execution");
+  puts("PASS active BLE PIN read; remote entry requires contact permission");
 }
 '''
 

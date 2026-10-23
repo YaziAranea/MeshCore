@@ -39,6 +39,7 @@ MultiSerialInterface interface_manager;
   #include "SmartUiCliSettings.h"
   #include "RadioSettings.h"
   #include "MeshCoreCli.h"
+  #include "RemoteCliPermissions.h"
   #include "CoreSettingsCommands.h"
   #include "SmartUiConsoleCommands.h"
   #include "SmartUiSync.h"
@@ -624,7 +625,7 @@ static bool cliRadioCommand(const char* command, char* reply, size_t capacity, b
   return radio_settings.handle(command, reply, capacity, allowed);
 }
 static smartui::MeshCoreCliResult cliReboot() {
-  // Emergency local CLI reset: do not enter flash I/O or wait for radio work.
+  // Emergency CLI reset: do not enter flash I/O or wait for radio work.
   // Pending RAM-only changes may be lost. Transport access is checked upstream.
   board.reboot();
   return smartui::MeshCoreCliResult::UNSUPPORTED;  // A real reset does not return.
@@ -647,9 +648,28 @@ static bool cliWifiStatus(bool& associated, char* ip, size_t capacity) {
 }
 static bool cliBusy() { return connection_controller.deviceApiBusy(); }
 
+static bool readRemoteCliPermission(const uint8_t key[32], bool& enabled) {
+  const ContactInfo* contact = the_mesh.lookupContactByPubKey(key, PUB_KEY_SIZE);
+  if (!contact) return false;
+  enabled = contact->isRemoteCLIAllowed();
+  return true;
+}
+static bool writeRemoteCliPermission(const uint8_t key[32], bool enabled) {
+  return the_mesh.setRemoteCliPermission(key, enabled);
+}
+static bool handleCompanionRemoteCliPermission(const char* command, char* reply,
+                                               size_t capacity, bool allow_mutation) {
+  return smartui::handleRemoteCliPermissionCommand(command, reply, capacity,
+      allow_mutation && connection_controller.deviceApiWritesAllowed(),
+      connection_controller.deviceApiBusy(), readRemoteCliPermission, writeRemoteCliPermission);
+}
+
 bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity) {
+  if (handleCompanionRemoteCliPermission(command, reply, capacity,
+      connection_controller.deviceApiWritesAllowed())) return true;
   // Human-facing aliases reuse the exact local UI transactions and their
-  // storage, transport, ADC and FEM busy gates. Never route through remote CLI.
+  // storage, transport, ADC and FEM busy gates. RemoteCli checks permission and
+  // rejects commands that own a local session before entering this dispatcher.
   if (smartui::handleSmartUiConsoleCommand(command, reply, capacity,
                                           executeSmartUiCliCommand)) return true;
   return meshcore_cli.handle(command, reply, capacity,
@@ -1071,6 +1091,7 @@ void setup() {
   connection_hooks.setQuickReply = setCompanionQuickReply;
   connection_hooks.handleDeviceSettings = handleCompanionDeviceSettings;
   connection_hooks.reboot = []() { board.reboot(); };
+  connection_hooks.handleRemoteCliPermission = handleCompanionRemoteCliPermission;
   connection_controller.begin(
       store, interface_manager, Serial,
     #if defined(ESP32)

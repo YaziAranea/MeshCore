@@ -283,8 +283,8 @@ keyboard_targets = ("T096", "T114", "ProMicro", "V4.3 OLED", "Wireless Paper FUL
 for name, block in effective.items():
     check(
         f"{name}: DM-only profile and public release marker",
-        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.21" in block,
-        "every public profile must use DM-only unread and carry the SmartUI 0.21 marker",
+        "UI_UNREAD_DIRECT_ONLY=1" in block and "SmartUI 0.22" in block,
+        "every public profile must use DM-only unread and carry the SmartUI 0.22 marker",
     )
     check(
         f"{name}: experimental Phone GPS is disabled",
@@ -966,7 +966,7 @@ check(
 )
 
 check(
-    "Companion CLI claims protocol 14 without remote execution and rejects archived C9",
+    "Companion CLI claims protocol 14 with contact-gated remote execution and rejects archived C9",
     '#define FIRMWARE_VER_CODE 14' in mymesh_h
     and 'vars.append("smartui_cli", "1")' in mymesh
     and 'vars.append("smartui_api"' not in mymesh
@@ -974,8 +974,10 @@ check(
     and 'writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);' in companion_handler
     and 'handleLocalCliFrame(len);' in companion_handler
     and 'handleSmartUiApiFrame(' not in mymesh
-    and 'onCLICommandRecv(' not in mymesh,
-    "CMD66 is a local-only backport, not full v14/remote CLI or a second active C9 control protocol",
+    and 'onCLICommandFrameRecv(' in mymesh
+    and 'vars.append("remote_cli", "1")' in mymesh
+    and 'isRemoteCLIAllowed()' in mymesh,
+    "CMD66 stays local; radio text type 3 uses explicit per-contact Remote CLI permission; archived C9 stays disabled",
 )
 
 check(
@@ -1532,7 +1534,7 @@ check(
     "V3 enables the shared UI in the seven-board publication",
     has_all(v3_addon, ("UI_V4_3_OLED_PROFILE=1", "UI_QUICK_REPLY_KEYBOARD=1",
                        "UI_COMPACT_SETTINGS_MENU=1", "UI_SMART_B11_EXTRAS=1",
-                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.21")),
+                       "UI_UNREAD_DIRECT_ONLY=1", "SmartUI 0.22")),
     "V3 must use its separate SmartUI environment, not overwrite the stock target or historical release",
 )
 check(
@@ -1563,7 +1565,7 @@ check(
 
 passed = sum(result.ok for result in results)
 failed = len(results) - passed
-print(f"SmartUI 0.21 seven-board contract audit: {passed} passed, {failed} failed")
+print(f"SmartUI 0.22 seven-board contract audit: {passed} passed, {failed} failed")
 for result in results:
     print(f"[{'PASS' if result.ok else 'FAIL'}] {result.label}")
     if not result.ok:

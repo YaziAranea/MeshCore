@@ -17,6 +17,8 @@ struct ContactInfo {
   uint32_t lastmod;  // by OUR clock
   int32_t gps_lat, gps_lon;    // 6 dec places
   uint32_t sync_since;
+  // Transient replay watermark; deliberately absent from contact serialization.
+  mutable uint32_t remote_cli_timestamp;
 
   const uint8_t* getSharedSecret(const mesh::LocalIdentity& self_id) const {
     if (!shared_secret_valid) {

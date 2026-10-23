@@ -6,9 +6,9 @@
 namespace smartui {
 
 // Local CMD66/RESP29 (protocol v14), discovered through smartui_cli:1 or the
-// version code. Remote mesh CLI is not executed: a type-3 command from another
-// node goes to the app, as upstream does for a contact without permission. Prefixes
-// correlate responses only: commands are not cached or deduplicated.
+// version code. RemoteCli reuses this parser in a separate instance after native
+// type-3 delivery, with contact permission and RAM timestamp replay checks.
+// Prefixes correlate responses only; they are not idempotency keys.
 class SmartUiCli {
 public:
   static constexpr uint8_t COMMAND = 66;

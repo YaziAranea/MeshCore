@@ -8,12 +8,13 @@ import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.21"
+VERSION = "0.22"
 ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}.zip"
 DEVELOPMENT_ZIP_NAME = f"SmartUI_Developer_Kit_{VERSION}-development.zip"
 SOURCES = (
     "LICENSE",
     "docs/SMARTUI_CLI_RU.md",
+    "docs/REMOTE_CLI_RU.md",
     "docs/HELPER_CONSOLE_RU.md",
     "docs/HELPER_SIMPLE_RU.md",
     "docs/CONSOLE_COMMANDS_RU.md",
@@ -36,6 +37,7 @@ SOURCES = (
     "docs/assets/ui/ui-overview-three-boards.png",
     "docs/assets/ui/v4-3-oled-clock.png",
     "docs/assets/ui/wireless-paper-wood-clock.png",
+    "RELEASE_NOTES_SmartUI_0.22_RU.md",
     "RELEASE_NOTES_SmartUI_0.21_RU.md",
     "RELEASE_NOTES_SmartUI_0.20_RU.md",
     "tools/smartui-cli/README.md",
@@ -103,7 +105,7 @@ def package(output, commit, *, root=ROOT, development=False, firmware_commit=Non
         "[Простое управление](../../docs/HELPER_SIMPLE_RU.md).\n\n"
         "[Дерево команд и макросы](../../docs/HELPER_CONSOLE_RU.md).\n\n"
         "Отдельный offline HTML и полная инструкция находятся в "
-        "[USB Helper из выпуска SmartUI 0.21](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.21).\n"
+        "[USB Helper из выпуска SmartUI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22).\n"
     ).encode("utf-8")
     title = (f"# SmartUI Developer Kit — LOCAL DEVELOPMENT (base {VERSION})\n\n"
              if development else f"# SmartUI {VERSION} — Developer Kit\n\n")

@@ -16,12 +16,18 @@ import subprocess
 import tempfile
 
 
-SOURCES = ("MyMesh.cpp", "SmartUiCli.cpp", "SmartUiConsoleCommands.cpp",
+SOURCES = ("MyMesh.cpp", "BaseChatMesh.cpp", "RemoteCli.cpp", "SmartUiCli.cpp", "SmartUiConsoleCommands.cpp",
            "SmartUiCliSettings.cpp", "DeviceSettings.cpp")
 CONSOLE_WRAPPER = "smartui::handleSmartUiConsoleCommand("
 CONSOLE_BRANCHES = ("smartui::{anonymous}::scalarCommand(",
                     "smartui::{anonymous}::quickReply(")
 CONSOLE_BRANCH_BUDGET = 384
+REMOTE_CHAIN = ("BaseChatMesh::onPeerDataRecv(", "MyMesh::onCLICommandFrameRecv(",
+                "smartui::RemoteCli::handle(", "smartui::SmartUiCli::handle(",
+                "smartui::RemoteCli::dispatch(", "MyMesh::executeLocalCli(")
+# Production Cortex-M4 -Ofast baseline is 560 B; allow one 16-byte alignment
+# step while rejecting any newly nested command/reply-sized scratch buffer.
+REMOTE_CHAIN_BUDGET = 576
 BUDGETS = {
     "MyMesh::handleCmdFrame(": 64,
     "MyMesh::handleLocalCliFrame(": 64,
@@ -29,6 +35,11 @@ BUDGETS = {
     "MyMesh::setLocalNodeName(": 96,
     "MyMesh::setLocalTxPower(": 80,
     "smartui::SmartUiCli::handle(": 160,
+    "BaseChatMesh::onPeerDataRecv(": 256,
+    "MyMesh::onCLICommandFrameRecv(": 48,
+    "smartui::RemoteCli::handle(": 96,
+    "smartui::RemoteCli::dispatch(": 64,
+    "MyMesh::executeLocalCli(": 64,
     CONSOLE_WRAPPER: 64,
     CONSOLE_BRANCHES[0]: CONSOLE_BRANCH_BUDGET,
     CONSOLE_BRANCHES[1]: CONSOLE_BRANCH_BUDGET,
@@ -60,6 +71,14 @@ def check_budgets(records):
         if total > CONSOLE_BRANCH_BUDGET:
             raise RuntimeError(f"Nested CLI stack regression: wrapper + {branch} "
                                f"uses {total} > {CONSOLE_BRANCH_BUDGET} bytes")
+    # Native radio RX adds its bounded reply buffer before the shared dispatcher.
+    # Buffers moved into RemoteCli must stay on the object, not this call chain.
+    remote_total = sum(frames[name] for name in REMOTE_CHAIN)
+    print(f"Remote CLI receive/dispatch chain {remote_total} B "
+          f"(budget {REMOTE_CHAIN_BUDGET} B)", flush=True)
+    if remote_total > REMOTE_CHAIN_BUDGET:
+        raise RuntimeError(f"Nested remote CLI stack regression: {remote_total} > "
+                           f"{REMOTE_CHAIN_BUDGET} bytes")
 
 
 def main():
@@ -102,7 +121,7 @@ def main():
                 identity, size, category = line.rsplit("\t", 2)
                 records.append((identity, int(size), category))
         check_budgets(records)
-    print("PASS production ARM local CLI frames and console branch sums (not a full call-graph proof)")
+    print("PASS production ARM local/remote CLI frames and branch sums (not a full call-graph proof)")
 
 
 if __name__ == "__main__":

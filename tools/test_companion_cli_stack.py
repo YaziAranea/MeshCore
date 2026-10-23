@@ -46,6 +46,24 @@ class ConsoleStackBudgetTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Unbounded/dynamic stack frame"):
             self.check(records)
 
+    def test_missing_remote_adapter_cannot_hide_new_buffers(self):
+        for function in stack.REMOTE_CHAIN:
+            records = [record for record in self.records() if record[0] != function]
+            with self.subTest(function=function):
+                with self.assertRaisesRegex(RuntimeError, "Missing production stack record"):
+                    self.check(records)
+
+    def test_remote_nested_frames_are_summed(self):
+        records = [(name, stack.BUDGETS[name] if name in stack.REMOTE_CHAIN else size, kind)
+                   for name, size, kind in self.records()]
+        with self.assertRaisesRegex(RuntimeError, "Nested remote CLI stack regression"):
+            self.check(records)
+
+    def test_remote_dynamic_frame_fails_closed(self):
+        records = self.records() + [("smartui::RemoteCli::dispatch( [clone]", 8, "dynamic")]
+        with self.assertRaisesRegex(RuntimeError, "Unbounded/dynamic stack frame"):
+            self.check(records)
+
 
 if __name__ == "__main__":
     unittest.main()

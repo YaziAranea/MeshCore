@@ -27,6 +27,8 @@ struct ConnectionControllerHooks {
                                size_t capacity, bool allow_mutation) = nullptr;
   // Emergency local USB command. Must reset directly without storage I/O.
   void (*reboot)() = nullptr;
+  bool (*handleRemoteCliPermission)(const char* command, char* reply,
+                                    size_t capacity, bool allow_mutation) = nullptr;
 };
 
 class ConnectionController {

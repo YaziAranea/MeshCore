@@ -507,6 +507,31 @@ static bool settingsHook(const char* command, char* reply, size_t capacity, bool
   return true;
 }
 
+static unsigned remote_permission_calls = 0, remote_permission_writes = 0;
+static unsigned remote_permission_reply_fault = 0;
+static bool remote_permission_writable = false;
+static std::string remote_permission_command;
+static bool remotePermissionHook(const char* command, char* reply, size_t capacity, bool writable) {
+  ++remote_permission_calls;
+  remote_permission_command = command;
+  remote_permission_writable = writable;
+  assert(capacity >= 157);
+  switch (remote_permission_reply_fault) {
+    case 1: std::memset(reply, 'x', capacity); return true;
+    case 2: std::strcpy(reply, "OK\r\nprivate-key"); return true;
+    case 3: std::strcpy(reply, "private-key"); return false;
+    case 4: reply[0] = 0; return true;
+    case 5: reply[0] = 0x7f; reply[1] = 0; return true;
+    case 6: reply[0] = static_cast<char>(0x80); reply[1] = 0; return true;
+    case 7: std::memset(reply, 'x', 156); reply[156] = 0; return true;
+    case 8: std::memset(reply, 'x', 157); reply[157] = 0; return true;
+  }
+  const bool read = std::strncmp(command, "get remote.cli ", 15) == 0;
+  if (!read && writable) ++remote_permission_writes;
+  std::strcpy(reply, read ? "> on" : writable ? "OK" : "Error: readonly");
+  return true;
+}
+
 static ConnectionControllerHooks hooks() {
   ConnectionControllerHooks value;
   value.resetLocalSession = resetSession;
@@ -517,6 +542,7 @@ static ConnectionControllerHooks hooks() {
   value.getQuickReply = getReply;
   value.setQuickReply = setReply;
   value.handleDeviceSettings = settingsHook;
+  value.handleRemoteCliPermission = remotePermissionHook;
   value.reboot = forceReboot;
   return value;
 }
@@ -1516,6 +1542,109 @@ static void testDeviceSettingsConsole() {
 #endif
 }
 
+static void testRemotePermissionConsole() {
+  std::string key;
+  for (unsigned i=0; i<32; ++i) key += "ab";
+  const std::string get="get remote.cli "+key+"\n", set="set remote.cli "+key+" on\n";
+  RecoveryFixture fixture;
+  fixture.boot(); pump(fixture.controller); fixture.console.output.clear();
+  send(fixture.controller,fixture.console,("  GET REMOTE.CLI "+key+"  \r\n").c_str());
+  assert(remote_permission_command==get.substr(0,get.size()-1) && remote_permission_writable);
+  assert(fixture.console.output=="> on\r\n");
+  fixture.console.output.clear();
+  const unsigned write_start=remote_permission_writes;
+  send(fixture.controller,fixture.console,set.c_str());
+  assert(remote_permission_writes==write_start+1 && fixture.console.output=="OK\r\n");
+
+  quarantined=true; fixture.console.output.clear();
+  const auto files=fixture.fs.files;
+  send(fixture.controller,fixture.console,(get+set).c_str());
+  assert(!remote_permission_writable && remote_permission_writes==write_start+1);
+  assert(fixture.console.output=="> on\r\nError: readonly\r\n" && fixture.fs.files==files);
+  quarantined=false;
+
+  for (unsigned fault : {1U,2U,3U,4U,5U,6U,8U}) {
+    remote_permission_reply_fault=fault; fixture.console.output.clear();
+    send(fixture.controller,fixture.console,get.c_str());
+    assert(fixture.console.output=="Error: unsupported\r\n");
+    assert(fixture.console.output.find("private-key")==std::string::npos);
+  }
+  remote_permission_reply_fault=7; fixture.console.output.clear();
+  send(fixture.controller,fixture.console,(get+get).c_str());
+  const std::string maximum=std::string(156,'x')+"\r\n";
+  assert(fixture.console.output==maximum+maximum);
+  remote_permission_reply_fault=0;
+
+  // A host that stops reading cannot lose a response or trigger the next write.
+  fixture.console.output.clear(); fixture.console.write_room=0;
+  const unsigned before_stall=remote_permission_calls, before_write=remote_permission_writes;
+  fixture.console.add((get+set).c_str()); pump(fixture.controller,100);
+  assert(remote_permission_calls==before_stall+1 && remote_permission_writes==before_write);
+  assert(fixture.console.unread()>0 && fixture.console.output.empty());
+  fixture.console.write_room=3; pump(fixture.controller,160);
+  assert(remote_permission_calls==before_stall+2 && remote_permission_writes==before_write+1);
+  assert(fixture.console.unread()==0 && fixture.console.output=="> on\r\nOK\r\n");
+  fixture.console.write_room=4096;
+  const unsigned before_overflow=remote_permission_calls;
+  send(fixture.controller,fixture.console,("set remote.cli "+std::string(170,'a')+" on\n").c_str());
+  assert(remote_permission_calls==before_overflow);
+
+  RecoveryFixture recovery;
+  recovery.fs.files["/connection.cfg"]=configRecord(CompanionMode::USB);
+  recovery.fs.files["/connection.forgot"]={1};
+  recovery.fs.fail_remove_path="/connection.forgot";
+  recovery.boot(); pump(recovery.controller); recovery.console.output.clear();
+  assert(recovery.controller.status().storageRecoveryRequired);
+  const unsigned before_recovery=remote_permission_writes;
+  send(recovery.controller,recovery.console,(get+set).c_str());
+  assert(!remote_permission_writable && remote_permission_writes==before_recovery);
+  assert(recovery.console.output=="> on\r\nError: readonly\r\n");
+
+  RecoveryFixture no_hook;
+  auto absent=hooks(); absent.handleRemoteCliPermission=nullptr;
+  no_hook.controller.begin(no_hook.store,no_hook.manager,no_hook.console,nullptr,absent);
+  pump(no_hook.controller); no_hook.console.output.clear();
+  const unsigned before_absent=remote_permission_calls;
+  send(no_hook.controller,no_hook.console,set.c_str());
+  assert(remote_permission_calls==before_absent && no_hook.console.output=="Error: unsupported\r\n");
+
+  // USB binary-companion ownership and legacy rescue must not consume text.
+  RecoveryFixture owned; owned.boot(); pump(owned.controller);
+  assert(owned.controller.setMode(CompanionMode::USB)); pump(owned.controller);
+  owned.console.output.clear(); owned.console.add(set.c_str());
+  const unsigned before_owner=remote_permission_calls;
+  pump(owned.controller);
+  assert(remote_permission_calls==before_owner && owned.console.unread()==set.size());
+  assert(owned.console.output.empty());
+  RecoveryFixture rescue; rescue.boot(); pump(rescue.controller);
+  rescue.console.output.clear(); rescue.console.add(set.c_str()); cli_rescue=true;
+  pump(rescue.controller);
+  assert(remote_permission_calls==before_owner && rescue.console.unread()==set.size());
+  assert(rescue.console.output.empty()); cli_rescue=false;
+
+#if defined(ESP32)
+  RecoveryFixture wizard; wizard.boot(); pump(wizard.controller);
+  send(wizard.controller,wizard.console,"wifi setup\n");
+  const unsigned before_wizard=remote_permission_calls;
+  // A complete ACL command cannot silently become an admin operation while
+  // the input belongs to the SSID or password field.
+  send(wizard.controller,wizard.console,set.c_str());
+  assert(remote_permission_calls==before_wizard);
+  send(wizard.controller,wizard.console,"Home\n");
+  send(wizard.controller,wizard.console,set.c_str());
+  assert(remote_permission_calls==before_wizard);
+  send(wizard.controller,wizard.console,"cancel\n");
+  char reply[256]={};
+  assert(wizard.controller.handleApiCommand("api wifi begin",reply,sizeof(reply),true));
+  assert(std::strcmp(reply,"OK api wifi begin state=ssid")==0);
+  wizard.console.output.clear();
+  send(wizard.controller,wizard.console,(get+set).c_str());
+  assert(remote_permission_calls==before_wizard);
+  assert(wizard.console.output.find("owned by the companion API")!=std::string::npos);
+  assert(wizard.controller.handleApiCommand("api wifi cancel",reply,sizeof(reply),true));
+#endif
+}
+
 class MyMesh {
 public:
   bool _cli_rescue = false;
@@ -2309,6 +2438,7 @@ int main() {
   testInfoReadOnly();
   testLocalPinRead();
   testDeviceSettingsConsole();
+  testRemotePermissionConsole();
   testPhysicalUsbServiceEntry();
   testApiConnectionControl();
   testCliQuickReplies();
@@ -2425,7 +2555,7 @@ def main() -> None:
         run_build(root, "esp32")
         run_build(root, "generic")
         run_build(root, "nrf52")
-    print("[PASS] ConnectionController generic/ESP32/nRF52 persistence, append-safe recovery, zero-write clean boot, bounded read-only storage diagnostics, exact failure phases, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards")
+    print("[PASS] ConnectionController generic/ESP32/nRF52 persistence, append-safe recovery, zero-write clean boot, bounded read-only storage diagnostics, exact failure phases, privacy, console compatibility, staged API Wi-Fi, transactional save, secrets, session/timeout cleanup, ACK/drain-gated mode changes, settings guards, remote CLI permission console boundaries/ownership/read-only")
 
 
 if __name__ == "__main__":

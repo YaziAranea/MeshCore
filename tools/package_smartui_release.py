@@ -29,10 +29,10 @@ from smartui_source_guard import build_override_reason, checkout_root
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.21"
-TAG = "smartui-0.21"
-NOTES_NAME = "RELEASE_NOTES_SmartUI_0.21_RU.md"
-ARCHIVE_NAME = "SmartUI_0.21_all-boards.zip"
+VERSION = "0.22"
+TAG = "smartui-0.22"
+NOTES_NAME = "RELEASE_NOTES_SmartUI_0.22_RU.md"
+ARCHIVE_NAME = "SmartUI_0.22_all-boards.zip"
 MANIFEST_NAME = "RELEASE-MANIFEST.json"
 ASSET_COUNT = 20
 DISTRIBUTION = "public"
@@ -273,6 +273,10 @@ def package_release(output: Path, files: list[tuple[Path, str]], notes: Path, co
             "experimental": False, "board_count": 7, "profile_count": 8, "firmware_count": 12,
             "asset_count": ASSET_COUNT,
             "publication": dict(PUBLICATION),
+            "remote_cli": {"transport": "mesh-text", "request_text_type": 3,
+                           "response_text_type": 1, "contact_permission_flag": 16,
+                           "max_command_bytes": 156, "max_reply_bytes": 156,
+                           "replay_protection_scope": "current-boot"},
             "developer_kit": record(kit_path, source_commit=commit, cli_version=1,
                                     transport="companion-cli",
                                     companion_protocol_version=14, local_only=True),

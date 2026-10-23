@@ -76,9 +76,10 @@ class HelperPackageTests(unittest.TestCase):
                     "docs/CONSOLE_COMMANDS_RU.md", "docs/HELPER_CONSOLE_RU.md", "docs/HELPER_SIMPLE_RU.md",
                     "docs/CLI_BOARD_MATRIX_RU.md",
                     "docs/EXTERNAL_BUZZER_RU.md",
-                    "docs/SMARTUI_CLI_RU.md", "tools/smartui-cli/README.md",
+                    "docs/SMARTUI_CLI_RU.md", "docs/REMOTE_CLI_RU.md", "tools/smartui-cli/README.md",
                     "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md", "docs/CONTACT_STORAGE_RU.md",
-                    "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.21_RU.md",
+                    "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.22_RU.md",
+                    "RELEASE_NOTES_SmartUI_0.21_RU.md",
                     "RELEASE_NOTES_SmartUI_0.20_RU.md",
                     "docs/PROMICRO_GPS_RU.md", "docs/BUILD_RU.md", "docs/VERIFY_RU.md",
                     "variants/promicro/variant.cpp", "tools/usb-helper/README_RU.md",
@@ -103,10 +104,11 @@ class HelperPackageTests(unittest.TestCase):
                     source_doc = (helper.ROOT / doc).read_text(encoding="utf-8")
                     self.assertEqual(archive.read(doc).decode("utf-8"),
                                      source_doc.replace("../tools/usb-helper/screenshots/", "../screenshots/"))
-                for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
+                for name in ("docs/CONSOLE_COMMANDS_RU.md", "docs/SMARTUI_CLI_RU.md", "docs/REMOTE_CLI_RU.md", "docs/CLI_BOARD_MATRIX_RU.md",
                              "docs/EXTERNAL_BUZZER_RU.md",
                              "docs/SUPPORTED_BOARDS_RU.md", "docs/MIGRATION_1.18_RU.md",
-                             "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.21_RU.md",
+                             "docs/FLASHING_RU.md", "RELEASE_NOTES_SmartUI_0.22_RU.md",
+                             "RELEASE_NOTES_SmartUI_0.21_RU.md",
                              "RELEASE_NOTES_SmartUI_0.20_RU.md",
                              "tools/smartui-cli/README.md"):
                     self.assertEqual(archive.read(name), (helper.ROOT / name).read_bytes())

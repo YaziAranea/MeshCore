@@ -270,10 +270,15 @@ void BaseChatMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender
       char *reply = (char *)&temp[5];
       *reply = 0;
 
-      onCLICommandRecv(from, packet, sender_timestamp, command, reply);  // let UI know
+      onCLICommandFrameRecv(from, packet, sender_timestamp, command, len - 5, reply);
       // NOTE: no ack expected for CLI_COMMAND replies
 
-      int text_len = strlen(reply);
+      size_t text_len = 0;
+      while (text_len <= MAX_TEXT_LEN && reply[text_len]) ++text_len;
+      if (text_len > MAX_TEXT_LEN) {
+        strcpy(reply, "Error: response too long");
+        text_len = strlen(reply);
+      }
       if (text_len > 0) {
         uint32_t timestamp = getRTCClock()->getCurrentTimeUnique();
         if (timestamp == sender_timestamp) {
@@ -894,6 +899,7 @@ bool BaseChatMesh::addContact(const ContactInfo& contact) {
   ContactInfo* dest = allocateContactSlot(contact.type == ADV_TYPE_NONE);
   if (dest) {
     *dest = contact;
+    dest->remote_cli_timestamp = 0;
     dest->shared_secret_valid = false; // mark shared_secret as needing calculation
     return true;  // success
   }

@@ -1,6 +1,7 @@
 // Template used by test_smartui_cli.py. Production methods are inserted, not
 // reimplemented here. Spies replace encryption, RF, clocks, display and serial.
 #include "CompanionFrameValidation.h"
+#include "RemoteCli.h"
 #include <helpers/TxtDataHelpers.h>
 #include <cassert>
 #include <cstdio>
@@ -16,8 +17,18 @@
 #define MESH_DEBUG_PRINTLN(...) do {} while (0)
 
 static unsigned command_executions;
-bool executeSmartUiCliCommand(const char*, char*, size_t) { ++command_executions; return true; }
-bool executeMeshCoreCliCommand(const char*, char*, size_t) { ++command_executions; return true; }
+static std::string executed_command, executor_reply = "OK";
+static bool executor_handles = true;
+bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
+  ++command_executions; executed_command = command;
+  snprintf(reply, capacity, "%s", executor_reply.c_str()); return executor_handles;
+}
+bool executeMeshCoreCliCommand(const char* command, char* reply, size_t capacity) {
+  return executeSmartUiCliCommand(command, reply, capacity);
+}
+#define SMARTUI_VERSION "0.22"
+#define FIRMWARE_VERSION "v1.18.0"
+struct Board { const char* getManufacturerName() const { return "Test board"; } } board;
 
 struct Identity { uint8_t pub_key[PUB_KEY_SIZE] = {1, 2, 3, 4, 5, 6}; };
 struct ContactInfo {
@@ -25,8 +36,10 @@ struct ContactInfo {
   char name[32] = "Peer";
   uint8_t out_path[MAX_PATH_SIZE] = {}, out_path_len = OUT_PATH_UNKNOWN, flags = 0;
   uint32_t lastmod = 0, sync_since = 0;
+  mutable uint32_t remote_cli_timestamp = 0;
   uint8_t secret[PUB_KEY_SIZE] = {};
   const uint8_t* getSharedSecret(const Identity&) const { return secret; }
+  bool isRemoteCLIAllowed() const { return flags & 0x10; }
 };
 namespace mesh {
 struct Packet {
@@ -51,7 +64,7 @@ struct Millis { uint32_t getMillis() const { return 777; } };
 struct Random { void random(uint8_t* dest, size_t n) { memset(dest, 1, n); } };
 struct Radio { uint32_t getEstAirtimeFor(size_t) const { return 10; } };
 struct BaseChatMesh {
-  ContactInfo contacts[1]; int num_contacts = 1, matching_peer_indexes[1] = {0};
+  ContactInfo contacts[2]; int num_contacts = 1, matching_peer_indexes[1] = {0};
   Identity self_id; Clock clock; Random random; Radio radio; Radio* _radio = &radio;
   mesh::Packet outgoing, path_return;
   uint8_t temp_buf[MAX_PACKET_PAYLOAD] = {};
@@ -82,8 +95,9 @@ struct BaseChatMesh {
   void handleReturnPathRetry(const ContactInfo&, const uint8_t*, uint8_t) {}
   virtual void onMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
   virtual void onCommandDataRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
-  virtual void onCliCommandMessage(const ContactInfo&, mesh::Packet*, uint32_t, const char*) = 0;
+  virtual void onCliCommandMessage(const ContactInfo&, mesh::Packet*, uint32_t, const char*) {}
   virtual void onCLICommandRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*, char*);
+  virtual void onCLICommandFrameRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*, size_t, char*);
   virtual void onSignedMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const uint8_t*, const char*) = 0;
   void onPeerDataRecv(mesh::Packet*, uint8_t, int, const uint8_t*, uint8_t*, size_t);
   mesh::Packet* composeMsgPacket(const ContactInfo&, uint32_t, uint8_t, const char*, uint32_t&);
@@ -103,6 +117,8 @@ struct Serial {
   void writeFrame(const uint8_t* data, size_t len) { frames.emplace_back(data, data + len); }
 };
 struct MyMesh : BaseChatMesh {
+  smartui::RemoteCli _remote_cli;
+  struct Prefs { char node_name[32] = "Local node"; double freq = 869.618, bw = 62.5; unsigned sf = 8, cr = 8; } _prefs;
   struct Listener {
     void onMessageRecv(mesh::Packet*, const ContactInfo&, uint8_t, uint32_t, const char*) { }
     void onQueueSizeChanged(int) { }
@@ -135,13 +151,13 @@ struct MyMesh : BaseChatMesh {
     return contact_exists && !memcmp(key, contacts[0].id.pub_key, len) ? &contacts[0] : nullptr;
   }
   void writeErrFrame(uint8_t code) { uint8_t frame[] = {1, code}; _serial->writeFrame(frame, 2); }
-  bool executeLocalCli(const char*, char*, size_t) { ++command_executions; return true; }
+  static bool executeLocalCli(void*, const char*, char*, size_t);
   bool handleCommand(const char*, uint32_t, char*) { ++command_executions; return true; }
   void recordExpectedAck(uint32_t, const uint8_t[PUB_KEY_SIZE]);
   void queueMessage(const ContactInfo&, uint8_t, mesh::Packet*, uint32_t, const uint8_t*, int, const char*);
   void onMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) override;
   void onCommandDataRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) override;
-  void onCliCommandMessage(const ContactInfo&, mesh::Packet*, uint32_t, const char*) override;
+  void onCLICommandFrameRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*, size_t, char*) override;
   void onSignedMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const uint8_t*, const char*) override;
   void handleCmdFrame(size_t);
 };
@@ -152,7 +168,6 @@ static uint32_t u32(const uint8_t* p) { uint32_t value; memcpy(&value, p, 4); re
 static void guards(const MyMesh& mesh) {
   assert(mesh.before == 0x12345678 && mesh.after == 0x87654321);
   assert(mesh.out_frame[MAX_FRAME_SIZE] == 0);
-  assert(command_executions == 0);
 }
 static void send(MyMesh& mesh, uint8_t type, const std::string& text, uint8_t attempt = 2) {
   assert(text.size() + 13 <= MAX_FRAME_SIZE);
@@ -163,16 +178,21 @@ static void send(MyMesh& mesh, uint8_t type, const std::string& text, uint8_t at
   memcpy(mesh.cmd_frame + 13, text.data(), text.size());
   mesh.handleCmdFrame(13 + text.size()); guards(mesh);
 }
-static void receive(MyMesh& mesh, uint8_t type, bool flood, const std::string& text) {
+static void receive(MyMesh& mesh, uint8_t type, bool flood, const std::string& text,
+                    uint32_t timestamp = 123, uint8_t attempt = 2) {
   assert(text.size() <= MAX_TEXT_LEN);
   // Mesh supplies spare termination/padding bytes to onPeerDataRecv.
   uint8_t data[MAX_PACKET_PAYLOAD + 2] = {};
-  const uint32_t timestamp = 123; memcpy(data, &timestamp, 4); data[4] = (type << 2) | 2;
+  memcpy(data, &timestamp, 4); data[4] = (type << 2) | (attempt & 3);
   memcpy(data + 5, text.data(), text.size());
   mesh::Packet packet; packet.flood = flood;
   mesh.onPeerDataRecv(&packet, PAYLOAD_TYPE_TXT_MSG, 0, mesh.contacts[0].secret,
                       data, 5 + text.size());
   assert(data[5 + text.size()] == 0); guards(mesh);
+}
+static std::string response(const MyMesh& mesh) {
+  assert(mesh.outgoing.payload.size() > 5 && mesh.outgoing.payload[4] == (TXT_TYPE_CLI_DATA << 2));
+  return std::string(mesh.outgoing.payload.begin() + 5, mesh.outgoing.payload.end());
 }
 int main() {
   static_assert(TXT_TYPE_CLI_COMMAND == 3, "Protocol14 text command wire value");
@@ -206,6 +226,12 @@ int main() {
     for (bool flood : {false, true}) for (uint8_t app : {uint8_t(2), uint8_t(3)}) {
       MyMesh mesh; mesh.app_target_ver = app; mesh.serial.connected = false;
       receive(mesh, type, flood, "reboot");
+      if (type == TXT_TYPE_CLI_COMMAND) {
+        assert(response(mesh) == "Error: denied" && mesh.datagrams == 1);
+        assert(mesh.queued.empty() && mesh.serial.frames.empty() && mesh.ui.messages == 0);
+        assert(mesh.marks == 0 && mesh.status_notes == 0 && command_executions == 0);
+        ++cases; continue;
+      }
       const size_t prefix = app >= 3 ? 3 : 0;
       assert(mesh.queued[0] == (app >= 3 ? RESP_CODE_CONTACT_MSG_RECV_V3 : RESP_CODE_CONTACT_MSG_RECV));
       assert(!memcmp(mesh.queued.data() + 1 + prefix, mesh.contacts[0].id.pub_key, 6));
@@ -227,9 +253,12 @@ int main() {
   for (const char* command : {"reboot", "set pin 123456", "ui set volume 1"}) {
     for (uint8_t flags : {uint8_t(0), uint8_t(0x10)}) {
       MyMesh mesh; mesh.contacts[0].flags = flags;
+      const unsigned before = command_executions;
       receive(mesh, TXT_TYPE_CLI_COMMAND, true, command);
-      assert(mesh.serial.frames == std::vector<std::vector<uint8_t>>{{PUSH_CODE_MSG_WAITING}});
-      assert(mesh.datagrams == 0 && mesh.path_returns == 0 && mesh.rx_acks == 0);
+      assert(response(mesh) == (flags ? "OK" : "Error: denied"));
+      assert(command_executions == before + unsigned(flags != 0));
+      assert(mesh.serial.frames.empty() && mesh.queued.empty());
+      assert(mesh.datagrams == 1 && mesh.path_returns == 0 && mesh.rx_acks == 0);
       assert(mesh.ui.messages == 0 && mesh.ui.notifications == 0); ++cases;
     }
   }
@@ -271,7 +300,7 @@ int main() {
   }
   {
     MyMesh mesh; receive(mesh, TXT_TYPE_CLI_COMMAND, false, std::string(MAX_TEXT_LEN, 'x'));
-    assert(mesh.queued.size() == 16 + MAX_TEXT_LEN && mesh.queued.size() == MAX_FRAME_SIZE);
+    assert(mesh.queued.empty() && response(mesh) == "Error: command too long");
     guards(mesh); ++cases;
   }
   {
@@ -294,6 +323,109 @@ int main() {
     receive(mesh, TXT_TYPE_CLI_COMMAND, false, "get name");
     assert(mesh.queued.empty() && mesh.serial.frames.empty()); ++cases;
   }
-  assert(command_executions == 0);
-  printf("PASS production companion type3 RX/TX: %u cases; no execution/ACK/UI alert, bounded frames, types0/1 retained\n", cases);
+  // Native remote execution preserves correlation, full contact permission and
+  // timestamp ordering independently of retry bits. No app session/UI side effects.
+  for (bool flood : {false, true}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; mesh.contacts[0].out_path_len = flood ? OUT_PATH_UNKNOWN : 2;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ab|get name", 1);
+    assert(response(mesh) == "ab|> Local node" && mesh.contacts[0].remote_cli_timestamp == 1);
+    assert(mesh.flood_sends == unsigned(flood) && mesh.direct_sends == unsigned(!flood));
+    assert(mesh.queued.empty() && mesh.serial.frames.empty());
+    const unsigned before = command_executions;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "cd|set volume 2", 2, 0);
+    assert(response(mesh) == "cd|OK" && command_executions == before + 1);
+    for (uint8_t attempt : {uint8_t(0), uint8_t(1), uint8_t(2), uint8_t(3)}) {
+      receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ef|set volume 3", 2, attempt);
+      assert(response(mesh) == "ef|Error: replay" && command_executions == before + 1); ++cases;
+    }
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ef|set volume 3", 1);
+    assert(response(mesh) == "ef|Error: replay");
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ef|set volume 3", 3);
+    assert(response(mesh) == "ef|OK" && command_executions == before + 2);
+    mesh.contacts[0].flags = 0x0e;  // Telemetry alone never grants CLI.
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ab|reboot", 4);
+    assert(response(mesh) == "ab|Error: denied" && mesh.contacts[0].remote_cli_timestamp == 3);
+    mesh.contacts[0].flags = 0x10;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, flood, "ab|reboot", 3);
+    assert(response(mesh) == "ab|Error: replay");
+    assert(mesh.ui.messages == 0 && mesh.ui.notifications == 0 && mesh.rx_acks == 0);
+    ++cases;
+  }
+  for (const char* command : {"ui mode usb", "set connection ble", "ui wifi begin",
+      "ui wifi cancel", "ui wifi ssid 61", "ui wifi password 62", "ui wifi save",
+      "ui adc manual", "ui adc service start", "ui adc service stop", "adc preview 3300",
+      "adc apply 3300", "set adc 1.5", "set adc.multiplier 1.5", "ui adc set 1.5",
+      "get remote.cli aa", "set remote.cli aa on", "settings adc reset", "api wifi save", "wifi"}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; const unsigned before = command_executions;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, std::string("ab|") + command);
+    assert(response(mesh) == "ab|Error: local only" && command_executions == before); ++cases;
+  }
+  for (const auto& command : {std::string("ab|reboot\n"), std::string("ab|reboot\0set name x", 20),
+      std::string("ab|\xc0\xaf"), std::string("a!|reboot"), std::string("ab|"), std::string("ab|x|y")}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; const unsigned before = command_executions;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, command);
+    assert(response(mesh).find("Error:") != std::string::npos && command_executions == before);
+    assert(mesh.contacts[0].remote_cli_timestamp == 0); ++cases;
+  }
+  {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, std::string("ab|reboot\0\0\0", 12));
+    assert(response(mesh) == "ab|OK" && executed_command == "reboot"); ++cases;
+  }
+  for (size_t length : {size_t(156), size_t(157)}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; const unsigned before = command_executions;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|" + std::string(length, 'x'));
+    assert(response(mesh) == (length == 156 ? "ab|OK" : "ab|Error: command too long"));
+    assert(command_executions == before + unsigned(length == 156)); ++cases;
+  }
+  for (size_t length : {size_t(156), size_t(157), size_t(500)}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; executor_reply.assign(length, 'x');
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|custom");
+    assert(response(mesh) == (length == 156 ? "ab|" + executor_reply : "ab|Error: response too long"));
+    assert(mesh.outgoing.payload.size() <= 5 + 159); ++cases;
+  }
+  executor_reply = "OK";
+  {
+    smartui::RemoteCli adapter;
+    uint32_t high_water = 0;
+    char reply[162]; memset(reply, 0x55, sizeof(reply));
+    const unsigned before = command_executions;
+    adapter.handle("set volume 1", 12, true, 1, high_water, reply, 160,
+                   MyMesh::executeLocalCli, nullptr);
+    assert(high_water == 0 && command_executions == before && reply[0] == 0x55);
+    adapter.handle("ab|reboot", 9, false, 1, high_water, reply, 161,
+                   MyMesh::executeLocalCli, nullptr);
+    assert(std::string(reply) == "ab|Error: denied" && reply[161] == 0x55);
+    assert(high_water == 0 && command_executions == before); ++cases;
+  }
+  for (const auto& value : {std::string("line\nbreak"), std::string("\xc0\xaf"), std::string()}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; executor_reply = value;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|custom");
+    assert(response(mesh) == "ab|Error: invalid response"); ++cases;
+  }
+  {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; executor_reply = "Принято";
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|set name Дача");
+    assert(response(mesh) == "ab|Принято" && executed_command == "set name Дача"); ++cases;
+  }
+  executor_reply = "OK";
+  {
+    MyMesh mesh; mesh.num_contacts = 2;
+    mesh.contacts[0].flags = mesh.contacts[1].flags = 0x10;
+    mesh.contacts[1].id.pub_key[PUB_KEY_SIZE - 1] = 42;  // Same short prefix, distinct full key.
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|set volume 1", 10);
+    mesh.matching_peer_indexes[0] = 1;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|set volume 2", 1);
+    assert(response(mesh) == "ab|OK");
+    assert(mesh.contacts[0].remote_cli_timestamp == 10 && mesh.contacts[1].remote_cli_timestamp == 1);
+    mesh.matching_peer_indexes[0] = 0;
+    receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|set volume 3", 2);
+    assert(response(mesh) == "ab|Error: replay"); ++cases;
+  }
+  for (uint8_t type : {TXT_TYPE_PLAIN, TXT_TYPE_CLI_DATA}) {
+    MyMesh mesh; mesh.contacts[0].flags = 0x10; const unsigned before = command_executions;
+    receive(mesh, type, false, "reboot");
+    assert(command_executions == before && mesh.contacts[0].remote_cli_timestamp == 0); ++cases;
+  }
+  printf("PASS production companion type3 RX/TX: %u cases; explicit permission, replay rejection, bounded native replies, local-only gates; types0/1 retained\n", cases);
 }

@@ -4,6 +4,7 @@
 #include <Mesh.h>
 #include "AbstractUITask.h"
 #include "SmartUiCli.h"
+#include "RemoteCli.h"
 
 /*------------ Frame Protocol --------------*/
 #define FIRMWARE_VER_CODE 14
@@ -234,6 +235,7 @@ public:
   bool setLocalPathHashMode(uint8_t mode);
   bool setLocalRxBoostedGain(bool boosted, bool& supported);
   bool setLocalTimezoneMinutes(int16_t minutes);
+  bool setRemoteCliPermission(const uint8_t pub_key[PUB_KEY_SIZE], bool enabled);
   // Returns only when pending contact changes could not be saved first.
   void rebootLocal();
   // A new local client must not inherit a previous client's iterator, signing
@@ -316,8 +318,8 @@ protected:
                      const char *text) override;
   void onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                          const char *text) override;
-  void onCliCommandMessage(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
-                           const char *text) override;
+  void onCLICommandFrameRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
+                            const char *text, size_t length, char* reply) override;
   void onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
                            const uint8_t *sender_prefix, const char *text) override;
   void onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packet *pkt, uint32_t timestamp,
@@ -488,6 +490,7 @@ private:
 #if SMARTUI_CONNECTION_SELECTOR
   uint32_t last_local_session_generation = 0;
   smartui::SmartUiCli _local_cli;
+  smartui::RemoteCli _remote_cli;
   static bool executeLocalCli(void* context, const char* command, char* reply, size_t capacity);
   void handleLocalCliFrame(size_t length);
 #endif

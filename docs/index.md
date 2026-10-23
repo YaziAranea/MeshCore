@@ -5,7 +5,8 @@
 
 Начните с [главного README](../README.md). Документация модификации:
 
-- [изменения SmartUI 0.21](../RELEASE_NOTES_SmartUI_0.21_RU.md);
+- [изменения SmartUI 0.22](../RELEASE_NOTES_SmartUI_0.22_RU.md);
+- [удалённая консоль по LoRa и права контактов](./REMOTE_CLI_RU.md);
 - [хранение контактов и ошибки](./CONTACT_STORAGE_RU.md);
 - [поддерживаемые платы](./SUPPORTED_BOARDS_RU.md);
 - [управление](./CONTROLS_RU.md);

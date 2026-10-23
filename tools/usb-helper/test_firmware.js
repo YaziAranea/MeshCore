@@ -45,9 +45,9 @@ function fixture(id='v3', merged=false, source, version=VERSION) {
   return {profile,bytes,name,record,manifest, args(){return {name,bytes:this.bytes,manifestText:JSON.stringify(manifest),target:id,cryptoProvider:webcrypto};}};
 }
 
-test('0.20 and 0.21 preflight validate all eight profiles and reconstruct split UF2 markers', async()=>{
+test('0.20 through 0.22 preflight validate all eight profiles and reconstruct split UF2 markers', async()=>{
   assert.equal(PROFILES.length,8);
-  for(const version of ['0.20','0.21']) for(const profile of PROFILES) {
+  for(const version of ['0.20','0.21','0.22']) for(const profile of PROFILES) {
     const f=fixture(profile.id,false,undefined,version);
     const result=await verify({...f.args(),info:{board:profile.reported,build:COMMIT.slice(0,8)}});
     assert.equal(result.board,profile.label);assert.equal(result.matchedConnectedBoard,!profile.id.startsWith('promicro'));assert.equal(result.sameBuild,true);

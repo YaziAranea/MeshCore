@@ -1048,14 +1048,21 @@ void MyMesh::onCommandDataRecv(const ContactInfo &from, mesh::Packet *pkt, uint3
   queueMessage(from, TXT_TYPE_CLI_DATA, pkt, sender_timestamp, NULL, 0, text);
 }
 
-// Protocol v14. Upstream runs the command for a contact with the remote-CLI flag (0x10)
-// and hands it to the app otherwise; remote execution is not supported here, so every
-// such command goes to the app as it would from a contact without that flag.
-void MyMesh::onCliCommandMessage(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
-                                 const char *text) {
-  markConnectionActive(from); // in case this is from a server, and we have a connection
+void MyMesh::onCLICommandFrameRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
+                                   const char *text, size_t length, char* reply) {
+  (void)pkt;
+#if SMARTUI_CONNECTION_SELECTOR
+  _remote_cli.handle(text, length, from.isRemoteCLIAllowed(), sender_timestamp,
+      from.remote_cli_timestamp, reply, smartui::RemoteCli::REPLY_CAPACITY,
+      executeLocalCli, this);
+#else
+  (void)length;
+  // Non-SmartUI companions retain the existing app notification behavior.
+  markConnectionActive(from);
   noteNetworkStatus(from, pkt && pkt->isRouteFlood() ? pkt->path_len : OUT_PATH_UNKNOWN);
   queueMessage(from, TXT_TYPE_CLI_COMMAND, pkt, sender_timestamp, NULL, 0, text);
+  reply[0] = 0;
+#endif
 }
 
 void MyMesh::onSignedMessageRecv(const ContactInfo &from, mesh::Packet *pkt, uint32_t sender_timestamp,
@@ -2052,6 +2059,20 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
 }
 
 #if SMARTUI_CONNECTION_SELECTOR
+bool MyMesh::setRemoteCliPermission(const uint8_t pub_key[PUB_KEY_SIZE], bool enabled) {
+  if (!pub_key) return false;
+  ContactInfo* contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (!contact) return false;
+  if (contact->isRemoteCLIAllowed() == enabled) return true;
+  const ContactInfo previous = *contact;
+  if (enabled) contact->flags |= 0x10;
+  else contact->flags &= ~0x10;
+  contact->lastmod = getRTCClock()->getCurrentTime();
+  if (saveContacts()) return true;
+  *contact = previous;
+  return false;
+}
+
 bool MyMesh::executeLocalCli(void* context, const char* command, char* reply, size_t capacity) {
   MyMesh& self = *static_cast<MyMesh*>(context);
   int written;
@@ -2513,6 +2534,11 @@ void MyMesh::handleStandardCmdFrame(size_t len) {
       } else {
         if (!addContact(removed_contact)) {
           MESH_DEBUG_PRINTLN("ERROR: unable to restore contact after save failure");
+        } else {
+          // addContact initializes a newly loaded identity's RAM state. This is
+          // rollback of an existing identity, so retain its replay watermark.
+          ContactInfo* restored = lookupContactByPubKey(removed_contact.id.pub_key, PUB_KEY_SIZE);
+          if (restored) restored->remote_cli_timestamp = removed_contact.remote_cli_timestamp;
         }
         writeErrFrame(ERR_CODE_FILE_IO_ERROR);
       }
@@ -3082,6 +3108,7 @@ void MyMesh::handleStandardCmdFrame(size_t len) {
     smartui::CustomVarsWriter vars((char *)&out_frame[1], sizeof(out_frame) - 1);
 #if SMARTUI_CONNECTION_SELECTOR
     vars.append("smartui_cli", "1");
+    vars.append("remote_cli", "1");
 #endif
 #if UI_PHONE_GPS == 1
     vars.append("gps_source", isPhoneGpsEnabled() ? "PHONE" : "HW");

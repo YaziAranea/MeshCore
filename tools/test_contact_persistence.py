@@ -68,6 +68,7 @@ struct ContactInfo {
   uint32_t last_advert_timestamp = 0, lastmod = 0;
   int32_t gps_lat = 0, gps_lon = 0;
   uint32_t sync_since = 0;
+  mutable uint32_t remote_cli_timestamp = 0;
 };
 struct FakeClock {
   uint32_t now = 1000;
@@ -191,7 +192,9 @@ public:
   }
   bool addContact(const ContactInfo& contact) {
     if (reject_add) return false;
-    contacts.push_back(contact); return true;
+    contacts.push_back(contact);
+    contacts.back().remote_cli_timestamp = 0;  // Production addContact initializes a newly loaded identity.
+    return true;
   }
   bool removeContact(const ContactInfo& contact) {
     if (reject_remove) return false;
@@ -437,6 +440,7 @@ static void testDurableCommands() {
     if (fail) expect(add.fs.files["/contacts3"] == old);
 
     MyMesh remove; seed(remove); remove.contacts.push_back(contact(2));
+    remove.contacts.front().remote_cli_timestamp = 12345;
     remove.fs.short_write_at = fail ? 1 : 0;
     remove.command(CMD_REMOVE_CONTACT);
     expect(remove.responses.back() == (fail ? ERR_CODE_FILE_IO_ERROR : 0));
@@ -446,6 +450,7 @@ static void testDurableCommands() {
     if (fail) {
       uint8_t key[32] = {1};
       expect(legacyBytes(*remove.lookupContactByPubKey(key, 32)) == old);
+      expect(remove.lookupContactByPubKey(key, 32)->remote_cli_timestamp == 12345);
       expect(remove.fs.files["/contacts3"] == old);
     }
   }

@@ -3,13 +3,13 @@ name: SmartUI PS17 CI
 on:
   push:
     branches:
-      - smartui-0.21
+      - smartui-0.22
       # Publication is explicitly dispatched and restricted to the public repository.
   pull_request:
   workflow_dispatch:
     inputs:
       publish_experimental:
-        description: Publish public SmartUI 0.21 as Latest after all eight-profile checks pass
+        description: Publish public SmartUI 0.22 as Latest after all eight-profile checks pass
         required: false
         type: boolean
         default: false
@@ -41,19 +41,19 @@ jobs:
           - board: T096 FEM ON
             artifact_id: t096-fem
             environment: Heltec_t096_companion_radio_ble_femon
-            uf2_name: T096_UI_0.21.uf2
+            uf2_name: T096_UI_0.22.uf2
           - board: T114
             artifact_id: t114
             environment: Heltec_t114_companion_radio_ble
-            uf2_name: T114_UI_0.21.uf2
+            uf2_name: T114_UI_0.22.uf2
           - board: ProMicro RA62
             artifact_id: promicro-ra62
             environment: ProMicro_ra62_companion_radio_ble
-            uf2_name: ProMicro_RA62_UI_0.21.uf2
+            uf2_name: ProMicro_RA62_UI_0.22.uf2
           - board: ProMicro FakeTec RA62 Headless
             artifact_id: promicro-ra62-headless
             environment: SmartUI_ProMicro_headless
-            uf2_name: ProMicro_FakeTec_RA62_Headless_UI_0.21.uf2
+            uf2_name: ProMicro_FakeTec_RA62_Headless_UI_0.22.uf2
 
     steps:
       - name: Check out source
@@ -178,19 +178,19 @@ jobs:
           - board: Heltec V3 OLED FS2
             artifact_id: heltec-v3-oled
             environment: Heltec_v3_companion_radio_ble_smartui
-            stem: Heltec_V3_UI_0.21
+            stem: Heltec_V3_UI_0.22
           - board: Heltec V4.3 OLED FEM ON
             artifact_id: heltec-v4-3-oled-fem
             environment: heltec_v4_3_companion_radio_ble_femon_smartui
-            stem: Heltec_V4.3_UI_0.21
+            stem: Heltec_V4.3_UI_0.22
           - board: Heltec Wireless Paper FULL
             artifact_id: wireless-paper-full
             environment: Heltec_Wireless_Paper_companion_radio_ble_smartui_full
-            stem: Paper_UI_0.21
+            stem: Paper_UI_0.22
           - board: Heltec V4 R8 OLED FEM ON
             artifact_id: heltec-v4-r8-oled-fem
             environment: heltec_v4_r8_companion_radio_ble_femon_smartui
-            stem: Heltec_V4_R8_UI_0.21
+            stem: Heltec_V4_R8_UI_0.22
 
     steps:
       - name: Check out source
@@ -532,9 +532,12 @@ jobs:
           python tools/test_adc_calibration_service.py
           python tools/test_headless_runtime.py
 
-      - name: Check local Companion CLI, UI actions, FEM persistence and offline source kit
+      - name: Check local and remote Companion CLI, permissions and offline source kit
+        env:
+          SMARTUI_TEST_SANITIZE: "1"
         run: |
           python tools/test_smartui_cli.py
+          python tools/test_remote_cli_permissions.py
           python tools/test_smartui_console_commands.py
           python tools/test_companion_cli_stack.py
           python tools/test_core_settings_commands.py
@@ -679,12 +682,12 @@ jobs:
         run: echo "All supported builds, native tests and framebuffer checks passed."
 
   publish-public-release:
-    name: Publish SmartUI 0.21
-    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.21'
+    name: Publish SmartUI 0.22
+    if: github.repository == 'YaziAranea/MeshCore' && github.event.repository.private == false && github.event_name == 'workflow_dispatch' && inputs.publish_experimental && github.ref == 'refs/heads/smartui-0.22'
     needs: release-gate
     runs-on: ubuntu-latest
     concurrency:
-      group: publish-public-release-smartui-0.21
+      group: publish-public-release-smartui-0.22
       cancel-in-progress: false
     permissions:
       contents: write
@@ -703,7 +706,7 @@ jobs:
           name: smartui-public-release
           path: release
 
-      - name: Create or resume the SmartUI 0.21 release page
+      - name: Create or resume the SmartUI 0.22 release page
         shell: bash
         run: |
           set -euo pipefail
@@ -715,9 +718,9 @@ jobs:
           }
           # Recheck live visibility before any tag, release or asset mutation.
           check_public_target
-          tag="smartui-0.21"
-          title="Smart UI 0.21"
-          notes="release/RELEASE_NOTES_SmartUI_0.21_RU.md"
+          tag="smartui-0.22"
+          title="Smart UI 0.22"
+          notes="release/RELEASE_NOTES_SmartUI_0.22_RU.md"
           # Keep archive links local, but bind the GitHub page to this source.
           python - "$notes" "$RUNNER_TEMP/smartui-release-body.md" "$GITHUB_SHA" <<'PY'
           from pathlib import Path

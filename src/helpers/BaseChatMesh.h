@@ -114,11 +114,16 @@ protected:
   virtual bool onContactPathRecv(ContactInfo& from, uint8_t* in_path, uint8_t in_path_len, uint8_t* out_path, uint8_t out_path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len);
   virtual void onMessageRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) = 0;
   virtual void onCommandDataRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) = 0;
-  // Protocol v14: another node asks this one to run a CLI command. Remote execution is not
-  // supported here, so there is no reply buffer; the default drops it.
+  // Protocol v14 command notification retained for existing non-executing roles.
   virtual void onCliCommandMessage(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text) { }
-  // Compatibility hook: SmartUI queues remote commands for the app and leaves
-  // reply empty. Other companions may implement the upstream v14 reply path.
+  // Sized hook lets a receiver validate embedded NULs before legacy C-string
+  // parsing. Existing roles keep their upstream onCLICommandRecv override.
+  virtual void onCLICommandFrameRecv(const ContactInfo& contact, mesh::Packet* pkt,
+                                    uint32_t sender_timestamp, const char* text,
+                                    size_t length, char* reply) {
+    (void)length;
+    onCLICommandRecv(contact, pkt, sender_timestamp, text, reply);
+  }
   virtual void onCLICommandRecv(const ContactInfo& contact, mesh::Packet* pkt, uint32_t sender_timestamp, const char *text, char* reply) {
     (void)reply;
     onCliCommandMessage(contact, pkt, sender_timestamp, text);

@@ -28,11 +28,11 @@ def integration():
     assert 'vars.append("smartui_cli", "1")' in source
     assert 'vars.append("smartui_api"' not in source
     assert "handleSmartUiApiFrame(" not in source
-    assert "onCLICommandRecv(" not in source  # Remote execution was not backported.
-    remote = scope(source, "void MyMesh::onCliCommandMessage(")
-    assert "queueMessage(from, TXT_TYPE_CLI_COMMAND" in remote
-    for runner in ("executeLocalCli", "executeMeshCoreCliCommand", "executeSmartUiCliCommand", "handleCommand"):
-        assert runner not in remote, runner  # A type-3 command from the mesh is only handed to the app.
+    remote = scope(source, "void MyMesh::onCLICommandFrameRecv(")
+    assert "_remote_cli.handle(" in remote and "from.isRemoteCLIAllowed()" in remote
+    enabled_remote = remote.split("#else", 1)[0]
+    assert "executeLocalCli, this" in enabled_remote and "queueMessage" not in enabled_remote
+    assert "_local_cli" not in remote and "resetLocalAppSession" not in remote
     # The archived command-201 implementation may remain as inactive source,
     # but it must never regain a router, runtime ledger or UI callback in the
     # production entry point. Local unread/reminder state belongs to UITask.
@@ -441,6 +441,7 @@ def meshcore_hooks_integration():
 #define MAX_LORA_TX_POWER 22
 static unsigned friendly_calls;
 static std::string friendly_command;
+static bool handleCompanionRemoteCliPermission(const char*, char*, size_t, bool) { return false; }
 bool executeSmartUiCliCommand(const char* command, char* reply, size_t capacity) {
   ++friendly_calls; friendly_command = command;
   if (strcmp(command, "ui get volume") == 0)
@@ -717,11 +718,14 @@ def type3_integration():
     base_header = (ROOT / "src/helpers/BaseChatMesh.h").read_text(encoding="utf-8")
     methods += "\n" + scope(base_header, "virtual void onCLICommandRecv(").replace(
         "virtual void onCLICommandRecv(", "void BaseChatMesh::onCLICommandRecv(")
+    methods += "\n" + scope(base_header, "virtual void onCLICommandFrameRecv(").replace(
+        "virtual void onCLICommandFrameRecv(", "void BaseChatMesh::onCLICommandFrameRecv(")
     defines += "\n" + re.search(r"^#define CLI_REPLY_DELAY_MILLIS\s+[^\n]+", base, re.M)[0]
     methods += "\n" + "\n".join(scope(source, signature) for signature in (
         "void MyMesh::recordExpectedAck(", "void MyMesh::queueMessage(",
+        "bool MyMesh::executeLocalCli(",
         "void MyMesh::onMessageRecv(", "void MyMesh::onCommandDataRecv(",
-        "void MyMesh::onCliCommandMessage(", "void MyMesh::onSignedMessageRecv("))
+        "void MyMesh::onCLICommandFrameRecv(", "void MyMesh::onSignedMessageRecv("))
     template = (ROOT / "tools/companion_cli_type3_test.cpp").read_text(encoding="utf-8")
     assert template.count("// EXTRACTED_CONSTANTS") == 1
     assert template.count("// EXTRACTED_METHODS") == 1
@@ -745,6 +749,29 @@ def main():
         local_setters.write_text(local_setters_integration(), encoding="utf-8")
         type3 = Path(directory) / "companion_cli_type3.cpp"
         type3.write_text(type3_integration(), encoding="utf-8")
+        type3_compat = Path(directory) / "companion_cli_type3_compat.cpp"
+        compat_source = type3_integration().replace("#define SMARTUI_CONNECTION_SELECTOR 1", "#define SMARTUI_CONNECTION_SELECTOR 0")
+        # Keep helpers referenced under -Werror; only the actual callback's
+        # non-selector branch changes, retaining legacy app notification.
+        compat_main = r'''
+int main() {
+  MyMesh mesh; mesh.contacts[0].flags = 0x10;
+  send(mesh, TXT_TYPE_CLI_COMMAND, "get name");
+  (void)&response;
+  assert(mesh.outgoing.payload[4] == ((TXT_TYPE_CLI_COMMAND << 2) | 2));
+  mesh.datagrams = mesh.direct_sends = mesh.flood_sends = 0;
+  mesh.serial.frames.clear();
+  receive(mesh, TXT_TYPE_CLI_COMMAND, false, "ab|reboot");
+  assert(command_executions == 0 && mesh.contacts[0].remote_cli_timestamp == 0);
+  assert(mesh.datagrams == 0 && !mesh.queued.empty());
+  assert(mesh.queued[11] == TXT_TYPE_CLI_COMMAND);
+  assert(u32(mesh.queued.data() + 12) == 123);
+  assert(mesh.marks == 1 && mesh.status_notes == 1);
+  assert(mesh.serial.frames == std::vector<std::vector<uint8_t>>{{PUSH_CODE_MSG_WAITING}});
+  puts("PASS production non-selector type3 callback preserves app notification without execution");
+}
+'''
+        type3_compat.write_text(compat_source[:compat_source.index("int main() {")] + compat_main, encoding="utf-8")
         compiler = shutil.which("g++") or shutil.which("clang++")
         flags = ["-std=c++17", "-Wall", "-Wextra", "-Werror"]
         if os.environ.get("SMARTUI_TEST_SANITIZE") == "1":
@@ -752,8 +779,10 @@ def main():
         include = ROOT / "examples/companion_radio"
         for suite in (ROOT / "tools/smartui_cli_test.cpp", adapter, main_adapter, queue,
                       ROOT / "tools/radio_settings_test.cpp", radio_hooks,
-                      ROOT / "tools/meshcore_cli_test.cpp", meshcore_hooks, local_setters, type3):
+                      ROOT / "tools/meshcore_cli_test.cpp", meshcore_hooks, local_setters, type3, type3_compat):
             paths = [suite, include / "SmartUiCli.cpp"]
+            if suite in (type3, type3_compat):
+                paths += [include / "RemoteCli.cpp"]
             radio_suite = suite.name in ("radio_settings_test.cpp", "radio_hooks.cpp")
             meshcore_suite = suite.name in ("meshcore_cli_test.cpp", "meshcore_hooks.cpp")
             if radio_suite:

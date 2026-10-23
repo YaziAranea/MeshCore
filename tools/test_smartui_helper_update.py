@@ -20,7 +20,7 @@ class HelperUpdateTests(unittest.TestCase):
         # Exercise the historical 0.20 operation with its original asset names.
         # The public package now targets a newer release and must never use it.
         historical = self.enterContext(ExitStack())
-        firmware_names = tuple(name.replace("_UI_0.21", "_UI_0.20")
+        firmware_names = tuple(name.replace("_UI_0.22", "_UI_0.20")
                                for name in update.release.FIRMWARE_NAMES)
         historical.enter_context(patch.multiple(update.release, VERSION="0.20", TAG="smartui-0.20",
             NOTES_NAME="RELEASE_NOTES_SmartUI_0.20_RU.md", ARCHIVE_NAME="SmartUI_0.20_all-boards.zip",

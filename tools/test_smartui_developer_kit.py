@@ -60,7 +60,7 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertNotIn("base_source_commit", manifest)
             self.assertEqual(path.name, kit.ZIP_NAME)
             readme = archive.read("README.md").decode("utf-8")
-            self.assertIn("SmartUI 0.21", readme)
+            self.assertIn("SmartUI 0.22", readme)
             self.assertIn("USB Helper 2.9", readme)
             self.assertIn("[Дерево команд и макросы](docs/HELPER_CONSOLE_RU.md)", readme)
             self.assertIn("[Справочник команд](docs/CONSOLE_COMMANDS_RU.md)", readme)
@@ -99,7 +99,7 @@ class DeveloperKitTests(unittest.TestCase):
             self.assertEqual(manifest["documentation_source_commit"], COMMIT)
             self.assertEqual(manifest["firmware_source_commit"], firmware)
             self.assertEqual(manifest["helper_version"], "2.9")
-            self.assertEqual(manifest["firmware_version"], "0.21")
+            self.assertEqual(manifest["firmware_version"], "0.22")
             self.assertEqual(archive.read("docs/HELPER_CONSOLE_RU.md"),
                              (self.source / "docs/HELPER_CONSOLE_RU.md").read_bytes())
 
@@ -111,9 +111,9 @@ class DeveloperKitTests(unittest.TestCase):
         self.assertFalse((self.root / "invalid-firmware").exists())
 
     def test_current_release_and_optional_development_names(self):
-        self.assertEqual(kit.VERSION, "0.21")
-        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.21.zip")
-        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.21-development.zip")
+        self.assertEqual(kit.VERSION, "0.22")
+        self.assertEqual(kit.ZIP_NAME, "SmartUI_Developer_Kit_0.22.zip")
+        self.assertEqual(kit.DEVELOPMENT_ZIP_NAME, "SmartUI_Developer_Kit_0.22-development.zip")
 
     def test_local_secrets_caches_and_unlisted_files_are_excluded(self):
         for name in ("tools/smartui-cli/.env", "tools/smartui-cli/node_modules/test.js",
