@@ -13,6 +13,7 @@
   #include "../ConnectionController.h"
 #endif
 #include <math.h>
+#include <helpers/AdcCalibration.h>
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/RTCClockQuality.h>
 #include <helpers/SmartUiBuildInfo.h>
@@ -1355,7 +1356,7 @@ static const char* uiSemanticColorName(uint8_t idx) {
 
 #ifndef UI_ADC_MULTIPLIER_MIN
   #ifdef ADC_MULTIPLIER
-    #define UI_ADC_MULTIPLIER_MIN ((float)(ADC_MULTIPLIER) * 0.75f)
+    #define UI_ADC_MULTIPLIER_MIN mesh::adcCalibrationMinimum((float)(ADC_MULTIPLIER))
   #else
     #define UI_ADC_MULTIPLIER_MIN 0.1f
   #endif
@@ -1363,7 +1364,7 @@ static const char* uiSemanticColorName(uint8_t idx) {
 
 #ifndef UI_ADC_MULTIPLIER_MAX
   #ifdef ADC_MULTIPLIER
-    #define UI_ADC_MULTIPLIER_MAX ((float)(ADC_MULTIPLIER) * 1.25f)
+    #define UI_ADC_MULTIPLIER_MAX mesh::adcCalibrationMaximum((float)(ADC_MULTIPLIER))
   #else
     #define UI_ADC_MULTIPLIER_MAX 10.0f
   #endif

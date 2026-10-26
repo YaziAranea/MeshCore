@@ -5,15 +5,20 @@
 
 namespace mesh {
 
-// User calibration is intended to compensate resistor/ADC tolerance, not to
-// redefine the board circuit.  A 25% window is deliberately generous while
-// preventing values that can disable low-battery protection or overflow.
+// Default calibration window compensates resistor/ADC tolerance. DIY boards
+// with different divider ratios can set a build-wide ADC_CALIBRATION_MAX so
+// the board, settings backend and display use the same upper bound.
 inline float adcCalibrationMinimum(float board_default) {
   return board_default * 0.75f;
 }
 
 inline float adcCalibrationMaximum(float board_default) {
+#ifdef ADC_CALIBRATION_MAX
+  (void)board_default;
+  return static_cast<float>(ADC_CALIBRATION_MAX);
+#else
   return board_default * 1.25f;
+#endif
 }
 
 inline bool normalizeAdcMultiplier(float requested, float board_default, float& applied) {
@@ -23,7 +28,7 @@ inline bool normalizeAdcMultiplier(float requested, float board_default, float& 
     return true;
   }
   // Decimal values persisted by the UI can land a few ULPs either side of an
-  // inclusive 75/125% boundary (for example 4.9f * 0.75f vs 3.675f).
+  // inclusive boundary (for example 4.9f * 0.75f vs 3.675f).
   const float tolerance = board_default * 0.000001f;
   if (requested < adcCalibrationMinimum(board_default) - tolerance ||
       requested > adcCalibrationMaximum(board_default) + tolerance) return false;
