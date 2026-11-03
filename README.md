@@ -15,8 +15,8 @@
 без телефона, проверьте адресата и отправьте.
 
 <p align="center">
-  <a href="docs/assets/showcase/readme-message.png"><img src="docs/assets/showcase/readme-message.png" width="440" alt="Симуляция T096: подтверждение ответа Анне «Буду к 19:00»"></a>
-  <a href="docs/assets/showcase/readme-keyboard.png"><img src="docs/assets/showcase/readme-keyboard.png" width="440" alt="Симуляция T096: ввод сообщения на русской экранной клавиатуре"></a>
+  <a href="docs/assets/showcase/readme-message.png"><img src="docs/assets/showcase/readme-message.png" width="360" alt="Симуляция T096: подтверждение ответа Анне «Буду к 19:00»"></a>
+  <a href="docs/assets/showcase/readme-keyboard.png"><img src="docs/assets/showcase/readme-keyboard.png" width="360" alt="Симуляция T096: ввод сообщения на русской экранной клавиатуре"></a>
 </p>
 
 *Симуляции экранов SmartUI 0.22 на T096; контакт и сообщение демонстрационные.*
