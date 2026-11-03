@@ -9,18 +9,15 @@
 
 [Скачать SmartUI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22) · [Выбрать плату](#поддерживаемые-платы) · [Установка](docs/FLASHING_RU.md) · [USB Helper 2.9](docs/HELPER_SIMPLE_RU.md)
 
-## Пишите и отвечайте прямо с ноды
+## SmartUI на разных экранах
 
-**Ответ нужному контакту и русская экранная клавиатура.** Наберите сообщение
-без телефона, проверьте адресата и отправьте.
+Часы и статус, настройки, шрифты, русская клавиатура и выбор адресата —
+на T096 FEM, T114 и ProMicro RA62.
 
-<p align="center">
-  <a href="docs/assets/showcase/readme-message.png"><img src="docs/assets/showcase/readme-message.png" width="360" alt="Симуляция T096: подтверждение ответа Анне «Буду к 19:00»"></a>
-  <a href="docs/assets/showcase/readme-keyboard.png"><img src="docs/assets/showcase/readme-keyboard.png" width="360" alt="Симуляция T096: ввод сообщения на русской экранной клавиатуре"></a>
-</p>
+[![Обзор программных симуляций SmartUI на T096 FEM, T114 и ProMicro RA62](docs/assets/ui/ui-overview-three-boards.png)](docs/assets/ui/ui-overview-three-boards.png)
 
-*Симуляции экранов SmartUI 0.22 на T096; контакт и сообщение демонстрационные.*
-[Все экраны](docs/SCREENS_RU.md) · [Как получены кадры](docs/SHOWCASE_RU.md)
+*Программные симуляции прежних выпусков; отдельные пункты меню в 0.22 отличаются.*
+[Открыть в полном размере](docs/assets/ui/ui-overview-three-boards.png) · [Все экраны](docs/SCREENS_RU.md) · [Актуальное управление](docs/CONTROLS_RU.md)
 
 ### Настройки на большом экране — USB Helper 2.9
 
