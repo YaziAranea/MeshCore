@@ -7,15 +7,41 @@
 > **Экранный интерфейс SmartUI — только на русском языке.** Английской
 > локализации меню нет. Headless-сборка не имеет экранного интерфейса.
 
+[Скачать SmartUI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22) · [Выбрать плату](#поддерживаемые-платы) · [Установка](docs/FLASHING_RU.md) · [USB Helper 2.9](docs/HELPER_SIMPLE_RU.md)
+
+## Пишите и отвечайте прямо с ноды
+
+**Ответ нужному контакту и русская экранная клавиатура.** Наберите сообщение
+без телефона, проверьте адресата и отправьте.
+
+<p align="center">
+  <a href="docs/assets/showcase/readme-message.png"><img src="docs/assets/showcase/readme-message.png" width="440" alt="Симуляция T096: подтверждение ответа Анне «Буду к 19:00»"></a>
+  <a href="docs/assets/showcase/readme-keyboard.png"><img src="docs/assets/showcase/readme-keyboard.png" width="440" alt="Симуляция T096: ввод сообщения на русской экранной клавиатуре"></a>
+</p>
+
+*Симуляции экранов SmartUI 0.22 на T096; контакт и сообщение демонстрационные.*
+[Все экраны](docs/SCREENS_RU.md) · [Как получены кадры](docs/SHOWCASE_RU.md)
+
+### Настройки на большом экране — USB Helper 2.9
+
+Подключите ноду по USB: помощник покажет доступные настройки и проверит результат
+записи. Экран на самой ноде не обязателен.
+
+<picture>
+  <source media="(max-width: 600px)" srcset="docs/assets/showcase/readme-helper-mobile.png">
+  <img src="docs/assets/showcase/readme-helper.png" alt="Helper 2.9: демонстрация настроек с имитацией USB-ноды SmartUI 0.22">
+</picture>
+
+*Снимок настоящего интерфейса Helper 2.9 в браузере, с имитацией USB-ноды
+SmartUI 0.22. Физическая плата не подключалась.*
+[Открыть инструкцию Helper](docs/HELPER_SIMPLE_RU.md)
+
 **English:** MeshCore SmartUI is custom LoRa companion firmware with a
 **Russian-only on-device UI** for selected Heltec and ProMicro / FakeTec boards.
 Display builds offer on-device messaging; a separate ProMicro / FakeTec V4
 HT-RA62 headless build is available. Documentation is primarily in Russian.
 
-[Скачать SmartUI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22) ·
-[Выбрать файл для платы](#поддерживаемые-платы) ·
-[Установка и обновление](docs/FLASHING_RU.md) ·
-[USB Helper 2.9](docs/HELPER_SIMPLE_RU.md)
+## Основные возможности
 
 - **Переписка на ноде:** чтение личных сообщений, готовые ответы, экранная
   клавиатура и выбор адресата в профилях с дисплеем.
