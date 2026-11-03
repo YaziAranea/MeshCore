@@ -1,10 +1,75 @@
-# MeshCore Smart UI 0.22
+# MeshCore SmartUI 0.22
+
+Неофициальная Companion-прошивка MeshCore для LoRa-нод: читайте сообщения,
+отвечайте с экранной клавиатуры и меняйте настройки прямо на устройстве.
+Для ProMicro / FakeTec V4 с HT-RA62 есть отдельная сборка без экрана.
+
+> **Экранный интерфейс SmartUI — только на русском языке.** Английской
+> локализации меню нет. Headless-сборка не имеет экранного интерфейса.
+
+**English:** MeshCore SmartUI is custom LoRa companion firmware with a
+**Russian-only on-device UI** for selected Heltec and ProMicro / FakeTec boards.
+Display builds offer on-device messaging; a separate ProMicro / FakeTec V4
+HT-RA62 headless build is available. Documentation is primarily in Russian.
+
+[Скачать SmartUI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22) ·
+[Выбрать файл для платы](#поддерживаемые-платы) ·
+[Установка и обновление](docs/FLASHING_RU.md) ·
+[USB Helper 2.9](docs/HELPER_SIMPLE_RU.md)
+
+- **Переписка на ноде:** чтение личных сообщений, готовые ответы, экранная
+  клавиатура и выбор адресата в профилях с дисплеем.
+- **Настройка через USB:** Helper 2.9 управляет локальной нодой, включая headless;
+  доступные настройки определяются возможностями профиля.
+- **Управление через LoRa:** Remote CLI принимает разрешённые команды только от
+  контактов, которым вы выдали доступ на принимающей ноде.
+- **Настройки под свою плату:** уведомления, калибровка АКБ и доступные параметры
+  GPS, сна и FEM/LNA. Состав оборудования и функций зависит от профиля.
+
+## Поддерживаемые платы
+
+В релизе восемь профилей: семь с дисплеем и один headless. Наличие файла
+и успешная сборка не означают физическое испытание каждой комплектации;
+[границы проверки 0.22](RELEASE_NOTES_SmartUI_0.22_RU.md).
+
+| Плата | Дисплей | GPS в этой цели | Файлы SmartUI 0.22 |
+|---|---|---|---|
+| Heltec T096 FEM ON | TFT 160×80 | Аппаратный | [UF2](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/T096_UI_0.22.uf2) |
+| Heltec T114 с дисплеем | ST7789 240×135 | Аппаратный | [UF2](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/T114_UI_0.22.uf2) |
+| ProMicro nRF52840 + Heltec RA62 | SSD1306 OLED 128×64 | Внешний UART, опционально | [UF2](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/ProMicro_RA62_UI_0.22.uf2) |
+| ProMicro / FakeTec V4 + HT-RA62 | Без дисплея | Внешний UART, опционально | [Headless UF2](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/ProMicro_FakeTec_RA62_Headless_UI_0.22.uf2) |
+| Heltec WiFi LoRa 32 V3 | SSD1306 OLED 128×64 | Нет | [update](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V3_UI_0.22-update.bin) / [merged](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V3_UI_0.22-merged.bin) BIN |
+| Heltec V4.3 OLED FEM ON | SSD1306 OLED 128×64 | Аппаратный | [update](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V4.3_UI_0.22-update.bin) / [merged](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V4.3_UI_0.22-merged.bin) BIN |
+| Heltec V4 R8 OLED FEM ON | SSD1306 OLED 128×64 | UART, при подключённом модуле | [update](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V4_R8_UI_0.22-update.bin) / [merged](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Heltec_V4_R8_UI_0.22-merged.bin) BIN |
+| Heltec Wireless Paper | e-paper 250×122 | Нет | [update](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Paper_UI_0.22-update.bin) / [merged](https://github.com/YaziAranea/MeshCore/releases/download/smartui-0.22/Paper_UI_0.22-merged.bin) BIN |
+
+**Перед прошивкой:** UF2 обновляется без Erase. На ESP32 `update.bin` предназначен
+для обновления совместимой установки; **`merged.bin` перезаписывает данные,
+включая identity и настройки**. Проверьте плату, разметку и контрольные суммы
+по [инструкции установки](docs/FLASHING_RU.md) и [инструкции SHA-256](docs/VERIFY_RU.md).
+
+Для ProMicro/FakeTec требуется стандартная распайка HT-RA62. Heltec V4 TFT
+и произвольные схемы ProMicro не поддерживаются. Совпадения MCU недостаточно:
+[оборудование, GPS и ограничения FEM/LNA](docs/SUPPORTED_BOARDS_RU.md).
+
+## Основа и отличия SmartUI
+
+Официальная база — [MeshCore Companion 1.18.0](https://github.com/meshcore-dev/MeshCore/releases/tag/companion-v1.18.0),
+commit `81dbae59`. Дополнения PowerSaving происходят из
+[IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore/commit/a27e78e4da1389055b6dd16ce473112d25c8a5cd).
+MeshCore предоставляет основу LoRa-сети и companion-протокола;
+механизмы PowerSaving сохранены из указанной версии IoTThinks.
+
+Поверх этой базы SmartUI предлагает русский экранный интерфейс, клавиатуру
+и адресные ответы, настройки уведомлений, локальный CLI с USB Helper и
+управление разрешённой удалённой нодой в 0.22.
+[История переноса базы](docs/MIGRATION_1.18_RU.md) ·
+[Доступные команды по платам](docs/CLI_BOARD_MATRIX_RU.md).
+
+## Управление локальной и удалённой нодой
 
 **Helper 2.9:** [простое управление с автоприменением](docs/HELPER_SIMPLE_RU.md): подключите ноду и выберите настройку — результат сохраняется и проверяется автоматически. [Консоль и макросы](docs/HELPER_CONSOLE_RU.md) доступны в расширенном режиме. Helper остаётся версии 2.9 и управляет локальной нодой; для приёма удалённых команд нужна прошивка 0.22.
 
-**SmartUI 0.22: управление своей удалённой нодой через LoRa. База — MeshCore 1.18.0.**
-
-[Скачать 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22) ·
 [Что изменилось и какой файл выбрать](RELEASE_NOTES_SmartUI_0.22_RU.md) ·
 [Предыдущий 0.21](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.21).
 
@@ -78,21 +143,6 @@ USB-протокол определяется автоматически; реж
 - Настройки, контакты, каналы и identity сохраняются через проверенные временную и резервную копии; повреждённая identity не заменяется молча новым адресом.
 - Часы различают доверенную синхронизацию и приблизительное время из mesh; ночной режим не запускается по недостоверному времени, часовой пояс выбирается от UTC−12:00 до UTC+14:00.
 
-## Поддерживаемые платы
-
-| Плата | Дисплей | GPS в этой цели | Формат прошивки |
-|---|---:|---:|---|
-| Heltec T096 FEM ON | TFT 160×80 | Аппаратный | UF2 |
-| Heltec T114 с дисплеем | ST7789 240×135 | Аппаратный | UF2 |
-| ProMicro nRF52840 + Heltec RA62 | SSD1306 OLED 128×64 | Внешний UART, опционально | UF2 |
-| ProMicro / FakeTec V4 + HT-RA62 | Без дисплея | Внешний UART, опционально | Отдельный headless UF2 |
-| Heltec WiFi LoRa 32 V3 | SSD1306 OLED 128×64 | Нет | merged + update BIN |
-| Heltec V4.3 OLED FEM ON | SSD1306 OLED 128×64 | Аппаратный | merged + update BIN |
-| Heltec V4 R8 OLED FEM ON | SSD1306 OLED 128×64 | UART, при подключённом модуле | merged + update BIN |
-| Heltec Wireless Paper | e-paper 250×122 | Нет | merged + update BIN |
-
-Для ProMicro/FakeTec V4 с HT-RA62 без экрана опубликован отдельный headless UF2. Требуется стандартная распайка; V4 TFT и произвольные схемы ProMicro не поддерживаются. Подробности: [поддерживаемое оборудование](docs/SUPPORTED_BOARDS_RU.md).
-
 ## Быстрый старт
 
 Используйте [Release Smart UI 0.22](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.22). Для отката сохранён [предыдущий публичный 0.21](https://github.com/YaziAranea/MeshCore/releases/tag/smartui-0.21). Проверка сборок и симуляции не означает испытание каждого экземпляра платы.
@@ -164,8 +214,9 @@ T096 симулируется с реальными bitmap-метриками, T
 
 ## Документация
 
-- [Полное описание проекта](README_RU.md)
+- [История проекта и подробности прежних выпусков](README_RU.md)
 - [Поддерживаемые платы](docs/SUPPORTED_BOARDS_RU.md)
+- [Участие в разработке и сообщения об ошибках](CONTRIBUTING.md)
 - [Управление](docs/CONTROLS_RU.md)
 - [Экраны, меню, шрифты и симуляции](docs/SCREENS_RU.md)
 - [Прошивка готового UF2 или BIN](docs/FLASHING_RU.md)

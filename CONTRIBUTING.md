@@ -1,9 +1,13 @@
 # Участие в разработке
 
-Это неофициальный SmartUI-форк
-[IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore), закреплённый на
-ветке PowerSaving-v17. Здесь принимаются изменения интерфейса и трёх целевых
-профилей: Heltec T096 FEM, Heltec T114 и ProMicro nRF52840 + Heltec RA62.
+Это неофициальный SmartUI-форк на базе MeshCore Companion 1.18.0
+с сохранёнными дополнениями PowerSaving из
+[IoTThinks/MeshCore](https://github.com/IoTThinks/MeshCore).
+[История базы и исходные commit](docs/MIGRATION_1.18_RU.md).
+В SmartUI 0.22 выпускаются восемь профилей: семь с дисплеем и ProMicro/FakeTec
+HT-RA62 headless. Актуальная [матрица плат](docs/SUPPORTED_BOARDS_RU.md)
+определяет поддерживаемые конфигурации; наличие других вариантов в исходниках
+не добавляет их в публичный релиз.
 
 Исправления общего ядра MeshCore и PowerSaving-v17 лучше сначала направлять в
 upstream. Если изменение затрагивает только SmartUI, откройте Issue или Pull
@@ -24,11 +28,11 @@ Request в этом репозитории.
 
 ## Pull Request
 
-1. Создайте ветку от `smartui-ps17.1`.
+1. Создайте рабочую ветку от актуальной default branch репозитория — для SmartUI 0.22 это `smartui-0.22`. Для воспроизведения релиза используйте commit из его `RELEASE-MANIFEST.json`.
 2. Делайте один логический фикс в одном Pull Request.
 3. Не смешивайте форматирование всего дерева с функциональной правкой.
 4. Обновите документацию и изображения, если меняется видимый интерфейс.
-5. Выполните проверки, перечисленные в `.github/workflows/smartui-ci.yml`.
+5. Выполните проверки из [CI](.github/workflows/smartui-ci.yml), относящиеся к изменению. Для правок только документации проверьте ссылки, якоря и технические утверждения; сборка прошивки для них не требуется.
 6. Для изменений прошивки соберите все затронутые целевые environments.
 
 Основные цели PlatformIO:
@@ -37,7 +41,15 @@ Request в этом репозитории.
 Heltec_t096_companion_radio_ble_femon
 Heltec_t114_companion_radio_ble
 ProMicro_ra62_companion_radio_ble
+SmartUI_ProMicro_headless
+Heltec_v3_companion_radio_ble_smartui
+heltec_v4_3_companion_radio_ble_femon_smartui
+heltec_v4_r8_companion_radio_ble_femon_smartui
+Heltec_Wireless_Paper_companion_radio_ble_smartui_full
 ```
+
+Команды сборки и различия UF2, ESP32 update и merged описаны в
+[инструкции сборки](docs/BUILD_RU.md#целевые-сборки).
 
 Аппаратную проверку нельзя заменять симуляцией. В Pull Request отдельно
 укажите, что проверено компиляцией/симуляцией, а что действительно проверено
